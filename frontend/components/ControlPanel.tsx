@@ -40,6 +40,8 @@ export default function ControlPanel() {
     substationLoads,
     overloadedSubstations,
     cascadedSubstations,
+    usgsGageHeight,
+    surfaceTemp,
   } = useSimulationStore();
 
   const EXIT_NAMES: Record<number, string> = {
@@ -103,6 +105,18 @@ export default function ControlPanel() {
               <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Grid Stability</span>
               <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: overloadedSubstations.length > 0 ? '#ffea00' : (cascadedSubstations.length > 0 ? '#ff3d3d' : '#00e5ff') }}>
                 {cascadedSubstations.length > 0 ? 'CRITICAL' : (overloadedSubstations.length > 0 ? 'OVERLOAD' : 'NOMINAL')}
+              </span>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>USGS Gage height</span>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: usgsGageHeight > 10.0 ? '#ff9100' : '#00ff88' }}>
+                {usgsGageHeight.toFixed(2)} ft
+              </span>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Micro-Temp</span>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: '#ffea00' }}>
+                {surfaceTemp.toFixed(1)} °F
               </span>
             </div>
           </div>

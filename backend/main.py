@@ -73,6 +73,27 @@ async def flood_zones(flood_level: float = Query(default=0.0, ge=0.0, le=10.0)):
     )
 
 
+import urllib.request
+import json
+
+def fetch_usgs_water_level() -> float:
+    """Fetch streaming gage height in feet from USGS sensor 08074000 (Buffalo Bayou)."""
+    url = "https://waterservices.usgs.gov/nwis/iv/?format=json&sites=08074000&parameterCd=00065"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'GridEvac-AI-Emergency-Utility'})
+        with urllib.request.urlopen(req, timeout=3.0) as response:
+            data = json.loads(response.read().decode())
+            ts_list = data.get("value", {}).get("timeSeries", [])
+            if ts_list:
+                values = ts_list[0].get("values", [])
+                if values and values[0].get("value"):
+                    val_str = values[0]["value"][0].get("value")
+                    return float(val_str)
+    except Exception:
+        pass
+    return -999.0
+
+
 @app.post("/api/calculate-route", response_model=RouteResponse)
 async def calculate_route(req: SimulationRequest):
     """
@@ -113,6 +134,15 @@ async def calculate_route(req: SimulationRequest):
     elif failed_total >= 3:
         cascade_prob = 0.25
 
+    # 1. Fetch real USGS water sensor gage height (with fallback)
+    usgs_gage = fetch_usgs_water_level()
+    if usgs_gage == -999.0:
+        # Fallback based on slider + baseline
+        usgs_gage = round(4.2 + req.flood_level * 2.8, 2)
+
+    # 2. Compute micro-climate surface temp (Fahrenheit)
+    surface_temp = round(87.5 - req.flood_level * 0.9 - failed_total * 0.45, 2)
+
     # Run IsolationForest Anomaly Model
     anomaly_score, risk_level = detect_anomaly(
         flood_level=req.flood_level,
@@ -121,6 +151,8 @@ async def calculate_route(req: SimulationRequest):
         average_grid_load_ratio=avg_load_ratio,
         voltage_stability_index=avg_voltage,
         cascade_probability=cascade_prob,
+        usgs_gage_height=usgs_gage,
+        surface_temp=surface_temp,
     )
 
     return RouteResponse(
@@ -141,6 +173,8 @@ async def calculate_route(req: SimulationRequest):
         grid_frequency=flow["grid_frequency"],
         voltage_readings=flow["voltage_readings"],
         transmission_line_states=flow["transmission_line_states"],
+        usgs_gage_height=usgs_gage,
+        surface_temp=surface_temp,
     )
 
 # ── Entry point ────────────────────────────────────────────────────────────────

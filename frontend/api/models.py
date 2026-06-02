@@ -82,6 +82,8 @@ class RouteResponse(BaseModel):
     grid_frequency: float                   # live grid frequency (e.g. 59.98 Hz)
     voltage_readings: Dict[int, float]      # local node voltage stability percentage (0-100%)
     transmission_line_states: Dict[int, str] # map of link ID to state: 'active' | 'overloaded' | 'dead'
+    usgs_gage_height: float                  # dynamic USGS gauge height reading in feet
+    surface_temp: float                      # average grid-wide micro-climate temperature in Fahrenheit
 
 
 # ─── Anomaly Scan Models ───────────────────────────────────────────────────────

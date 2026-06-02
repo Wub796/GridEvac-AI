@@ -20,6 +20,8 @@ interface SimulationStore {
   cascadedSubstations:   number[];
   voltageReadings:       Record<number, number>;
   liveLogs:              string[];
+  usgsGageHeight:        number;
+  surfaceTemp:           number;
 
   // ── Derived / async state ──────────────────────────────────────────────────
   cityData:      CityData    | null;
@@ -51,6 +53,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   overloadedSubstations: [],
   cascadedSubstations:   [],
   voltageReadings:       {},
+  usgsGageHeight:        4.5,
+  surfaceTemp:           87.5,
   liveLogs:              [
     "GridEvac AI: Core monitoring console initialized.",
     "Grid status: Nominal. Awaiting simulation parameter changes."
@@ -172,6 +176,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
         overloadedSubstations: route.overloaded_substations,
         cascadedSubstations: route.cascaded_substations,
         voltageReadings: route.voltage_readings,
+        usgsGageHeight: route.usgs_gage_height,
+        surfaceTemp: route.surface_temp,
         isLoading: false 
       });
 
@@ -217,9 +223,15 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       nextFreq = Math.max(baseExpected - 0.15, Math.min(baseExpected + 0.05, nextFreq));
     }
 
+    // Fluctuates USGS water height and surface temp
+    const nextGage = Math.max(1.0, get().usgsGageHeight + (Math.random() - 0.5) * 0.1);
+    const nextTemp = Math.max(50.0, get().surfaceTemp + (Math.random() - 0.5) * 0.15);
+
     set({
       substationLoads: nextLoads,
-      gridFrequency: nextFreq
+      gridFrequency: nextFreq,
+      usgsGageHeight: parseFloat(nextGage.toFixed(2)),
+      surfaceTemp: parseFloat(nextTemp.toFixed(1))
     });
 
     // 3. Occasionally post a sensor reading update in log

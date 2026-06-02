@@ -76,6 +76,8 @@ export interface RouteResponse {
   grid_frequency: number;
   voltage_readings: Record<number, number>;
   transmission_line_states: Record<number, string>;
+  usgs_gage_height: number;
+  surface_temp: number;
 }
 
 // ── Simulation ────────────────────────────────────────────────────────────────

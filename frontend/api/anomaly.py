@@ -1,8 +1,9 @@
 """
-anomaly.py — Upgraded 7-D IsolationForest Anomaly Detection
+anomaly.py — Upgraded 9-D IsolationForest Anomaly Detection
 ------------------------------------------------------------
-Pre-trains a scikit-learn IsolationForest on 7-dimensional
-normal grid telemetry (loads, stability indexes, rates, threats).
+Pre-trains a scikit-learn IsolationForest on 9-dimensional
+normal grid telemetry (loads, stability indexes, rates, threats,
+USGS gage heights, and micro-climate temperatures).
 """
 
 import numpy as np
@@ -27,6 +28,12 @@ def _generate_normal_telemetry(n: int = 1000) -> np.ndarray:
     cascade_prob = np.zeros(n)
     concurrent   = np.zeros(n)
     
+    # USGS water gage height in feet (normal range 3.0 to 8.0)
+    usgs_gage    = _RNG.uniform(3.0, 8.0, n) + flood * 1.5
+    
+    # Micro-climate surface temp in Fahrenheit (normal range 78 to 92)
+    surface_temp = _RNG.uniform(78.0, 92.0, n) - flood * 0.8
+    
     return np.column_stack([
         flood,
         failures,
@@ -34,7 +41,9 @@ def _generate_normal_telemetry(n: int = 1000) -> np.ndarray:
         load_ratio,
         voltage,
         cascade_prob,
-        concurrent
+        concurrent,
+        usgs_gage,
+        surface_temp
     ])
 
 
@@ -56,9 +65,11 @@ def detect_anomaly(
     average_grid_load_ratio: float,
     voltage_stability_index: float,
     cascade_probability: float,
+    usgs_gage_height: float,
+    surface_temp: float,
 ) -> Tuple[float, str]:
     """
-    Score incoming dynamic telemetry against the normal grid training envelope.
+    Score incoming dynamic 9-D telemetry against the normal grid training envelope.
     """
     concurrent = 1.0 if (flood_level > 1.8 and (failed_count > 0 or overload_count > 0)) else 0.0
 
@@ -70,6 +81,8 @@ def detect_anomaly(
         voltage_stability_index,
         cascade_probability,
         concurrent,
+        usgs_gage_height,
+        surface_temp,
     ]])
 
     raw = float(_MODEL.score_samples(features)[0])
