@@ -121,14 +121,22 @@ export default function CesiumViewer() {
         });
 
         // Scene atmosphere for drama
-        viewer.scene.skyAtmosphere.show       = true;
-        viewer.scene.globe.enableLighting     = true;
-        viewer.scene.fog.enabled              = true;
-        viewer.scene.fog.density              = 0.00015;
-        viewer.scene.globe.depthTestAgainstTerrain = true;
-        viewer.scene.postProcessStages.bloom.enabled = true;
-        (viewer.scene.postProcessStages.bloom as any).uniforms.glowOnly  = false;
-        (viewer.scene.postProcessStages.bloom as any).uniforms.brightness = -0.1;
+        if (viewer.scene.skyAtmosphere) {
+          viewer.scene.skyAtmosphere.show = true;
+        }
+        if (viewer.scene.globe) {
+          viewer.scene.globe.enableLighting = true;
+          viewer.scene.globe.depthTestAgainstTerrain = true;
+        }
+        if (viewer.scene.fog) {
+          viewer.scene.fog.enabled = true;
+          viewer.scene.fog.density = 0.00015;
+        }
+        if (viewer.scene.postProcessStages?.bloom) {
+          viewer.scene.postProcessStages.bloom.enabled = true;
+          (viewer.scene.postProcessStages.bloom as any).uniforms.glowOnly  = false;
+          (viewer.scene.postProcessStages.bloom as any).uniforms.brightness = -0.1;
+        }
 
         viewerRef.current = viewer;
 
