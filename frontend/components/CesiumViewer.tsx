@@ -203,9 +203,9 @@ export default function CesiumViewer() {
           if (viewer.imageryLayers && viewer.imageryLayers.length > 0) {
             const baseLayer = viewer.imageryLayers.get(0);
             if (baseLayer) {
-              baseLayer.brightness = 0.22;
-              baseLayer.contrast = 1.4;
-              baseLayer.saturation = 0.02;
+              baseLayer.brightness = 0.55;
+              baseLayer.contrast = 1.25;
+              baseLayer.saturation = 0.12;
             }
           }
         } catch (e) {
@@ -226,7 +226,7 @@ export default function CesiumViewer() {
           const buildings = await Cesium.createOsmBuildingsAsync();
           if (buildings) {
             buildings.style = new Cesium.Cesium3DTileStyle({
-              color: 'color("#1e3c5f", 0.45)' // clean standard Cesium color expression
+              color: 'color("#3a7bb8", 0.50)' // lighter blueprint blue for better visibility
             });
             viewer.scene.primitives.add(buildings);
             buildingsRef.current = buildings;
