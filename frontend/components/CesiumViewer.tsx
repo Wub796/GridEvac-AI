@@ -17,7 +17,7 @@
  *  11. Floating Markers      — Double-cones and spinning rings hovering over alerts
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import type * as CesiumType from 'cesium';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import type { CityData } from '@/lib/types';
@@ -47,6 +47,7 @@ export default function CesiumViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef    = useRef<any>(null);
   const loadedRef    = useRef(false);
+  const [viewerReady, setViewerReady] = useState(false);
 
   // Entity refs for reactive updates
   const floodEntityRef      = useRef<any>(null);
@@ -418,6 +419,9 @@ export default function CesiumViewer() {
           }
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
+        // Signal that the viewer is ready
+        setViewerReady(true);
+
       } catch (err) {
         console.error('[GridEvac] Cesium init error:', err);
       }
@@ -430,6 +434,7 @@ export default function CesiumViewer() {
 
     return () => {
       destroyed = true;
+      setViewerReady(false);
       
       // Clean up indicators on unmount
       if (viewerRef.current && !viewerRef.current.isDestroyed()) {
@@ -461,14 +466,14 @@ export default function CesiumViewer() {
     edgeEntityMap.current = maps.edgeEntityMap;
     substationEntityMap.current = maps.substationEntityMap;
     transmissionEntityMap.current = maps.transmissionEntityMap;
-  }, [cityData]);
+  }, [cityData, viewerReady]);
 
   // ── Toggle OSM Buildings visibility ─────────────────────────────────────────
   useEffect(() => {
     if (buildingsRef.current) {
       buildingsRef.current.show = showBuildings;
     }
-  }, [showBuildings]);
+  }, [showBuildings, viewerReady]);
 
   // ── Toggle GIS Map Layers visibility ────────────────────────────────────────
   useEffect(() => {
@@ -499,7 +504,7 @@ export default function CesiumViewer() {
         }
       });
     }
-  }, [showPowerLines, showSubstations, showIntersections]);
+  }, [showPowerLines, showSubstations, showIntersections, viewerReady]);
 
   // ── Fly to selected node ────────────────────────────────────────────────────
   useEffect(() => {
@@ -523,7 +528,7 @@ export default function CesiumViewer() {
         });
       }
     }
-  }, [flyToNodeId, cityData, setFlyToNodeId]);
+  }, [flyToNodeId, cityData, setFlyToNodeId, viewerReady]);
 
   // ── Cinematic fly-to camera trigger when switching sections ─────────────────
   useEffect(() => {
@@ -553,7 +558,7 @@ export default function CesiumViewer() {
         duration: 2.5,
       });
     }
-  }, [activeSection]);
+  }, [activeSection, viewerReady]);
 
   // ── Fly to selected preset coordinates ──────────────────────────────────────
   useEffect(() => {
@@ -572,7 +577,7 @@ export default function CesiumViewer() {
       duration: 2.0,
     });
     setFlyToCoords(null); // Reset preset
-  }, [flyToCoords, setFlyToCoords]);
+  }, [flyToCoords, setFlyToCoords, viewerReady]);
 
   // ── Update transmission line wire styles dynamically ───────────────────────
   useEffect(() => {
@@ -604,7 +609,7 @@ export default function CesiumViewer() {
         }
       }
     });
-  }, [route, cityData]);
+  }, [route, cityData, viewerReady]);
 
   // ── Update flood plane height ───────────────────────────────────────────────
   useEffect(() => {
@@ -616,7 +621,7 @@ export default function CesiumViewer() {
     if (entity.polygon) {
       entity.polygon.height = new Cesium.ConstantProperty(waterHeight);
     }
-  }, [floodLevel]);
+  }, [floodLevel, viewerReady]);
 
   // ── Update substation marker colors (real-time loads version) ──
   useEffect(() => {
@@ -667,7 +672,7 @@ export default function CesiumViewer() {
         subStruct.beacon.point.color = new Cesium.ConstantProperty(isFailed ? Cesium.Color.RED : (isOverloaded ? Cesium.Color.WHITE : color));
       }
     });
-  }, [failedSubstations, route, cityData, substationLoads]);
+  }, [failedSubstations, route, cityData, substationLoads, viewerReady]);
 
   // ── Update blackout zone cylinders (manual + cascades) ─────────────────────
   useEffect(() => {
@@ -720,7 +725,7 @@ export default function CesiumViewer() {
 
       blackoutRefs.current.set(subId, entity);
     }
-  }, [failedSubstations, route, cityData]);
+  }, [failedSubstations, route, cityData, viewerReady]);
 
   // ── Update route visualisation ─────────────────────────────────────────────
   useEffect(() => {
@@ -823,7 +828,7 @@ export default function CesiumViewer() {
         6000,
       ),
     });
-  }, [route]);
+  }, [route, viewerReady]);
 
   // ── Update origin / destination markers ────────────────────────────────────
   useEffect(() => {
@@ -882,7 +887,7 @@ export default function CesiumViewer() {
         },
       });
     }
-  }, [originNode, destNode, cityData]);
+  }, [originNode, destNode, cityData, viewerReady]);
 
   // ── Render exits holographic indicators ──
   useEffect(() => {
@@ -901,7 +906,7 @@ export default function CesiumViewer() {
       const indicator = createHolographicIndicator(viewer, exitNode.lon, exitNode.lat, exitNode.elevation, '#00ff88');
       exitIndicatorsRef.current.set(exitId, indicator);
     }
-  }, [cityData]);
+  }, [cityData, viewerReady]);
 
   // ── Update origin/dest holographic indicators ──
   useEffect(() => {
@@ -927,7 +932,7 @@ export default function CesiumViewer() {
     if (dest && destNode !== -1) {
       destIndicatorRef.current = createHolographicIndicator(viewer, dest.lon, dest.lat, dest.elevation, '#ff6b35');
     }
-  }, [originNode, destNode, cityData]);
+  }, [originNode, destNode, cityData, viewerReady]);
 
   // ── Update substation holographic indicators (real-time loads version) ──
   useEffect(() => {
@@ -998,7 +1003,7 @@ export default function CesiumViewer() {
         subIndicatorsRef.current.set(subId, indicator);
       }
     });
-  }, [failedSubstations, route, cityData, substationLoads]);
+  }, [failedSubstations, route, cityData, substationLoads, viewerReady]);
 
   const isMapActive = activeSection === 'map';
 
