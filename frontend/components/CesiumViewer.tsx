@@ -494,7 +494,7 @@ export default function CesiumViewer() {
       viewer.entities.values.forEach((entity: any) => {
         if (entity.id && entity.id.startsWith('sub-label-')) {
           entity.show = showSubstations;
-        } else if (entity.id && entity.id.startsWith('node-')) {
+        } else if (entity.id && entity.id.startsWith('node-') && !entity.id.includes('-part-')) {
           entity.show = showIntersections;
         }
       });

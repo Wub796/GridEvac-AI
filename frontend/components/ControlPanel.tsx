@@ -321,7 +321,7 @@ export default function ControlPanel() {
                 onChange={(e) => setShowIntersections(e.target.checked)}
                 className={styles.toggleCheckbox}
               />
-              <span className={styles.toggleLabel}>Grid Waypoints (Dots)</span>
+              <span className={styles.toggleLabel}>Grid Waypoints (Pyramids)</span>
             </label>
           </div>
 
