@@ -67,4 +67,11 @@
 - [x] Wire state updates to pylon colors (nominal, overloaded, cascaded, offline)
 - [x] Compile and verify Next.js build
 
+## Interactive Picking & Real-time Telemetry Updates
+- [x] Attach unique node-based IDs to all substation structural parts
+- [x] Refactor Cesium handlers to pick and highlight composite substations correctly
+- [x] Optimize holographic indicators to update/reconcile in-place without flickering
+- [x] Update triggerLiveTick in Zustand store to calculate overloadedSubstations in real-time
+- [x] Compile and push changes to remote origin
+
 
