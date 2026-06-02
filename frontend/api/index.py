@@ -14,7 +14,7 @@ from models import (
     SimulationRequest, RouteResponse, RouteCoord, FloodZoneResponse,
 )
 from city_graph import _G, _NODES, _SUBSTATIONS, CENTER_LAT, CENTER_LON, GRID_ROWS, GRID_COLS
-from routing import compute_route, get_flooded_nodes, get_blackout_nodes, FLOOD_RISE_PER_LEVEL
+from routing import compute_route, get_flooded_nodes, FLOOD_RISE_PER_LEVEL
 from anomaly import detect_anomaly
 
 # ── App setup ──────────────────────────────────────────────────────────────────
@@ -92,13 +92,42 @@ async def calculate_route(req: SimulationRequest):
         failed_substations=req.failed_substations,
     )
 
-    # Anomaly detection
-    blackout_nodes = get_blackout_nodes(req.failed_substations)
-    affected_fraction = len(blackout_nodes) / (GRID_ROWS * GRID_COLS)
+    flow = result["power_flow"]
+
+    # Calculate average load ratio across all active substations
+    total_active_load = 0.0
+    total_active_capacity = 0.0
+    for sub in _SUBSTATIONS:
+        sub_id = sub["id"]
+        is_failed = sub_id in req.failed_substations or sub_id in flow["cascaded_substations"]
+        if not is_failed:
+            current_load = flow["substation_loads"][sub_id]
+            total_active_load += current_load
+            total_active_capacity += sub["capacity_mw"]
+
+    avg_load_ratio = (total_active_load / total_active_capacity) if total_active_capacity > 0 else 1.5
+
+    # Calculate average voltage stability across all grid nodes
+    node_voltages = list(flow["voltage_readings"].values())
+    avg_voltage = sum(node_voltages) / len(node_voltages) if node_voltages else 100.0
+
+    # Calculate cascading failure probability
+    failed_total = len(req.failed_substations) + len(flow["cascaded_substations"])
+    overload_ratio = (total_active_load / total_active_capacity) if total_active_capacity > 0 else 2.0
+    cascade_prob = 0.0
+    if overload_ratio > 1.0:
+        cascade_prob = min(0.95, (overload_ratio - 1.0) * 1.5 + overload_ratio * 0.1 * failed_total)
+    elif failed_total >= 3:
+        cascade_prob = 0.25
+
+    # Run IsolationForest Anomaly Model
     anomaly_score, risk_level = detect_anomaly(
         flood_level=req.flood_level,
-        failed_count=len(req.failed_substations),
-        affected_fraction=affected_fraction,
+        failed_count=failed_total,
+        overload_count=len(flow["overloaded_substations"]),
+        average_grid_load_ratio=avg_load_ratio,
+        voltage_stability_index=avg_voltage,
+        cascade_probability=cascade_prob,
     )
 
     return RouteResponse(
@@ -112,4 +141,9 @@ async def calculate_route(req: SimulationRequest):
         anomaly_score=round(anomaly_score, 4),
         risk_level=risk_level,
         message=result["message"],
+        substation_loads=flow["substation_loads"],
+        overloaded_substations=flow["overloaded_substations"],
+        cascaded_substations=flow["cascaded_substations"],
+        grid_frequency=flow["grid_frequency"],
+        voltage_readings=flow["voltage_readings"],
     )

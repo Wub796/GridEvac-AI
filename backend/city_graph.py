@@ -51,11 +51,11 @@ NOISE_AMP: float  = 0.8         # sinusoidal noise amplitude
 #   node  = row*GRID_COLS + col
 #   radius expressed in grid-unit distance (Euclidean on row/col space)
 SUBSTATION_DEFS: List[Dict] = [
-    {"id": 0, "node": 11, "name": "Main Street Substation",    "radius": 1.9},
-    {"id": 1, "node": 18, "name": "Midtown Substation",        "radius": 2.1},
-    {"id": 2, "node": 44, "name": "Downtown Core Substation",  "radius": 2.3},
-    {"id": 3, "node": 73, "name": "Heights Substation",        "radius": 1.8},
-    {"id": 4, "node": 86, "name": "Montrose Substation",       "radius": 2.0},
+    {"id": 0, "node": 11, "name": "Main Street Substation",    "radius": 1.9, "capacity_mw": 150.0, "base_load_mw": 90.0},
+    {"id": 1, "node": 18, "name": "Midtown Substation",        "radius": 2.1, "capacity_mw": 120.0, "base_load_mw": 85.0},
+    {"id": 2, "node": 44, "name": "Downtown Core Substation",  "radius": 2.3, "capacity_mw": 250.0, "base_load_mw": 180.0},
+    {"id": 3, "node": 73, "name": "Heights Substation",        "radius": 1.8, "capacity_mw": 110.0, "base_load_mw": 70.0},
+    {"id": 4, "node": 86, "name": "Montrose Substation",       "radius": 2.0, "capacity_mw": 130.0, "base_load_mw": 95.0},
 ]
 
 
@@ -143,6 +143,8 @@ def build_substations(nodes: Dict[int, Dict]) -> List[Dict]:
             "radius":         radius,
             "lat":            nd["lat"],
             "lon":            nd["lon"],
+            "capacity_mw":    sub["capacity_mw"],
+            "base_load_mw":   sub["base_load_mw"],
             "affected_nodes": affected,
         })
     return result

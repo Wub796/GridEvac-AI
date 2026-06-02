@@ -26,6 +26,8 @@ export interface SubstationData {
   radius: number;
   lat: number;
   lon: number;
+  capacity_mw: number;
+  base_load_mw: number;
   affected_nodes: number[];
 }
 
@@ -60,6 +62,11 @@ export interface RouteResponse {
   anomaly_score: number;
   risk_level: RiskLevel;
   message: string;
+  substation_loads: Record<number, number>;
+  overloaded_substations: number[];
+  cascaded_substations: number[];
+  grid_frequency: number;
+  voltage_readings: Record<number, number>;
 }
 
 // ── Simulation ────────────────────────────────────────────────────────────────

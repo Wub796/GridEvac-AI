@@ -7,15 +7,11 @@
  *   1. Cesium World Terrain  — real Houston elevation data
  *   2. OSM 3D Buildings      — Cesium Ion asset 96188
  *   3. Street grid           — polyline entities, colour-coded by status
- *   4. Substation markers    — amber cylinders with labels
+ *   4. Substation markers    — dynamic amber/orange/red cylinders with labels
  *   5. Flood plane           — rising translucent blue polygon
- *   6. Blackout zones        — dark red semi-transparent cylinders
+ *   6. Blackout zones        — dark red semi-transparent cylinders (includes cascades)
  *   7. Evacuation route      — glowing green PolylineGlow tube
  *   8. Origin / Dest markers — pulsing coloured point entities
- *
- * Cesium is loaded as a pre-built global script from /public/cesium/Cesium.js
- * to avoid all webpack / SSR complexity.  TypeScript types are imported from
- * the cesium npm package (type-only import, never bundled).
  */
 
 import { useEffect, useRef, useCallback } from 'react';
@@ -49,14 +45,15 @@ export default function CesiumViewer() {
   const viewerRef    = useRef<any>(null);
   const loadedRef    = useRef(false);
 
-  // Entity refs for reactive updates (avoids recreating viewer on every render)
-  const floodEntityRef     = useRef<any>(null);
-  const routeEntityRef     = useRef<any>(null);
-  const originEntityRef    = useRef<any>(null);
-  const destEntityRef      = useRef<any>(null);
-  const blackoutRefs       = useRef<Map<number, any>>(new Map());
-  const edgeEntityMap      = useRef<Map<string, any>>(new Map());
-  const staticRenderedRef  = useRef(false);
+  // Entity refs for reactive updates
+  const floodEntityRef      = useRef<any>(null);
+  const routeEntityRef      = useRef<any>(null);
+  const originEntityRef     = useRef<any>(null);
+  const destEntityRef       = useRef<any>(null);
+  const blackoutRefs        = useRef<Map<number, any>>(new Map());
+  const edgeEntityMap       = useRef<Map<string, any>>(new Map());
+  const substationEntityMap = useRef<Map<number, any>>(new Map());
+  const staticRenderedRef   = useRef(false);
 
   const {
     floodLevel,
@@ -67,7 +64,7 @@ export default function CesiumViewer() {
     destNode,
   } = useSimulationStore();
 
-  // ── Load Cesium script once ─────────────────────────────────────────────────
+  // ── Load Cesium script once with dynamic multi-CDN fallback ─────────────────
   const loadCesiumScript = useCallback((): Promise<void> => {
     return new Promise((resolve, reject) => {
       if (typeof window === 'undefined') return reject('SSR');
@@ -95,13 +92,13 @@ export default function CesiumViewer() {
 
       const tryNext = () => {
         if (attempt >= cdns.length) {
-          return reject(new Error('Failed to load Cesium.js from all CDNs'));
+          return reject(new Error('Failed to load CesiumJS from all CDNs'));
         }
 
         const cdn = cdns[attempt];
         attempt++;
 
-        // Set base URL for the active CDN
+        // Set base URL for active CDN
         (window as any).CESIUM_BASE_URL = cdn.base;
 
         // Load stylesheet
@@ -228,7 +225,7 @@ export default function CesiumViewer() {
           show: false,
         });
 
-        // Tick: pulse origin / dest markers
+        // Tick: pulse origin / dest markers & overloaded substations
         let tickT = 0;
         viewer.clock.onTick.addEventListener(() => {
           tickT += 0.04;
@@ -239,6 +236,21 @@ export default function CesiumViewer() {
           if (destEntityRef.current?.point) {
             destEntityRef.current.point.pixelSize = new Cesium.ConstantProperty(pulse);
           }
+
+          // Pulse overloaded substation cylinders
+          substationEntityMap.current.forEach((entity, subId) => {
+            const currentRoute = useSimulationStore.getState().route;
+            const isOverloaded = currentRoute?.overloaded_substations?.includes(subId) ?? false;
+            
+            if (isOverloaded && entity.cylinder) {
+              const scale = 1.0 + Math.sin(tickT * 2.5) * 0.15;
+              entity.cylinder.topRadius = new Cesium.ConstantProperty(6 * scale);
+              entity.cylinder.bottomRadius = new Cesium.ConstantProperty(10 * scale);
+            } else if (entity.cylinder) {
+              entity.cylinder.topRadius = new Cesium.ConstantProperty(6);
+              entity.cylinder.bottomRadius = new Cesium.ConstantProperty(10);
+            }
+          });
         });
 
       } catch (err) {
@@ -263,8 +275,9 @@ export default function CesiumViewer() {
     if (typeof Cesium === 'undefined') return;
     staticRenderedRef.current = true;
 
-    const map = renderStaticCity(viewer, cityData);
-    edgeEntityMap.current = map;
+    const maps = renderStaticCity(viewer, cityData);
+    edgeEntityMap.current = maps.edgeEntityMap;
+    substationEntityMap.current = maps.substationEntityMap;
   }, [cityData]);
 
   // ── Update flood plane height ───────────────────────────────────────────────
@@ -279,7 +292,35 @@ export default function CesiumViewer() {
     }
   }, [floodLevel]);
 
-  // ── Update blackout zone cylinders ─────────────────────────────────────────
+  // ── Update substation marker colors ────────────────────────────────────────
+  useEffect(() => {
+    if (typeof Cesium === 'undefined' || !cityData) return;
+
+    substationEntityMap.current.forEach((entity, subId) => {
+      const isManualFailed = failedSubstations.includes(subId);
+      const isCascaded = route?.cascaded_substations?.includes(subId) ?? false;
+      const isFailed = isManualFailed || isCascaded;
+      const isOverloaded = route?.overloaded_substations?.includes(subId) ?? false;
+
+      let color = Cesium.Color.fromCssColorString('#ffc107').withAlpha(0.95);
+      let outlineColor = Cesium.Color.fromCssColorString('#ff9800');
+
+      if (isFailed) {
+        color = Cesium.Color.fromCssColorString('#ff3d3d').withAlpha(0.3); // faded dark red
+        outlineColor = Cesium.Color.fromCssColorString('#555555');
+      } else if (isOverloaded) {
+        color = Cesium.Color.fromCssColorString('#ff9100'); // glowing orange
+        outlineColor = Cesium.Color.WHITE;
+      }
+
+      if (entity.cylinder) {
+        entity.cylinder.material = new Cesium.ColorMaterialProperty(color);
+        entity.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      }
+    });
+  }, [failedSubstations, route, cityData]);
+
+  // ── Update blackout zone cylinders (manual + cascades) ─────────────────────
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !cityData) return;
@@ -289,7 +330,12 @@ export default function CesiumViewer() {
     blackoutRefs.current.forEach((e) => viewer.entities.remove(e));
     blackoutRefs.current.clear();
 
-    for (const subId of failedSubstations) {
+    const activeBlackoutIds = [
+      ...failedSubstations,
+      ...(route?.cascaded_substations ?? [])
+    ];
+
+    for (const subId of activeBlackoutIds) {
       const sub = cityData.substations.find((s) => s.id === subId);
       if (!sub) continue;
 
@@ -325,7 +371,7 @@ export default function CesiumViewer() {
 
       blackoutRefs.current.set(subId, entity);
     }
-  }, [failedSubstations, cityData]);
+  }, [failedSubstations, route, cityData]);
 
   // ── Update route visualisation ─────────────────────────────────────────────
   useEffect(() => {
@@ -467,8 +513,9 @@ export default function CesiumViewer() {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderStaticCity(viewer: any, cityData: CityData): Map<string, any> {
-  const entityMap = new Map<string, any>();
+function renderStaticCity(viewer: any, cityData: CityData): { edgeEntityMap: Map<string, any>; substationEntityMap: Map<number, any> } {
+  const edgeEntityMap = new Map<string, any>();
+  const substationEntityMap = new Map<number, any>();
 
   // ── Street edges ───────────────────────────────────────────────────────────
   for (const edge of cityData.edges) {
@@ -492,13 +539,13 @@ function renderStaticCity(viewer: any, cityData: CityData): Map<string, any> {
       },
     });
 
-    entityMap.set(`${edge.source}-${edge.target}`, entity);
+    edgeEntityMap.set(`${edge.source}-${edge.target}`, entity);
   }
 
   // ── Substation markers ─────────────────────────────────────────────────────
   for (const sub of cityData.substations) {
     // Glowing amber tower
-    viewer.entities.add({
+    const cylinder = viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 40),
       cylinder: {
         length:        80,
@@ -510,6 +557,8 @@ function renderStaticCity(viewer: any, cityData: CityData): Map<string, any> {
         outlineWidth:  1,
       },
     });
+    
+    substationEntityMap.set(sub.id, cylinder);
 
     // Label
     viewer.entities.add({
@@ -528,5 +577,5 @@ function renderStaticCity(viewer: any, cityData: CityData): Map<string, any> {
     });
   }
 
-  return entityMap;
+  return { edgeEntityMap, substationEntityMap };
 }

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 
 # ─── Request Models ────────────────────────────────────────────────────────────
@@ -35,6 +35,8 @@ class SubstationData(BaseModel):
     radius: float             # blackout radius in grid-unit distance
     lat: float
     lon: float
+    capacity_mw: float
+    base_load_mw: float
     affected_nodes: List[int]
 
 
@@ -67,6 +69,11 @@ class RouteResponse(BaseModel):
     anomaly_score: float                    # 0 (normal) → 1 (critical)
     risk_level: str                         # LOW | MEDIUM | HIGH | CRITICAL
     message: str
+    substation_loads: Dict[int, float]      # live load in MW for each substation
+    overloaded_substations: List[int]       # IDs of substations currently overloaded
+    cascaded_substations: List[int]         # IDs of substations failed by cascade
+    grid_frequency: float                   # live grid frequency (e.g. 59.98 Hz)
+    voltage_readings: Dict[int, float]      # local node voltage stability percentage (0-100%)
 
 
 # ─── Anomaly Scan Models ───────────────────────────────────────────────────────

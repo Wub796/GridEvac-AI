@@ -1,17 +1,25 @@
 /**
  * useSimulation.ts — Zustand store for GridEvac AI simulation state
- * Houston, TX edition
+ * Houston, TX edition (with live grid load flow and telemetry logging)
  */
 import { create } from 'zustand';
 import { api } from '@/lib/api';
-import type { CityData, RouteResponse, RiskLevel } from '@/lib/types';
+import type { CityData, RouteResponse } from '@/lib/types';
 
 interface SimulationStore {
   // ── Simulation parameters ──────────────────────────────────────────────────
   floodLevel:        number;           // 0–10
-  failedSubstations: number[];         // substation IDs that are offline
+  failedSubstations: number[];         // substation IDs that are manually offline
   originNode:        number;           // 0–99
   destNode:          number;           // 0–99
+
+  // ── Live Grid Telemetry ────────────────────────────────────────────────────
+  gridFrequency:         number;
+  substationLoads:       Record<number, number>;
+  overloadedSubstations: number[];
+  cascadedSubstations:   number[];
+  voltageReadings:       Record<number, number>;
+  liveLogs:              string[];
 
   // ── Derived / async state ──────────────────────────────────────────────────
   cityData:      CityData    | null;
@@ -29,34 +37,69 @@ interface SimulationStore {
   calculateRoute:       () => Promise<void>;
   clearRoute:           () => void;
   checkBackend:         () => Promise<void>;
+  addLog:               (msg: string) => void;
+  triggerLiveTick:      () => void;
 }
 
 export const useSimulationStore = create<SimulationStore>((set, get) => ({
-  // defaults — node 0 = SW corner (near Buffalo Bayou, flood-prone)
-  //            node 99 = NE corner (higher ground)
   floodLevel:        0,
   failedSubstations: [],
   originNode:        0,
   destNode:          99,
+  
+  gridFrequency:         60.00,
+  substationLoads:       {},
+  overloadedSubstations: [],
+  cascadedSubstations:   [],
+  voltageReadings:       {},
+  liveLogs:              [
+    "GridEvac AI: Core monitoring console initialized.",
+    "Grid status: Nominal. Awaiting simulation parameter changes."
+  ],
+
   cityData:          null,
   route:             null,
   isLoading:         false,
   backendOnline:     false,
   error:             null,
 
-  setFloodLevel: (v) => set({ floodLevel: v }),
-
-  toggleSubstation: (id) => {
-    const { failedSubstations } = get();
-    set({
-      failedSubstations: failedSubstations.includes(id)
-        ? failedSubstations.filter((s) => s !== id)
-        : [...failedSubstations, id],
-    });
+  addLog: (msg) => {
+    const timestamp = new Date().toLocaleTimeString();
+    set((state) => ({
+      liveLogs: [`[${timestamp}] ${msg}`, ...state.liveLogs.slice(0, 49)]
+    }));
   },
 
-  setOriginNode: (id) => set({ originNode: id }),
-  setDestNode:   (id) => set({ destNode:   id }),
+  setFloodLevel: (v) => {
+    set({ floodLevel: v });
+    get().addLog(`Simulation: Flood slider adjusted to level ${v.toFixed(1)}`);
+  },
+
+  toggleSubstation: (id) => {
+    const { failedSubstations, cityData } = get();
+    const subName = cityData?.substations.find((s) => s.id === id)?.name || `Substation #${id}`;
+    const nextFailed = failedSubstations.includes(id)
+      ? failedSubstations.filter((s) => s !== id)
+      : [...failedSubstations, id];
+    
+    set({ failedSubstations: nextFailed });
+    
+    const statusStr = failedSubstations.includes(id) ? "ONLINE" : "OFFLINE (Manual Override)";
+    get().addLog(`Grid Alert: ${subName} switched ${statusStr}`);
+    
+    // Automatically recalculate route and load flow on toggle
+    get().calculateRoute();
+  },
+
+  setOriginNode: (id) => {
+    set({ originNode: id });
+    get().addLog(`Navigation: Origin waypoint updated to Node #${id}`);
+  },
+  
+  setDestNode: (id) => {
+    set({ destNode: id });
+    get().addLog(`Navigation: Destination waypoint updated to Node #${id}`);
+  },
 
   clearRoute: () => set({ route: null, error: null }),
 
@@ -69,13 +112,27 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const cityData = await api.getCityData();
-      set({ cityData, isLoading: false, backendOnline: true });
+      
+      // Seed default substation loads
+      const defaultLoads: Record<number, number> = {};
+      cityData.substations.forEach((s) => {
+        defaultLoads[s.id] = s.base_load_mw;
+      });
+
+      set({ 
+        cityData, 
+        substationLoads: defaultLoads,
+        isLoading: false, 
+        backendOnline: true 
+      });
+      get().addLog("Database: Successfully loaded Houston downtown grid layout.");
     } catch (e: any) {
       set({
         isLoading:     false,
         backendOnline: false,
-        error:         'Cannot reach backend. Make sure the FastAPI server is running on port 8000.',
+        error:         'Cannot reach backend. Make sure the API server is online.',
       });
+      get().addLog("Error: Failed to connect to GridEvac AI API server.");
     }
   },
 
@@ -89,12 +146,96 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
         origin_node:        originNode,
         dest_node:          destNode,
       });
-      set({ route, isLoading: false });
+
+      // Update telemetry variables from calculations
+      const loadLogs: string[] = [];
+      
+      // Detect newly overloaded/cascaded substations for logs
+      if (route.overloaded_substations.length > get().overloadedSubstations.length) {
+        route.overloaded_substations.forEach(id => {
+          if (!get().overloadedSubstations.includes(id)) {
+            const name = get().cityData?.substations.find(s => s.id === id)?.name || `Sub #${id}`;
+            loadLogs.push(`Overload warning: ${name} is drawing excessive current!`);
+          }
+        });
+      }
+      
+      if (route.cascaded_substations.length > get().cascadedSubstations.length) {
+        route.cascaded_substations.forEach(id => {
+          if (!get().cascadedSubstations.includes(id)) {
+            const name = get().cityData?.substations.find(s => s.id === id)?.name || `Sub #${id}`;
+            loadLogs.push(`CRITICAL: Cascading failure tripped! ${name} went offline.`);
+          }
+        });
+      }
+
+      set({ 
+        route, 
+        gridFrequency: route.grid_frequency,
+        substationLoads: route.substation_loads,
+        overloadedSubstations: route.overloaded_substations,
+        cascadedSubstations: route.cascaded_substations,
+        voltageReadings: route.voltage_readings,
+        isLoading: false 
+      });
+
+      // Write logs
+      if (loadLogs.length > 0) {
+        loadLogs.forEach(log => get().addLog(log));
+      } else {
+        get().addLog(`Evacuation: Computed new optimal safety route (${route.path.length} nodes).`);
+      }
     } catch (e: any) {
       set({
         isLoading: false,
         error: 'Route calculation failed. Check backend connection.',
       });
+      get().addLog("Error: Real-time pathfinding computation failed.");
     }
   },
+
+  // Fluctuate telemetry values dynamically to show live monitoring
+  triggerLiveTick: () => {
+    const { route, substationLoads, gridFrequency, cascadedSubstations, failedSubstations } = get();
+    if (!route || Object.keys(substationLoads).length === 0) return;
+
+    // 1. Fluctuates loads slightly (±0.2 to ±1.2 MW) for active substations
+    const nextLoads = { ...substationLoads };
+    Object.keys(nextLoads).forEach((key) => {
+      const id = parseInt(key, 10);
+      const isFailed = failedSubstations.includes(id) || cascadedSubstations.includes(id);
+      if (!isFailed) {
+        const delta = (Math.random() - 0.5) * 1.8;
+        nextLoads[id] = Math.max(10.0, parseFloat((nextLoads[id] + delta).toFixed(1)));
+      }
+    });
+
+    // 2. Fluctuate grid frequency slightly
+    const totalFailed = failedSubstations.length + cascadedSubstations.length;
+    let nextFreq = gridFrequency;
+    if (totalFailed < 5) {
+      const deltaFreq = (Math.random() - 0.5) * 0.02;
+      nextFreq = parseFloat((gridFrequency + deltaFreq).toFixed(2));
+      // clamp around the load-induced frequency level
+      const baseExpected = 60.0 - 0.05 * totalFailed;
+      nextFreq = Math.max(baseExpected - 0.15, Math.min(baseExpected + 0.05, nextFreq));
+    }
+
+    set({
+      substationLoads: nextLoads,
+      gridFrequency: nextFreq
+    });
+
+    // 3. Occasionally post a sensor reading update in log
+    if (Math.random() < 0.25) {
+      const sensors = [
+        "Sensor #12 (Main St Bayou): flood clearance level stable.",
+        `Frequency: grid operating at ${nextFreq.toFixed(2)} Hz.`,
+        "Zonal Scan: dynamic risk envelope nominal.",
+        "System: processing telemetry payload from Houston Grid SCADA."
+      ];
+      const selected = sensors[Math.floor(Math.random() * sensors.length)];
+      get().addLog(selected);
+    }
+  }
 }));

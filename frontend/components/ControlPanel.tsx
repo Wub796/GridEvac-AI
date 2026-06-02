@@ -37,6 +37,10 @@ export default function ControlPanel() {
     fetchCityData,
     calculateRoute,
     clearRoute,
+    gridFrequency,
+    substationLoads,
+    overloadedSubstations,
+    cascadedSubstations,
   } = useSimulationStore();
 
   const substations = cityData?.substations ?? [];
@@ -74,6 +78,29 @@ export default function ControlPanel() {
         <div className={styles.errorBanner}>
           {error}
         </div>
+      )}
+
+      {/* ── Grid Dashboard Telemetry HUD ── */}
+      {backendOnline && (
+        <section className={styles.section} style={{ background: 'rgba(0, 229, 255, 0.02)' }}>
+          <h2 className={styles.sectionTitle}>
+            <span className={styles.sectionIcon}>📊</span> Grid Telemetry HUD
+          </h2>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Frequency</span>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88' }}>
+                {gridFrequency.toFixed(2)} Hz
+              </span>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Grid Stability</span>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: overloadedSubstations.length > 0 ? '#ffea00' : (cascadedSubstations.length > 0 ? '#ff3d3d' : '#00e5ff') }}>
+                {cascadedSubstations.length > 0 ? 'CRITICAL' : (overloadedSubstations.length > 0 ? 'OVERLOAD' : 'NOMINAL')}
+              </span>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* ── Section: Flood Simulation ── */}
@@ -117,26 +144,76 @@ export default function ControlPanel() {
             <p className={styles.placeholder}>Load city data to see substations</p>
           ) : (
             substations.map((sub) => {
-              const isFailed = failedSubstations.includes(sub.id);
+              const isManualFailed = failedSubstations.includes(sub.id);
+              const isCascaded = cascadedSubstations.includes(sub.id);
+              const isFailed = isManualFailed || isCascaded;
+
+              const currentLoad = substationLoads[sub.id] ?? sub.base_load_mw;
+              const isOverloaded = overloadedSubstations.includes(sub.id);
+
+              const loadPercent = Math.min(100, Math.round((currentLoad / sub.capacity_mw) * 100));
+
+              let statusLabel = "ONLINE";
+              let statusColor = "#00e676";
+
+              if (isManualFailed) {
+                statusLabel = "OFFLINE";
+                statusColor = "#ff3d3d";
+              } else if (isCascaded) {
+                statusLabel = "CASCADE";
+                statusColor = "#ff3d3d";
+              } else if (isOverloaded) {
+                statusLabel = "OVERLOAD";
+                statusColor = "#ff9100";
+              }
+
+              const barColor = isFailed ? '#1a0d0d' : (isOverloaded ? '#ff9100' : (loadPercent > 80 ? '#ffea00' : '#00ff88'));
+
               return (
                 <div
                   key={sub.id}
                   className={`${styles.substationRow} ${isFailed ? styles.substationFailed : ''}`}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '6px' }}
                 >
-                  <div className={styles.substationInfo}>
-                    <div
-                      className={styles.substationDot}
-                      style={{ background: isFailed ? '#ff4400' : '#ffc107' }}
-                    />
-                    <span className={styles.substationName}>{sub.name}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <div className={styles.substationInfo}>
+                      <div
+                        className={styles.substationDot}
+                        style={{ 
+                          background: statusColor, 
+                          boxShadow: `0 0 8px ${statusColor}`,
+                          animation: isOverloaded ? 'blink 0.6s infinite' : 'none'
+                        }}
+                      />
+                      <span className={styles.substationName}>{sub.name}</span>
+                    </div>
+                    <button
+                      className={`${styles.toggle} ${isFailed ? styles.toggleOff : styles.toggleOn}`}
+                      onClick={() => toggleSubstation(sub.id)}
+                      disabled={isCascaded}
+                      style={{ cursor: isCascaded ? 'not-allowed' : 'pointer' }}
+                    >
+                      {statusLabel}
+                    </button>
                   </div>
-                  <button
-                    className={`${styles.toggle} ${isFailed ? styles.toggleOff : styles.toggleOn}`}
-                    onClick={() => toggleSubstation(sub.id)}
-                    aria-label={`${isFailed ? 'Restore' : 'Fail'} ${sub.name}`}
-                  >
-                    {isFailed ? 'FAILED' : 'ONLINE'}
-                  </button>
+
+                  {/* Dynamic Load Indicator */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '2px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px', color: 'rgba(160,210,240,0.5)' }}>
+                      <span>Load: {isFailed ? '0' : currentLoad.toFixed(1)} MW / {sub.capacity_mw} MW</span>
+                      <span>{isFailed ? '0%' : `${loadPercent}%`}</span>
+                    </div>
+                    <div style={{ height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div 
+                        style={{ 
+                          height: '100%', 
+                          width: `${isFailed ? 0 : loadPercent}%`, 
+                          background: barColor,
+                          transition: 'width 0.5s ease, background 0.5s ease' 
+                        }} 
+                      />
+                    </div>
+                  </div>
                 </div>
               );
             })

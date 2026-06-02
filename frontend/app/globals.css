@@ -138,3 +138,148 @@ html, body {
   50%       { opacity: 0.9; }
 }
 .corner { animation: cornerPulse 3s ease-in-out infinite; }
+
+/* ── Tutorial Modal Overlay ── */
+.tutorial-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(1, 4, 10, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+}
+
+.tutorial-card {
+  width: 500px;
+  max-width: 90vw;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-cyan);
+  box-shadow: 0 0 30px rgba(0, 229, 255, 0.15);
+  border-radius: 12px;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  font-family: var(--font-inter);
+}
+
+.tutorial-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tutorial-header h2 {
+  font-family: var(--font-rajdhani);
+  font-size: 24px;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  letter-spacing: 2px;
+}
+
+.tutorial-step-indicator {
+  font-family: var(--font-rajdhani);
+  font-size: 14px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+
+.tutorial-body {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.tutorial-body strong {
+  color: var(--accent-amber);
+}
+
+.tutorial-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.tutorial-btn-skip {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font-rajdhani);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.tutorial-btn-skip:hover {
+  color: var(--accent-cyan);
+}
+
+.tutorial-nav-btns {
+  display: flex;
+  gap: 12px;
+}
+
+.tutorial-btn {
+  background: transparent;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  color: var(--accent-cyan);
+  padding: 8px 18px;
+  font-family: var(--font-rajdhani);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tutorial-btn:hover {
+  background: rgba(0, 229, 255, 0.1);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
+}
+
+.tutorial-btn--primary {
+  background: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  color: #020912;
+}
+
+.tutorial-btn--primary:hover {
+  background: #00b8cc;
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.45);
+}
+
+/* ── HUD Trigger Button for Tutorial ── */
+.tutorial-trigger-btn {
+  position: fixed;
+  top: 20px;
+  right: 480px; /* offset to left of Control Panel */
+  z-index: 900;
+  background: rgba(5, 12, 26, 0.72);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  color: var(--accent-cyan);
+  padding: 8px 14px;
+  font-family: var(--font-rajdhani);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border-radius: 4px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s;
+}
+
+.tutorial-trigger-btn:hover {
+  border-color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.1);
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.25);
+}
+
