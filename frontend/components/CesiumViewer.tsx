@@ -73,19 +73,72 @@ export default function CesiumViewer() {
       if (typeof window === 'undefined') return reject('SSR');
       if ((window as any).Cesium) return resolve();
 
-      // Set base URL for Cesium CDN assets
-      (window as any).CESIUM_BASE_URL = 'https://cesium.com/downloads/cesiumjs/releases/1.119.0/Build/Cesium/';
+      const cdns = [
+        {
+          base: 'https://unpkg.com/cesium@1.119.0/Build/Cesium/',
+          js: 'https://unpkg.com/cesium@1.119.0/Build/Cesium/Cesium.js',
+          css: 'https://unpkg.com/cesium@1.119.0/Build/Cesium/Widgets/widgets.css'
+        },
+        {
+          base: 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.119.0/Build/Cesium/',
+          js: 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.119.0/Build/Cesium/Cesium.js',
+          css: 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.119.0/Build/Cesium/Widgets/widgets.css'
+        },
+        {
+          base: 'https://cesium.com/downloads/cesiumjs/releases/1.119.0/Build/Cesium/',
+          js: 'https://cesium.com/downloads/cesiumjs/releases/1.119.0/Build/Cesium/Cesium.js',
+          css: 'https://cesium.com/downloads/cesiumjs/releases/1.119.0/Build/Cesium/Widgets/widgets.css'
+        }
+      ];
 
-      const link = document.createElement('link');
-      link.rel  = 'stylesheet';
-      link.href = 'https://cesium.com/downloads/cesiumjs/releases/1.119.0/Build/Cesium/Widgets/widgets.css';
-      document.head.appendChild(link);
+      let attempt = 0;
 
-      const script  = document.createElement('script');
-      script.src    = 'https://cesium.com/downloads/cesiumjs/releases/1.119.0/Build/Cesium/Cesium.js';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load Cesium.js'));
-      document.head.appendChild(script);
+      const tryNext = () => {
+        if (attempt >= cdns.length) {
+          return reject(new Error('Failed to load Cesium.js from all CDNs'));
+        }
+
+        const cdn = cdns[attempt];
+        attempt++;
+
+        // Set base URL for the active CDN
+        (window as any).CESIUM_BASE_URL = cdn.base;
+
+        // Load stylesheet
+        let link = document.getElementById('cesium-css') as HTMLLinkElement;
+        if (!link) {
+          link = document.createElement('link');
+          link.id = 'cesium-css';
+          link.rel = 'stylesheet';
+          document.head.appendChild(link);
+        }
+        link.href = cdn.css;
+
+        // Load JS script
+        const scriptId = 'cesium-js-script';
+        let script = document.getElementById(scriptId) as HTMLScriptElement;
+        if (script) {
+          document.head.removeChild(script);
+        }
+
+        script = document.createElement('script');
+        script.id = scriptId;
+        script.src = cdn.js;
+        script.onload = () => {
+          if ((window as any).Cesium) {
+            resolve();
+          } else {
+            tryNext();
+          }
+        };
+        script.onerror = () => {
+          console.warn(`[GridEvac] Failed to load Cesium.js from CDN attempt ${attempt}: ${cdn.js}`);
+          tryNext();
+        };
+        document.head.appendChild(script);
+      };
+
+      tryNext();
     });
   }, []);
 
@@ -121,14 +174,22 @@ export default function CesiumViewer() {
         });
 
         // Scene atmosphere for drama
-        viewer.scene.skyAtmosphere.show       = true;
-        viewer.scene.globe.enableLighting     = true;
-        viewer.scene.fog.enabled              = true;
-        viewer.scene.fog.density              = 0.00015;
-        viewer.scene.globe.depthTestAgainstTerrain = true;
-        viewer.scene.postProcessStages.bloom.enabled = true;
-        (viewer.scene.postProcessStages.bloom as any).uniforms.glowOnly  = false;
-        (viewer.scene.postProcessStages.bloom as any).uniforms.brightness = -0.1;
+        if (viewer.scene.skyAtmosphere) {
+          viewer.scene.skyAtmosphere.show = true;
+        }
+        if (viewer.scene.globe) {
+          viewer.scene.globe.enableLighting = true;
+          viewer.scene.globe.depthTestAgainstTerrain = true;
+        }
+        if (viewer.scene.fog) {
+          viewer.scene.fog.enabled = true;
+          viewer.scene.fog.density = 0.00015;
+        }
+        if (viewer.scene.postProcessStages?.bloom) {
+          viewer.scene.postProcessStages.bloom.enabled = true;
+          (viewer.scene.postProcessStages.bloom as any).uniforms.glowOnly  = false;
+          (viewer.scene.postProcessStages.bloom as any).uniforms.brightness = -0.1;
+        }
 
         viewerRef.current = viewer;
 
