@@ -438,6 +438,36 @@ export default function CesiumViewer() {
     }
   }, [flyToNodeId, cityData, setFlyToNodeId]);
 
+  // ── Cinematic fly-to camera trigger when switching sections ─────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || typeof Cesium === 'undefined') return;
+
+    if (activeSection === 'map') {
+      // Cinematic zoom-in directly to the Houston grid center
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat - 0.045, 5500),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch:   Cesium.Math.toRadians(-38),
+          roll:    0.0,
+        },
+        duration: 2.5,
+      });
+    } else if (activeSection === 'briefing' || activeSection === 'audit') {
+      // Reset back to zoomed-out orbital bird's eye view
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 18000),
+        orientation: {
+          heading: Cesium.Math.toRadians(15),
+          pitch:   Cesium.Math.toRadians(-52),
+          roll:    0.0,
+        },
+        duration: 2.5,
+      });
+    }
+  }, [activeSection]);
+
   // ── Update transmission line wire styles dynamically ───────────────────────
   useEffect(() => {
     if (typeof Cesium === 'undefined' || !cityData) return;
