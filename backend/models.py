@@ -84,6 +84,7 @@ class RouteResponse(BaseModel):
     transmission_line_states: Dict[int, str] # map of link ID to state: 'active' | 'overloaded' | 'dead'
     usgs_gage_height: float                  # dynamic USGS gauge height reading in feet
     surface_temp: float                      # average grid-wide micro-climate temperature in Fahrenheit
+    hazard_roads: Dict[str, str]             # map of street edge key to warning state: 'dead' | 'overloaded'
 
 
 # ─── Anomaly Scan Models ───────────────────────────────────────────────────────

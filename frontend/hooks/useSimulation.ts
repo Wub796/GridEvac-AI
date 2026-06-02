@@ -23,6 +23,13 @@ interface SimulationStore {
   usgsGageHeight:        number;
   surfaceTemp:           number;
 
+  // ── GIS Display Options ────────────────────────────────────────────────────
+  showBuildings:         boolean;
+  showPowerLines:        boolean;
+  showSubstations:       boolean;
+  showIntersections:     boolean;
+  flyToNodeId:           number | null;
+
   // ── Derived / async state ──────────────────────────────────────────────────
   cityData:      CityData    | null;
   route:         RouteResponse | null;
@@ -40,6 +47,12 @@ interface SimulationStore {
   checkBackend:         () => Promise<void>;
   addLog:               (msg: string) => void;
   triggerLiveTick:      () => void;
+  setShowBuildings:     (b: boolean) => void;
+  setShowPowerLines:    (b: boolean) => void;
+  setShowSubstations:   (b: boolean) => void;
+  setShowIntersections: (b: boolean) => void;
+  setFlyToNodeId:       (id: number | null) => void;
+  applyScenario:        (preset: 'flood' | 'cascade' | 'heatwave' | 'clear') => void;
 }
 
 export const useSimulationStore = create<SimulationStore>((set, get) => ({
@@ -60,6 +73,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     "Grid status: Nominal. Awaiting simulation parameter changes."
   ],
 
+  showBuildings:         true,
+  showPowerLines:        true,
+  showSubstations:       true,
+  showIntersections:     true,
+  flyToNodeId:           null,
+
   cityData:          null,
   route:             null,
   isLoading:         false,
@@ -76,6 +95,37 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setFloodLevel: (v) => {
     set({ floodLevel: v });
     get().addLog(`Simulation: Flood slider adjusted to level ${v.toFixed(1)}`);
+
+    // Auto-relocate origin if it is now flooded
+    const { originNode, cityData } = get();
+    if (cityData) {
+      const currentOrigin = cityData.nodes.find(n => n.id === originNode);
+      if (currentOrigin && currentOrigin.elevation <= v * 1.7) {
+        let bestNodeId = -1;
+        let minDistance = Number.POSITIVE_INFINITY;
+
+        cityData.nodes.forEach(node => {
+          // Skip if flooded or is an exit node
+          const isExit = [14, 120, 164, 210].includes(node.id);
+          const isFlooded = node.elevation <= v * 1.7;
+          if (!isFlooded && !isExit) {
+            const dist = Math.hypot(node.lat - currentOrigin.lat, node.lon - currentOrigin.lon);
+            if (dist < minDistance) {
+              minDistance = dist;
+              bestNodeId = node.id;
+            }
+          }
+        });
+
+        if (bestNodeId !== -1) {
+          set({ originNode: bestNodeId });
+          get().addLog(`Navigation Alert: Origin Node #${originNode} flooded! Automatically relocated to closest dry Node #${bestNodeId}.`);
+        } else {
+          get().addLog(`Navigation Alert: Origin Node #${originNode} flooded! No dry intersections remaining on grid.`);
+        }
+      }
+    }
+
     get().calculateRoute();
   },
 
@@ -245,5 +295,45 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       const selected = sensors[Math.floor(Math.random() * sensors.length)];
       get().addLog(selected);
     }
+  },
+
+  setShowBuildings:     (b) => set({ showBuildings: b }),
+  setShowPowerLines:    (b) => set({ showPowerLines: b }),
+  setShowSubstations:   (b) => set({ showSubstations: b }),
+  setShowIntersections: (b) => set({ showIntersections: b }),
+  setFlyToNodeId:       (id) => set({ flyToNodeId: id }),
+
+  applyScenario: (preset) => {
+    const { addLog, calculateRoute } = get();
+    if (preset === 'flood') {
+      set({
+        floodLevel: 8.5,
+        failedSubstations: [],
+        originNode: 72,
+      });
+      addLog("Scenario Loaded: Bayou Flash Flood Overflow. Water level set to 8.5m. Origin snapped to Node #72.");
+    } else if (preset === 'cascade') {
+      set({
+        floodLevel: 2.0,
+        failedSubstations: [0, 4],
+        originNode: 50,
+      });
+      addLog("Scenario Loaded: SCADA Cascade Failure. Substations 0 & 4 offline. Origin snapped to Node #50.");
+    } else if (preset === 'heatwave') {
+      set({
+        floodLevel: 0.0,
+        failedSubstations: [1, 3],
+        originNode: 105,
+      });
+      addLog("Scenario Loaded: Grid Heatwave Strain. Substations 1 & 3 offline. Origin snapped to Node #105.");
+    } else if (preset === 'clear') {
+      set({
+        floodLevel: 0.0,
+        failedSubstations: [],
+        originNode: 0,
+      });
+      addLog("Scenario Loaded: All Clear. Parameters reset to nominal safety baseline. Origin snapped to Node #0.");
+    }
+    calculateRoute();
   }
 }));

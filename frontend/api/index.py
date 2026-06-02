@@ -102,6 +102,23 @@ def fetch_usgs_water_level() -> float:
     return -999.0
 
 
+def fetch_houston_weather_temp() -> float:
+    """Fetch current outdoor temperature in Houston from Open-Meteo API."""
+    url = "https://api.open-meteo.com/v1/forecast?latitude=29.7604&longitude=-95.3698&current_weather=true"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'GridEvac-AI-Emergency-Utility'})
+        with urllib.request.urlopen(req, timeout=3.0) as response:
+            data = json.loads(response.read().decode())
+            curr = data.get("current_weather", {})
+            if curr and "temperature" in curr:
+                temp_c = float(curr["temperature"])
+                temp_f = temp_c * 9.0 / 5.0 + 32.0
+                return round(temp_f, 1)
+    except Exception:
+        pass
+    return -999.0
+
+
 @app.post("/api/calculate-route", response_model=RouteResponse)
 async def calculate_route(req: SimulationRequest):
     """
@@ -148,8 +165,13 @@ async def calculate_route(req: SimulationRequest):
         # Fallback based on slider + baseline
         usgs_gage = round(4.2 + req.flood_level * 2.8, 2)
 
-    # 2. Compute micro-climate surface temp (Fahrenheit)
-    surface_temp = round(87.5 - req.flood_level * 0.9 - failed_total * 0.45, 2)
+    # 2. Fetch real weather temperature (with fallback)
+    weather_temp = fetch_houston_weather_temp()
+    if weather_temp == -999.0:
+        weather_temp = 88.0
+
+    # Compute micro-climate surface temp (Fahrenheit)
+    surface_temp = round(weather_temp - req.flood_level * 0.95 - failed_total * 0.45, 2)
 
     # Run IsolationForest Anomaly Model
     anomaly_score, risk_level = detect_anomaly(
@@ -162,6 +184,14 @@ async def calculate_route(req: SimulationRequest):
         usgs_gage_height=usgs_gage,
         surface_temp=surface_temp,
     )
+
+    # Map hazard edges running under compromised wires
+    from routing import _LINK_EDGES
+    hazard_roads = {}
+    for link_id, state in flow["transmission_line_states"].items():
+        if state in ["dead", "overloaded"]:
+            for u, v in _LINK_EDGES.get(link_id, []):
+                hazard_roads[f"{u}-{v}"] = state
 
     return RouteResponse(
         success=result["success"],
@@ -183,4 +213,5 @@ async def calculate_route(req: SimulationRequest):
         transmission_line_states=flow["transmission_line_states"],
         usgs_gage_height=usgs_gage,
         surface_temp=surface_temp,
+        hazard_roads=hazard_roads,
     )
