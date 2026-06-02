@@ -57,6 +57,12 @@ export default function CesiumViewer() {
   const transmissionEntityMap = useRef<Map<number, any>>(new Map());
   const buildingsRef        = useRef<any>(null);
 
+  // Dynamic 3D holographic indicators
+  const originIndicatorRef  = useRef<any>(null);
+  const destIndicatorRef    = useRef<any>(null);
+  const subIndicatorsRef     = useRef<Map<number, any>>(new Map());
+  const exitIndicatorsRef    = useRef<Map<number, any>>(new Map());
+
   const {
     floodLevel,
     failedSubstations,
@@ -301,6 +307,37 @@ export default function CesiumViewer() {
               entity.polyline.width = new Cesium.ConstantProperty(pulseWidth);
             }
           });
+
+          // --- Animated 3D Holographic Indicators ---
+          const hoverOffset = Math.sin(tickT * 2.2) * 12.0; // hover up and down ±12m
+          const rotAngleA = tickT * 1.5; // rotate clockwise
+          const rotAngleB = -tickT * 1.0; // rotate counter-clockwise
+
+          const updateIndicatorAnimation = (ind: any) => {
+            if (!ind) return;
+            const newHeight = ind.baseHeight + hoverOffset;
+
+            // Update positions
+            const posLower = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight - 12.0);
+            const posUpper = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight + 12.0);
+            const posCenter = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight);
+
+            if (ind.lowerCone) ind.lowerCone.position = new Cesium.ConstantProperty(posLower);
+            if (ind.upperCone) ind.upperCone.position = new Cesium.ConstantProperty(posUpper);
+            if (ind.innerRing) {
+              ind.innerRing.position = new Cesium.ConstantProperty(posCenter);
+              ind.innerRing.ellipse.rotation = new Cesium.ConstantProperty(rotAngleA);
+            }
+            if (ind.outerRing) {
+              ind.outerRing.position = new Cesium.ConstantProperty(posCenter);
+              ind.outerRing.ellipse.rotation = new Cesium.ConstantProperty(rotAngleB);
+            }
+          };
+
+          if (originIndicatorRef.current) updateIndicatorAnimation(originIndicatorRef.current);
+          if (destIndicatorRef.current)   updateIndicatorAnimation(destIndicatorRef.current);
+          exitIndicatorsRef.current.forEach(updateIndicatorAnimation);
+          subIndicatorsRef.current.forEach(updateIndicatorAnimation);
         });
 
         // Register interactive grid picking and hover effects
@@ -355,9 +392,21 @@ export default function CesiumViewer() {
       }
     })();
 
+    const currentExitIndicators = exitIndicatorsRef.current;
+    const currentSubIndicators = subIndicatorsRef.current;
+    const currentOriginIndicator = originIndicatorRef.current;
+    const currentDestIndicator = destIndicatorRef.current;
+
     return () => {
       destroyed = true;
+      
+      // Clean up indicators on unmount
       if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+        if (currentOriginIndicator) removeHolographicIndicator(viewerRef.current, currentOriginIndicator);
+        if (currentDestIndicator) removeHolographicIndicator(viewerRef.current, currentDestIndicator);
+        currentExitIndicators.forEach((ind) => removeHolographicIndicator(viewerRef.current, ind));
+        currentSubIndicators.forEach((ind) => removeHolographicIndicator(viewerRef.current, ind));
+        
         viewerRef.current.destroy();
         viewerRef.current = null;
       }
@@ -777,6 +826,82 @@ export default function CesiumViewer() {
     }
   }, [originNode, destNode, cityData]);
 
+  // ── Render exits holographic indicators ──
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    exitIndicatorsRef.current.forEach((ind) => removeHolographicIndicator(viewer, ind));
+    exitIndicatorsRef.current.clear();
+
+    const SAFE_EXITS = [14, 120, 164, 210];
+    for (const exitId of SAFE_EXITS) {
+      const exitNode = cityData.nodes.find(n => n.id === exitId);
+      if (!exitNode) continue;
+      
+      const indicator = createHolographicIndicator(viewer, exitNode.lon, exitNode.lat, exitNode.elevation, '#00ff88');
+      exitIndicatorsRef.current.set(exitId, indicator);
+    }
+  }, [cityData]);
+
+  // ── Update origin/dest holographic indicators ──
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    if (originIndicatorRef.current) {
+      removeHolographicIndicator(viewer, originIndicatorRef.current);
+      originIndicatorRef.current = null;
+    }
+    if (destIndicatorRef.current) {
+      removeHolographicIndicator(viewer, destIndicatorRef.current);
+      destIndicatorRef.current = null;
+    }
+
+    const orig = cityData.nodes.find((n) => n.id === originNode);
+    const dest = cityData.nodes.find((n) => n.id === destNode);
+
+    if (orig) {
+      originIndicatorRef.current = createHolographicIndicator(viewer, orig.lon, orig.lat, orig.elevation, '#00e5ff');
+    }
+    if (dest && destNode !== -1) {
+      destIndicatorRef.current = createHolographicIndicator(viewer, dest.lon, dest.lat, dest.elevation, '#ff6b35');
+    }
+  }, [originNode, destNode, cityData]);
+
+  // ── Update substation holographic indicators ──
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    subIndicatorsRef.current.forEach((ind) => removeHolographicIndicator(viewer, ind));
+    subIndicatorsRef.current.clear();
+
+    const activeOverloadedIds = route?.overloaded_substations ?? [];
+    const activeCascadedIds = route?.cascaded_substations ?? [];
+    const manualFailedIds = failedSubstations ?? [];
+
+    const criticalSubIds = new Set([
+      ...activeOverloadedIds,
+      ...activeCascadedIds,
+      ...manualFailedIds
+    ]);
+
+    criticalSubIds.forEach((subId) => {
+      const sub = cityData.substations.find((s) => s.id === subId);
+      if (!sub) return;
+
+      const isFailed = manualFailedIds.includes(subId) || activeCascadedIds.includes(subId);
+      const colorHex = isFailed ? '#ff3d3d' : '#ff9100';
+
+      const indicator = createHolographicIndicator(viewer, sub.lon, sub.lat, 40, colorHex);
+      subIndicatorsRef.current.set(subId, indicator);
+    });
+  }, [failedSubstations, route, cityData]);
+
   const isMapActive = activeSection === 'map';
 
   let activeFilter = 'none';
@@ -1007,4 +1132,83 @@ function renderStaticCity(viewer: any, cityData: CityData): {
   }
 
   return { edgeEntityMap, substationEntityMap, transmissionEntityMap };
+}
+
+function createHolographicIndicator(viewer: any, lon: number, lat: number, elev: number, colorHex: string) {
+  const color = Cesium.Color.fromCssColorString(colorHex);
+  const baseHeight = elev + 140.0;
+
+  // Lower cone pointing up (apex at bottom, base at top)
+  const lowerCone = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight - 12.0),
+    cylinder: {
+      length: 24.0,
+      topRadius: 8.0,
+      bottomRadius: 0.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(Cesium.Color.WHITE.withAlpha(0.85)),
+      outlineWidth: 1.5,
+    }
+  });
+
+  // Upper cone pointing down (apex at top, base at bottom)
+  const upperCone = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight + 12.0),
+    cylinder: {
+      length: 24.0,
+      topRadius: 0.0,
+      bottomRadius: 8.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(Cesium.Color.WHITE.withAlpha(0.85)),
+      outlineWidth: 1.5,
+    }
+  });
+
+  // Inner ring rotating clockwise
+  const innerRing = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
+    ellipse: {
+      semiMajorAxis: 20.0,
+      semiMinorAxis: 10.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.08)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(color),
+      outlineWidth: 2.0,
+      height: 0.0,
+    }
+  });
+
+  // Outer ring rotating counter-clockwise
+  const outerRing = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
+    ellipse: {
+      semiMajorAxis: 28.0,
+      semiMinorAxis: 16.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.03)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.6)),
+      outlineWidth: 1.5,
+      height: 0.0,
+    }
+  });
+
+  return {
+    lowerCone,
+    upperCone,
+    innerRing,
+    outerRing,
+    baseHeight,
+    lon,
+    lat,
+  };
+}
+
+function removeHolographicIndicator(viewer: any, indicator: any) {
+  if (!indicator) return;
+  if (indicator.lowerCone) viewer.entities.remove(indicator.lowerCone);
+  if (indicator.upperCone) viewer.entities.remove(indicator.upperCone);
+  if (indicator.innerRing) viewer.entities.remove(indicator.innerRing);
+  if (indicator.outerRing) viewer.entities.remove(indicator.outerRing);
 }

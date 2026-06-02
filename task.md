@@ -53,3 +53,10 @@
 - [x] Implement scroll-snapping layout with Briefing, Map, and ML Audit sections in `page.tsx`
 - [x] Connect background blur masking inside `CesiumViewer.tsx`
 - [x] Style scroll-snap sections, custom cursors, and glassmorphic telemetry grids in `globals.css`
+
+## 3D Holographic Indicators
+- [x] Create helper methods in `CesiumViewer.tsx` to generate dynamic 3D composite shapes
+- [x] Wire markers to origin, exits, and overloaded substations
+- [x] Code tick animation bindings for spinning and hovering
+- [x] Compile and verify Next.js build
+
