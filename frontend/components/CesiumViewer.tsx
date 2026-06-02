@@ -215,13 +215,10 @@ export default function CesiumViewer() {
           polygon: {
             hierarchy:      Cesium.Cartesian3.fromDegreesArray(FLOOD_BOUNDS_COORDS),
             material:       new Cesium.ColorMaterialProperty(
-                              Cesium.Color.fromCssColorString('#0055dd').withAlpha(0.45)
+                              Cesium.Color.fromCssColorString('#0055ff').withAlpha(0.40)
                             ),
-            height:         1.5,         // just above terrain
-            extrudedHeight: 1.5,         // will be updated dynamically
+            height:         9.0,         // start at base elevation
             outline:        false,
-            closeTop:       true,
-            closeBottom:    false,
           },
           show: false,
         });
@@ -367,10 +364,10 @@ export default function CesiumViewer() {
     const entity = floodEntityRef.current;
     if (!entity) return;
     if (typeof Cesium === 'undefined') return;
-    const height = floodLevel * FLOOD_M_PER_LEVEL;
+    const waterHeight = 9.0 + (floodLevel * FLOOD_M_PER_LEVEL);
     entity.show = floodLevel > 0.05;
     if (entity.polygon) {
-      entity.polygon.extrudedHeight = new Cesium.ConstantProperty(height + 1.5);
+      entity.polygon.height = new Cesium.ConstantProperty(waterHeight);
     }
   }, [floodLevel]);
 
