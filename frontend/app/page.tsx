@@ -231,6 +231,15 @@ export default function HomePage() {
             <p>Houston · Emergency Evacuation Routing System</p>
           </div>
 
+          {/* Back to Briefing HUD Button */}
+          <button 
+            className="briefing-trigger-btn" 
+            onClick={() => scrollToSection(0)}
+            title="Return to Operational Briefing"
+          >
+            ◀ BRIEFING
+          </button>
+
           {/* Help Guide HUD Button */}
           <button 
             className="tutorial-trigger-btn" 

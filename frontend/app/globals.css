@@ -915,5 +915,41 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   color: #fff;
 }
 
+/* ── HUD Back to Briefing Button ── */
+.briefing-trigger-btn {
+  position: fixed;
+  top: 20px;
+  right: 835px; /* Positioned left of the ML report button */
+  z-index: 900;
+  background: rgba(5, 12, 26, 0.72);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  color: var(--accent-cyan);
+  padding: 8px 14px;
+  font-family: var(--font-rajdhani);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border-radius: 4px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  opacity: 0.9;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.briefing-trigger-btn:hover {
+  opacity: 1;
+  border-color: var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.1);
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.35);
+  transform: translateY(-1px);
+}
+
 
 
