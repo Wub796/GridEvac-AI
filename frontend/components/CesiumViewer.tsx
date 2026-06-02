@@ -27,12 +27,12 @@ const CESIUM_TOKEN = process.env.NEXT_PUBLIC_CESIUM_TOKEN!;
 // Center of expanded HISD / TX-18 grid
 const CENTER = { lat: 29.7700, lon: -95.3800 };
 
-// Flood polygon covers the full city grid + margin
+// Flood polygon covers a very large area (out of viewport) so edges are invisible
 const FLOOD_BOUNDS_COORDS = [
-  -95.4500, 29.7100,
-  -95.3100, 29.7100,
-  -95.3100, 29.8300,
-  -95.4500, 29.8300,
+  -96.2000, 29.2000,
+  -94.5000, 29.2000,
+  -94.5000, 30.3000,
+  -96.2000, 30.3000,
 ];
 
 // Flood height formula: metres of water rise per unit of flood_level
