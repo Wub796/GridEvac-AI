@@ -315,7 +315,7 @@ export default function CesiumViewer() {
           });
 
           // --- Animated 3D Holographic Indicators ---
-          const hoverOffset = Math.sin(tickT * 2.2) * 6.0; // hover up and down ±6m (scaled down)
+          const hoverOffset = Math.sin(tickT * 2.2) * 15.0; // hover up and down ±15m (scaled up)
           const rotAngleA = tickT * 1.5; // rotate clockwise
           const rotAngleB = -tickT * 1.0; // rotate counter-clockwise
 
@@ -323,9 +323,9 @@ export default function CesiumViewer() {
             if (!ind) return;
             const newHeight = ind.baseHeight + hoverOffset;
 
-            // Update positions
-            const posLower = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight - 6.0);
-            const posUpper = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight + 6.0);
+            // Update positions (using upscaled 15m offsets for 30m length cones)
+            const posLower = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight - 15.0);
+            const posUpper = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight + 15.0);
             const posCenter = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight);
 
             if (ind.lowerCone) ind.lowerCone.position = new Cesium.ConstantProperty(posLower);
@@ -1037,7 +1037,7 @@ export default function CesiumViewer() {
 function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): number[] {
   const points: number[] = [];
   const segments = 10;
-  const sag = 6.0; // 6 metres sag in the middle
+  const sag = 12.0; // 12 metres sag in the middle for the upscaled pylons
   
   const nodeA = cityData.nodes.find(n => n.id === subA.node);
   const nodeB = cityData.nodes.find(n => n.id === subB.node);
@@ -1045,8 +1045,8 @@ function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): numbe
   const elevA = nodeA.elevation ?? 10.0;
   const elevB = nodeB.elevation ?? 10.0;
   
-  const heightA = elevA + 35.0; // Adjusted top arm height for catenary
-  const heightB = elevB + 35.0;
+  const heightA = elevA + 90.0; // Adjusted top arm height for catenary (upscaled)
+  const heightB = elevB + 90.0;
   
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
@@ -1110,7 +1110,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     // Label
     viewer.entities.add({
       id: `sub-label-${sub.id}`,
-      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, elev + 48),
+      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, elev + 115),
       label: {
         text:            sub.name,
         font:            '600 11px Rajdhani, sans-serif',
@@ -1156,11 +1156,11 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     const exitNode = cityData.nodes.find(n => n.id === exitId);
     if (!exitNode || isNaN(exitNode.lon) || isNaN(exitNode.lat) || isNaN(exitNode.elevation)) continue;
     
-    // Glowing green protective shield dome sitting on the terrain (scaled down)
+    // Glowing green protective shield dome sitting on the terrain
     viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(exitNode.lon, exitNode.lat, exitNode.elevation),
       ellipsoid: {
-        radii: new Cesium.Cartesian3(30.0, 30.0, 20.0), // 30m radius, 20m height
+        radii: new Cesium.Cartesian3(80.0, 80.0, 50.0), // 80m radius, 50m height
         slicePartitions: 12,
         stackPartitions: 12,
         material: Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.12),
@@ -1171,7 +1171,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     });
   }
 
-  // ── Interactive Neon Grid Pyramid Beacons (scaled down) ────────────────────
+  // ── Interactive Neon Grid Pyramid Beacons (scaled up) ──────────────────────
   for (const node of cityData.nodes) {
     const isExit = SAFE_EXITS.includes(node.id);
     if (isNaN(node.lon) || isNaN(node.lat) || isNaN(node.elevation)) continue;
@@ -1180,18 +1180,18 @@ function renderStaticCity(viewer: any, cityData: CityData): {
 
     viewer.entities.add({
       id: `node-${node.id}`,
-      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, node.elevation + 2.5),
+      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, node.elevation + 7.5),
       cylinder: {
-        length: 5.0,
+        length: 15.0,
         topRadius: 0.0,
-        bottomRadius: 1.5,
+        bottomRadius: 4.5,
         material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
         outline: true,
         outlineColor: new Cesium.ConstantProperty(color),
         outlineWidth: 1.2,
       },
       point: {
-        pixelSize: isExit ? 9 : 6,
+        pixelSize: isExit ? 12 : 8,
         color: color,
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 1.0,
@@ -1205,7 +1205,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 1.5,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new Cesium.Cartesian2(0, -10),
+        pixelOffset: new Cesium.Cartesian2(0, -18),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1000.0),
       }
@@ -1223,9 +1223,9 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   // 1. Central transformer vault (glow box) sitting on ground
   const transformer = viewer.entities.add({
     id: `node-${sub.node}-part-transformer`,
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 4.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 10.0),
     box: {
-      dimensions: new Cesium.Cartesian3(8.0, 8.0, 8.0),
+      dimensions: new Cesium.Cartesian3(20.0, 20.0, 20.0),
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.25)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
@@ -1234,7 +1234,7 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   });
 
   // 2. Structural pylon legs (4 corner columns slanting up)
-  const offset = 0.00006; // approx 5-6 meters offset
+  const offset = 0.00015; // approx 15 meters offset
   const legOffsets = [
     { x: -offset, y: -offset },
     { x: offset, y: -offset },
@@ -1244,11 +1244,11 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   const legs = legOffsets.map((off, idx) => {
     return viewer.entities.add({
       id: `node-${sub.node}-part-leg-${idx}`,
-      position: Cesium.Cartesian3.fromDegrees(lon + off.x, lat + off.y, elev + 17.5),
+      position: Cesium.Cartesian3.fromDegrees(lon + off.x, lat + off.y, elev + 45.0),
       cylinder: {
-        length: 35.0,
-        topRadius: 0.5,
-        bottomRadius: 1.2,
+        length: 90.0,
+        topRadius: 1.0,
+        bottomRadius: 3.0,
         material: new Cesium.ColorMaterialProperty(color.withAlpha(0.35)),
         outline: true,
         outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.7)),
@@ -1258,15 +1258,15 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   });
 
   // 3. High-voltage bushings (insulator cones on top of transformer box)
-  const insulatorOffsets = [-2.5, 0, 2.5];
+  const insulatorOffsets = [-6.0, 0, 6.0];
   const insulators = insulatorOffsets.map((offX, idx) => {
     return viewer.entities.add({
       id: `node-${sub.node}-part-insulator-${idx}`,
-      position: Cesium.Cartesian3.fromDegrees(lon + offX * 0.00003, lat, elev + 10.5),
+      position: Cesium.Cartesian3.fromDegrees(lon + offX * 0.00003, lat, elev + 27.5),
       cylinder: {
-        length: 5.0,
-        topRadius: 0.2,
-        bottomRadius: 0.8,
+        length: 15.0,
+        topRadius: 0.5,
+        bottomRadius: 2.0,
         material: new Cesium.ColorMaterialProperty(color.withAlpha(0.55)),
         outline: true,
         outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
@@ -1275,12 +1275,12 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
     });
   });
 
-  // 4. Structural cross-arm support beam at top (35 meters high)
+  // 4. Structural cross-arm support beam at top (90 meters high)
   const crossArm = viewer.entities.add({
     id: `node-${sub.node}-part-crossArm`,
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 35.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 90.0),
     box: {
-      dimensions: new Cesium.Cartesian3(16.0, 1.2, 1.0),
+      dimensions: new Cesium.Cartesian3(45.0, 3.0, 2.5),
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.5)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
@@ -1291,9 +1291,9 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   // 5. Warning indicator beacon at the very top center of the cross-arm
   const beacon = viewer.entities.add({
     id: `node-${sub.node}-part-beacon`,
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 36.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 92.0),
     point: {
-      pixelSize: 6,
+      pixelSize: 8,
       color: color,
       outlineColor: Cesium.Color.BLACK,
       outlineWidth: 1.5,
@@ -1312,14 +1312,14 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
 
 function createHolographicIndicator(viewer: any, lon: number, lat: number, elev: number, colorHex: string) {
   const color = Cesium.Color.fromCssColorString(colorHex);
-  const baseHeight = elev + 60.0; // Float 60 meters above base (24m above top cross-arm)
-
+  const baseHeight = elev + 140.0; // Float 140 meters above base (50m above upscaled top cross-arm)
+ 
   // Lower cone pointing up (apex at bottom, base at top)
   const lowerCone = viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight - 6.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight - 15.0),
     cylinder: {
-      length: 12.0,
-      topRadius: 4.0,
+      length: 30.0,
+      topRadius: 10.0,
       bottomRadius: 0.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
       outline: true,
@@ -1327,27 +1327,27 @@ function createHolographicIndicator(viewer: any, lon: number, lat: number, elev:
       outlineWidth: 1.5,
     }
   });
-
+ 
   // Upper cone pointing down (apex at top, base at bottom)
   const upperCone = viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight + 6.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight + 15.0),
     cylinder: {
-      length: 12.0,
+      length: 30.0,
       topRadius: 0.0,
-      bottomRadius: 4.0,
+      bottomRadius: 10.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(Cesium.Color.WHITE.withAlpha(0.85)),
       outlineWidth: 1.5,
     }
   });
-
+ 
   // Inner ring rotating clockwise
   const innerRing = viewer.entities.add({
     position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
     ellipse: {
-      semiMajorAxis: 10.0,
-      semiMinorAxis: 5.0,
+      semiMajorAxis: 25.0,
+      semiMinorAxis: 12.5,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.08)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color),
@@ -1355,13 +1355,13 @@ function createHolographicIndicator(viewer: any, lon: number, lat: number, elev:
       height: 0.0,
     }
   });
-
+ 
   // Outer ring rotating counter-clockwise
   const outerRing = viewer.entities.add({
     position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
     ellipse: {
-      semiMajorAxis: 14.0,
-      semiMinorAxis: 8.0,
+      semiMajorAxis: 35.0,
+      semiMinorAxis: 20.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.03)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.6)),
@@ -1369,7 +1369,7 @@ function createHolographicIndicator(viewer: any, lon: number, lat: number, elev:
       height: 0.0,
     }
   });
-
+ 
   return {
     lowerCone,
     upperCone,
