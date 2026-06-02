@@ -24,15 +24,15 @@ declare const Cesium: typeof CesiumType;
 
 const CESIUM_TOKEN = process.env.NEXT_PUBLIC_CESIUM_TOKEN!;
 
-// Houston downtown centre
-const CENTER = { lat: 29.7604, lon: -95.3698 };
+// Center of expanded HISD / TX-18 grid
+const CENTER = { lat: 29.7700, lon: -95.3800 };
 
 // Flood polygon covers the full city grid + margin
 const FLOOD_BOUNDS_COORDS = [
-  -95.3760, 29.7555,
-  -95.3630, 29.7555,
-  -95.3630, 29.7660,
-  -95.3760, 29.7660,
+  -95.4500, 29.7100,
+  -95.3100, 29.7100,
+  -95.3100, 29.8300,
+  -95.4500, 29.8300,
 ];
 
 // Flood height formula: metres of water rise per unit of flood_level
@@ -201,7 +201,7 @@ export default function CesiumViewer() {
 
         // Initial camera — bird's eye over downtown Houston
         viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 1800),
+          destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 20000),
           orientation: {
             heading: Cesium.Math.toRadians(15),
             pitch:   Cesium.Math.toRadians(-52),
@@ -519,7 +519,7 @@ export default function CesiumViewer() {
       offset: new Cesium.HeadingPitchRange(
         Cesium.Math.toRadians(20),
         Cesium.Math.toRadians(-45),
-        1400,
+        6000,
       ),
     });
   }, [route]);
