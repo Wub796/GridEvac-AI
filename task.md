@@ -40,3 +40,9 @@
 - [ ] Frontend npm install (User will run this)
 - [x] Python module imports smoke test (Verified successfully)
 - [x] Vercel integration and API path compatibility verified
+
+## Usability Suite Expansion
+- [x] Update Zustand store state and actions in `useSimulation.ts`
+- [x] Update Cesium viewer visibility and camera fly-to bindings in `CesiumViewer.tsx`
+- [x] Add Preset panel, GIS checkboxes, Node search, and detailed routing display in `ControlPanel.tsx`
+- [x] Style the new ControlPanel elements in `ControlPanel.module.css`

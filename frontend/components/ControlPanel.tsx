@@ -5,6 +5,7 @@
  * Houston, TX — GridEvac AI
  */
 
+import { useState } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import type { RiskLevel } from '@/lib/types';
 import styles from './ControlPanel.module.css';
@@ -24,6 +25,8 @@ const RISK_LABELS: Record<RiskLevel, string> = {
 };
 
 export default function ControlPanel() {
+  const [searchNodeInput, setSearchNodeInput] = useState('');
+
   const {
     floodLevel, setFloodLevel,
     failedSubstations, toggleSubstation,
@@ -42,6 +45,12 @@ export default function ControlPanel() {
     cascadedSubstations,
     usgsGageHeight,
     surfaceTemp,
+    showBuildings, setShowBuildings,
+    showPowerLines, setShowPowerLines,
+    showSubstations, setShowSubstations,
+    showIntersections, setShowIntersections,
+    setFlyToNodeId,
+    applyScenario,
   } = useSimulationStore();
 
   const EXIT_NAMES: Record<number, string> = {
@@ -86,6 +95,45 @@ export default function ControlPanel() {
         <div className={styles.errorBanner}>
           {error}
         </div>
+      )}
+
+      {/* ── Section: Disaster Scenario Presets ── */}
+      {backendOnline && (
+        <section className={styles.section} style={{ background: 'rgba(255, 145, 0, 0.02)', borderBottom: '1px solid rgba(255, 145, 0, 0.12)' }}>
+          <h3 className={styles.sectionTitle}>
+            <span className={styles.sectionIcon}>🚨</span> Scenario Manager
+          </h3>
+          <div className={styles.scenarioGrid}>
+            <button 
+              className={styles.scenarioBtn} 
+              onClick={() => applyScenario('flood')}
+              title="Simulate flash flooding at 8.5m"
+            >
+              🌊 Bayou Flood
+            </button>
+            <button 
+              className={styles.scenarioBtn} 
+              onClick={() => applyScenario('cascade')}
+              title="Simulate substation outages triggering cascading failures"
+            >
+              ⚡ Cascades
+            </button>
+            <button 
+              className={styles.scenarioBtn} 
+              onClick={() => applyScenario('heatwave')}
+              title="Simulate severe summer grid load strain"
+            >
+              🔥 Heatwave
+            </button>
+            <button 
+              className={styles.scenarioBtnClear} 
+              onClick={() => applyScenario('clear')}
+              title="Restore nominal operating states"
+            >
+              🔄 Reset Grid
+            </button>
+          </div>
+        </section>
       )}
 
       {/* ── Grid Dashboard Telemetry HUD ── */}
@@ -153,6 +201,53 @@ export default function ControlPanel() {
           />
         </div>
       </section>
+
+      {/* ── Section: GIS Layer Options ── */}
+      {backendOnline && (
+        <section className={styles.section}>
+          <h3 className={styles.sectionTitle}>
+            <span className={styles.sectionIcon}>👁</span> Map Display Options
+          </h3>
+          <div className={styles.toggleGrid}>
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={showBuildings}
+                onChange={(e) => setShowBuildings(e.target.checked)}
+                className={styles.toggleCheckbox}
+              />
+              <span className={styles.toggleLabel}>3D City Buildings</span>
+            </label>
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={showPowerLines}
+                onChange={(e) => setShowPowerLines(e.target.checked)}
+                className={styles.toggleCheckbox}
+              />
+              <span className={styles.toggleLabel}>Transmission Lines</span>
+            </label>
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={showSubstations}
+                onChange={(e) => setShowSubstations(e.target.checked)}
+                className={styles.toggleCheckbox}
+              />
+              <span className={styles.toggleLabel}>Substation Towers</span>
+            </label>
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={showIntersections}
+                onChange={(e) => setShowIntersections(e.target.checked)}
+                className={styles.toggleCheckbox}
+              />
+              <span className={styles.toggleLabel}>Grid Waypoints (Dots)</span>
+            </label>
+          </div>
+        </section>
+      )}
 
       {/* ── Section: Substations ── */}
       <section className={styles.section}>
@@ -269,6 +364,37 @@ export default function ControlPanel() {
           </div>
         </div>
 
+        {/* Node Search / Fly-To */}
+        <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+          <label htmlFor="search-node-input" className={styles.selectLabel}>Locate / Fly to Grid Node</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              id="search-node-input"
+              type="number"
+              min={0}
+              max={224}
+              placeholder="Enter Node ID (0-224)"
+              value={searchNodeInput}
+              onChange={(e) => setSearchNodeInput(e.target.value)}
+              className={styles.searchNodeInput}
+            />
+            <button
+              onClick={() => {
+                const id = parseInt(searchNodeInput, 10);
+                if (!isNaN(id) && id >= 0 && id <= 224) {
+                  setFlyToNodeId(id);
+                } else {
+                  alert('Please enter a valid Node ID between 0 and 224.');
+                }
+              }}
+              className={styles.flyToBtn}
+              title="Fly camera to node"
+            >
+              🚀 Fly
+            </button>
+          </div>
+        </div>
+
         {/* Real-time calculated Target Exit Node */}
         <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0, 229, 255, 0.04)', borderRadius: '6px', border: '1px solid rgba(0, 229, 255, 0.15)' }}>
           <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Safest Calculated Exit</span>
@@ -276,6 +402,51 @@ export default function ControlPanel() {
             {route?.success && route.dest_node !== -1 ? (EXIT_NAMES[route.dest_node] || `Node ${route.dest_node}`) : 'NO PASSABLE PATH'}
           </span>
         </div>
+
+        {/* Route Waypoints Detail */}
+        {route?.success && route.path.length > 0 && (
+          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+              Waypoint Guidance Log
+            </span>
+            <div className={styles.waypointLogContainer}>
+              {route.path.map((nid, index) => {
+                const node = cityData?.nodes.find(n => n.id === nid);
+                const isFirst = index === 0;
+                const isLast = index === route.path.length - 1;
+                const elevation = node ? node.elevation.toFixed(1) : '0.0';
+                
+                const isUnderCompromisedWire = route.hazard_roads && Object.keys(route.hazard_roads).some(key => {
+                  const state = route.hazard_roads?.[key];
+                  if (state !== 'dead' && state !== 'overloaded') return false;
+                  const [u, v] = key.split('-').map(Number);
+                  return (u === nid || v === nid);
+                });
+                const isBlackout = route.blackout_nodes.includes(nid);
+                
+                let warning = '';
+                if (isUnderCompromisedWire) warning += '⚡';
+                if (isBlackout) warning += '🔌';
+                
+                let textColor = 'rgba(255, 255, 255, 0.85)';
+                if (isFirst) textColor = '#00e5ff';
+                else if (isLast) textColor = '#00ff88';
+                else if (isBlackout) textColor = '#ffea00';
+                
+                return (
+                  <div key={nid} className={styles.waypointLogRow} style={{ color: textColor }}>
+                    <span style={{ fontWeight: '600' }}>
+                      {isFirst ? 'START' : (isLast ? 'EXIT' : `#${index}`)}: Node {nid}
+                    </span>
+                    <span style={{ fontSize: '9.5px', color: 'rgba(160,210,240,0.6)' }}>
+                      ({elevation}m ASL){warning && <span title="Blackout/Power line Hazard area" style={{ color: '#ffea00', marginLeft: '4px' }}>{warning}</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {isLoading && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 0', marginTop: '10px', color: '#00e5ff' }}>

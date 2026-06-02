@@ -55,6 +55,7 @@ export default function CesiumViewer() {
   const substationEntityMap = useRef<Map<number, any>>(new Map());
   const staticRenderedRef   = useRef(false);
   const transmissionEntityMap = useRef<Map<number, any>>(new Map());
+  const buildingsRef        = useRef<any>(null);
 
   const {
     floodLevel,
@@ -63,6 +64,12 @@ export default function CesiumViewer() {
     cityData,
     originNode,
     destNode,
+    showBuildings,
+    showPowerLines,
+    showSubstations,
+    showIntersections,
+    flyToNodeId,
+    setFlyToNodeId,
   } = useSimulationStore();
 
   // ── Load Cesium script once with dynamic multi-CDN fallback ─────────────────
@@ -203,6 +210,8 @@ export default function CesiumViewer() {
         try {
           const buildings = await Cesium.createOsmBuildingsAsync();
           viewer.scene.primitives.add(buildings);
+          buildingsRef.current = buildings;
+          buildings.show = useSimulationStore.getState().showBuildings;
         } catch (e) {
           console.warn('[GridEvac] OSM Buildings unavailable:', e);
         }
@@ -350,6 +359,64 @@ export default function CesiumViewer() {
     substationEntityMap.current = maps.substationEntityMap;
     transmissionEntityMap.current = maps.transmissionEntityMap;
   }, [cityData]);
+
+  // ── Toggle OSM Buildings visibility ─────────────────────────────────────────
+  useEffect(() => {
+    if (buildingsRef.current) {
+      buildingsRef.current.show = showBuildings;
+    }
+  }, [showBuildings]);
+
+  // ── Toggle GIS Map Layers visibility ────────────────────────────────────────
+  useEffect(() => {
+    if (typeof Cesium === 'undefined') return;
+
+    // Toggle transmission links
+    transmissionEntityMap.current.forEach((entity) => {
+      entity.show = showPowerLines;
+    });
+
+    // Toggle substations
+    substationEntityMap.current.forEach((entity) => {
+      entity.show = showSubstations;
+    });
+
+    // Toggle substation labels & grid node intersections
+    const viewer = viewerRef.current;
+    if (viewer) {
+      viewer.entities.values.forEach((entity: any) => {
+        if (entity.id && entity.id.startsWith('sub-label-')) {
+          entity.show = showSubstations;
+        } else if (entity.id && entity.id.startsWith('node-')) {
+          entity.show = showIntersections;
+        }
+      });
+    }
+  }, [showPowerLines, showSubstations, showIntersections]);
+
+  // ── Fly to selected node ────────────────────────────────────────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || flyToNodeId === null || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    const node = cityData.nodes.find(n => n.id === flyToNodeId);
+    if (node) {
+      const entity = viewer.entities.getById(`node-${flyToNodeId}`);
+      if (entity) {
+        viewer.flyTo(entity, {
+          duration: 1.5,
+          offset: new Cesium.HeadingPitchRange(
+            Cesium.Math.toRadians(0),
+            Cesium.Math.toRadians(-60),
+            800
+          )
+        }).then(() => {
+          setFlyToNodeId(null);
+        });
+      }
+    }
+  }, [flyToNodeId, cityData, setFlyToNodeId]);
 
   // ── Update transmission line wire styles dynamically ───────────────────────
   useEffect(() => {
@@ -735,6 +802,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
 
     // Label
     viewer.entities.add({
+      id: `sub-label-${sub.id}`,
       position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 90),
       label: {
         text:            sub.name,
