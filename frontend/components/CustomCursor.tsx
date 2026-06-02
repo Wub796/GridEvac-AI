@@ -45,6 +45,11 @@ export default function CustomCursor() {
     document.addEventListener('mouseleave', handleMouseLeave);
     document.addEventListener('mouseenter', handleMouseEnter);
 
+    let vx = 0;
+    let vy = 0;
+    const stiffness = 0.08;
+    const damping = 0.65;
+
     const animateFollower = () => {
       const targetX = mouseRef.current.x;
       const targetY = mouseRef.current.y;
@@ -52,8 +57,17 @@ export default function CustomCursor() {
       const currentX = followerRef.current.x;
       const currentY = followerRef.current.y;
       
-      const nextX = currentX + (targetX - currentX) * 0.15;
-      const nextY = currentY + (targetY - currentY) * 0.15;
+      // Spring physics formula: Accel = (Target - Pos) * Stiffness
+      const ax = (targetX - currentX) * stiffness;
+      const ay = (targetY - currentY) * stiffness;
+      
+      // Velocity = (Velocity + Accel) * Damping
+      vx = (vx + ax) * damping;
+      vy = (vy + ay) * damping;
+      
+      // Position = Position + Velocity
+      const nextX = currentX + vx;
+      const nextY = currentY + vy;
       
       followerRef.current = { x: nextX, y: nextY };
       setFollower({ x: nextX, y: nextY });
