@@ -6,12 +6,15 @@
  * Rendering layers (bottom → top):
  *   1. Cesium World Terrain  — real Houston elevation data
  *   2. OSM 3D Buildings      — Cesium Ion asset 96188
- *   3. Street grid           — polyline entities, colour-coded by status
- *   4. Substation markers    — dynamic amber/orange/red cylinders with labels
+ *   3. Street grid           — polyline entities, color-coded by status
+ *   4. Substation structures — dynamic 3D composite structures (vaults, pylons, arms, beacons)
  *   5. Flood plane           — rising translucent blue polygon
  *   6. Blackout zones        — dark red semi-transparent cylinders (includes cascades)
  *   7. Evacuation route      — glowing green PolylineGlow tube
- *   8. Origin / Dest markers — pulsing coloured point entities
+ *   8. Origin / Dest markers — pulsing colored point entities
+ *   9. 3D Beacons            — 3D Pyramids sitting on intersections
+ *  10. 3D Exit Portals       — 3D Ellipsoid Protective Domes sitting over gates
+ *  11. Floating Markers      — Double-cones and spinning rings hovering over alerts
  */
 
 import { useEffect, useRef, useCallback } from 'react';
@@ -57,6 +60,12 @@ export default function CesiumViewer() {
   const transmissionEntityMap = useRef<Map<number, any>>(new Map());
   const buildingsRef        = useRef<any>(null);
 
+  // Dynamic 3D holographic indicators
+  const originIndicatorRef  = useRef<any>(null);
+  const destIndicatorRef    = useRef<any>(null);
+  const subIndicatorsRef     = useRef<Map<number, any>>(new Map());
+  const exitIndicatorsRef    = useRef<Map<number, any>>(new Map());
+
   const {
     floodLevel,
     failedSubstations,
@@ -71,6 +80,10 @@ export default function CesiumViewer() {
     flyToNodeId,
     setFlyToNodeId,
     activeSection,
+    mapFilterMode,
+    flyToCoords,
+    setFlyToCoords,
+    substationLoads,
   } = useSimulationStore();
 
   // ── Load Cesium script once with dynamic multi-CDN fallback ─────────────────
@@ -272,18 +285,20 @@ export default function CesiumViewer() {
             destEntityRef.current.point.pixelSize = new Cesium.ConstantProperty(pulse);
           }
 
-        // Pulse overloaded substation cylinders
-          substationEntityMap.current.forEach((entity, subId) => {
+          // Pulse overloaded substation beacons (real-time telemetry)
+          substationEntityMap.current.forEach((subStruct, subId) => {
             const currentRoute = useSimulationStore.getState().route;
-            const isOverloaded = currentRoute?.overloaded_substations?.includes(subId) ?? false;
+            const liveLoads = useSimulationStore.getState().substationLoads;
+            const sub = cityData?.substations.find((s) => s.id === subId);
+            const currentLoad = liveLoads[subId] ?? (sub ? sub.base_load_mw : 0);
+            const capacity = sub ? sub.capacity_mw : 100;
+            const isOverloaded = currentLoad > capacity;
             
-            if (isOverloaded && entity.cylinder) {
-              const scale = 1.0 + Math.sin(tickT * 2.5) * 0.15;
-              entity.cylinder.topRadius = new Cesium.ConstantProperty(6 * scale);
-              entity.cylinder.bottomRadius = new Cesium.ConstantProperty(10 * scale);
-            } else if (entity.cylinder) {
-              entity.cylinder.topRadius = new Cesium.ConstantProperty(6);
-              entity.cylinder.bottomRadius = new Cesium.ConstantProperty(10);
+            if (isOverloaded && subStruct.beacon?.point) {
+              const pulseSize = 10 + Math.sin(tickT * 4.0) * 4;
+              subStruct.beacon.point.pixelSize = new Cesium.ConstantProperty(pulseSize);
+            } else if (subStruct.beacon?.point) {
+              subStruct.beacon.point.pixelSize = new Cesium.ConstantProperty(6);
             }
           });
 
@@ -298,6 +313,37 @@ export default function CesiumViewer() {
               entity.polyline.width = new Cesium.ConstantProperty(pulseWidth);
             }
           });
+
+          // --- Animated 3D Holographic Indicators ---
+          const hoverOffset = Math.sin(tickT * 2.2) * 6.0; // hover up and down ±6m (scaled down)
+          const rotAngleA = tickT * 1.5; // rotate clockwise
+          const rotAngleB = -tickT * 1.0; // rotate counter-clockwise
+
+          const updateIndicatorAnimation = (ind: any) => {
+            if (!ind) return;
+            const newHeight = ind.baseHeight + hoverOffset;
+
+            // Update positions
+            const posLower = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight - 6.0);
+            const posUpper = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight + 6.0);
+            const posCenter = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight);
+
+            if (ind.lowerCone) ind.lowerCone.position = new Cesium.ConstantProperty(posLower);
+            if (ind.upperCone) ind.upperCone.position = new Cesium.ConstantProperty(posUpper);
+            if (ind.innerRing) {
+              ind.innerRing.position = new Cesium.ConstantProperty(posCenter);
+              ind.innerRing.ellipse.rotation = new Cesium.ConstantProperty(rotAngleA);
+            }
+            if (ind.outerRing) {
+              ind.outerRing.position = new Cesium.ConstantProperty(posCenter);
+              ind.outerRing.ellipse.rotation = new Cesium.ConstantProperty(rotAngleB);
+            }
+          };
+
+          if (originIndicatorRef.current) updateIndicatorAnimation(originIndicatorRef.current);
+          if (destIndicatorRef.current)   updateIndicatorAnimation(destIndicatorRef.current);
+          exitIndicatorsRef.current.forEach(updateIndicatorAnimation);
+          subIndicatorsRef.current.forEach(updateIndicatorAnimation);
         });
 
         // Register interactive grid picking and hover effects
@@ -322,28 +368,53 @@ export default function CesiumViewer() {
           }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
+        let lastHoveredNodeId: number | null = null;
+
         handler.setInputAction((movement: any) => {
           const pickedObject = viewer.scene.pick(movement.endPosition);
+          
+          let pickedNodeId: number | null = null;
           if (Cesium.defined(pickedObject) && pickedObject.id && typeof pickedObject.id.id === 'string' && pickedObject.id.id.startsWith('node-')) {
+            pickedNodeId = parseInt(pickedObject.id.id.split('-')[1], 10);
+          }
+
+          if (pickedNodeId !== null) {
             viewer.scene.canvas.style.cursor = 'pointer';
-            
-            const nodeEntity = pickedObject.id;
-            if (nodeEntity.point) {
-              nodeEntity.point.outlineColor = new Cesium.ConstantProperty(Cesium.Color.WHITE);
-              nodeEntity.point.outlineWidth = new Cesium.ConstantProperty(3.0);
+            if (pickedNodeId !== lastHoveredNodeId) {
+              const state = useSimulationStore.getState();
+              if (lastHoveredNodeId !== null && state.cityData) {
+                resetNodeOrSubstationHighlight(
+                  viewer,
+                  lastHoveredNodeId,
+                  state.cityData,
+                  substationEntityMap.current,
+                  state.substationLoads,
+                  state.failedSubstations,
+                  state.route
+                );
+              }
+              if (state.cityData) {
+                highlightNodeOrSubstation(viewer, pickedNodeId, state.cityData, substationEntityMap.current);
+              }
+              lastHoveredNodeId = pickedNodeId;
             }
           } else {
             viewer.scene.canvas.style.cursor = 'default';
-            
-            // Reset all nodes
-            viewer.entities.values.forEach((entity: any) => {
-              if (entity.id && entity.id.startsWith('node-') && entity.point) {
-                const nodeId = parseInt(entity.id.split('-')[1], 10);
-                const isExit = [14, 120, 164, 210].includes(nodeId);
-                entity.point.outlineColor = new Cesium.ConstantProperty(Cesium.Color.BLACK);
-                entity.point.outlineWidth = new Cesium.ConstantProperty(1.5);
+            if (lastHoveredNodeId !== null) {
+              const state = useSimulationStore.getState();
+              if (state.cityData) {
+                resetNodeOrSubstationHighlight(
+                  viewer,
+                  lastHoveredNodeId,
+                  state.cityData,
+                  substationEntityMap.current,
+                  state.substationLoads,
+                  state.failedSubstations,
+                  state.route
+                );
               }
-            });
+              lastHoveredNodeId = null;
+            }
           }
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
@@ -352,9 +423,21 @@ export default function CesiumViewer() {
       }
     })();
 
+    const currentExitIndicators = exitIndicatorsRef.current;
+    const currentSubIndicators = subIndicatorsRef.current;
+    const currentOriginIndicator = originIndicatorRef.current;
+    const currentDestIndicator = destIndicatorRef.current;
+
     return () => {
       destroyed = true;
+      
+      // Clean up indicators on unmount
       if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+        if (currentOriginIndicator) removeHolographicIndicator(viewerRef.current, currentOriginIndicator);
+        if (currentDestIndicator) removeHolographicIndicator(viewerRef.current, currentDestIndicator);
+        currentExitIndicators.forEach((ind) => removeHolographicIndicator(viewerRef.current, ind));
+        currentSubIndicators.forEach((ind) => removeHolographicIndicator(viewerRef.current, ind));
+        
         viewerRef.current.destroy();
         viewerRef.current = null;
       }
@@ -397,8 +480,12 @@ export default function CesiumViewer() {
     });
 
     // Toggle substations
-    substationEntityMap.current.forEach((entity) => {
-      entity.show = showSubstations;
+    substationEntityMap.current.forEach((subStruct) => {
+      subStruct.transformer.show = showSubstations;
+      subStruct.crossArm.show = showSubstations;
+      if (subStruct.beacon) subStruct.beacon.show = showSubstations;
+      subStruct.insulators.forEach((ins: any) => { ins.show = showSubstations; });
+      subStruct.legs.forEach((leg: any) => { leg.show = showSubstations; });
     });
 
     // Toggle substation labels & grid node intersections
@@ -468,6 +555,25 @@ export default function CesiumViewer() {
     }
   }, [activeSection]);
 
+  // ── Fly to selected preset coordinates ──────────────────────────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || flyToCoords === null) return;
+    if (typeof Cesium === 'undefined') return;
+
+    const { lon, lat, elev, heading, pitch } = flyToCoords;
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(lon, lat, elev),
+      orientation: {
+        heading: Cesium.Math.toRadians(heading ?? 0),
+        pitch:   Cesium.Math.toRadians(pitch ?? -45),
+        roll:    0.0,
+      },
+      duration: 2.0,
+    });
+    setFlyToCoords(null); // Reset preset
+  }, [flyToCoords, setFlyToCoords]);
+
   // ── Update transmission line wire styles dynamically ───────────────────────
   useEffect(() => {
     if (typeof Cesium === 'undefined' || !cityData) return;
@@ -512,33 +618,56 @@ export default function CesiumViewer() {
     }
   }, [floodLevel]);
 
-  // ── Update substation marker colors ────────────────────────────────────────
+  // ── Update substation marker colors (real-time loads version) ──
   useEffect(() => {
     if (typeof Cesium === 'undefined' || !cityData) return;
 
-    substationEntityMap.current.forEach((entity, subId) => {
+    substationEntityMap.current.forEach((subStruct, subId) => {
       const isManualFailed = failedSubstations.includes(subId);
       const isCascaded = route?.cascaded_substations?.includes(subId) ?? false;
       const isFailed = isManualFailed || isCascaded;
-      const isOverloaded = route?.overloaded_substations?.includes(subId) ?? false;
 
-      let color = Cesium.Color.fromCssColorString('#ffc107').withAlpha(0.95);
+      const sub = cityData.substations.find((s) => s.id === subId);
+      const currentLoad = substationLoads[subId] ?? (sub ? sub.base_load_mw : 0);
+      const capacity = sub ? sub.capacity_mw : 100;
+      const isOverloaded = !isFailed && currentLoad > capacity;
+
+      let color = Cesium.Color.fromCssColorString('#ffc107');
       let outlineColor = Cesium.Color.fromCssColorString('#ff9800');
 
       if (isFailed) {
-        color = Cesium.Color.fromCssColorString('#ff3d3d').withAlpha(0.3); // faded dark red
-        outlineColor = Cesium.Color.fromCssColorString('#555555');
+        color = Cesium.Color.fromCssColorString('#ff3d3d');
+        outlineColor = Cesium.Color.fromCssColorString('#555555').withAlpha(0.5);
       } else if (isOverloaded) {
-        color = Cesium.Color.fromCssColorString('#ff9100'); // glowing orange
+        color = Cesium.Color.fromCssColorString('#ff9100');
         outlineColor = Cesium.Color.WHITE;
       }
 
-      if (entity.cylinder) {
-        entity.cylinder.material = new Cesium.ColorMaterialProperty(color);
-        entity.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      if (subStruct.transformer.box) {
+        subStruct.transformer.box.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.12 : 0.25));
+        subStruct.transformer.box.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      }
+      subStruct.legs.forEach((leg: any) => {
+        if (leg.cylinder) {
+          leg.cylinder.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.08 : 0.35));
+          leg.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+        }
+      });
+      if (subStruct.crossArm.box) {
+        subStruct.crossArm.box.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.12 : 0.5));
+        subStruct.crossArm.box.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      }
+      subStruct.insulators.forEach((ins: any) => {
+        if (ins.cylinder) {
+          ins.cylinder.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.12 : 0.55));
+          ins.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+        }
+      });
+      if (subStruct.beacon && subStruct.beacon.point) {
+        subStruct.beacon.point.color = new Cesium.ConstantProperty(isFailed ? Cesium.Color.RED : (isOverloaded ? Cesium.Color.WHITE : color));
       }
     });
-  }, [failedSubstations, route, cityData]);
+  }, [failedSubstations, route, cityData, substationLoads]);
 
   // ── Update blackout zone cylinders (manual + cascades) ─────────────────────
   useEffect(() => {
@@ -755,7 +884,134 @@ export default function CesiumViewer() {
     }
   }, [originNode, destNode, cityData]);
 
+  // ── Render exits holographic indicators ──
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    exitIndicatorsRef.current.forEach((ind) => removeHolographicIndicator(viewer, ind));
+    exitIndicatorsRef.current.clear();
+
+    const SAFE_EXITS = [14, 120, 164, 210];
+    for (const exitId of SAFE_EXITS) {
+      const exitNode = cityData.nodes.find(n => n.id === exitId);
+      if (!exitNode) continue;
+      
+      const indicator = createHolographicIndicator(viewer, exitNode.lon, exitNode.lat, exitNode.elevation, '#00ff88');
+      exitIndicatorsRef.current.set(exitId, indicator);
+    }
+  }, [cityData]);
+
+  // ── Update origin/dest holographic indicators ──
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    if (originIndicatorRef.current) {
+      removeHolographicIndicator(viewer, originIndicatorRef.current);
+      originIndicatorRef.current = null;
+    }
+    if (destIndicatorRef.current) {
+      removeHolographicIndicator(viewer, destIndicatorRef.current);
+      destIndicatorRef.current = null;
+    }
+
+    const orig = cityData.nodes.find((n) => n.id === originNode);
+    const dest = cityData.nodes.find((n) => n.id === destNode);
+
+    if (orig) {
+      originIndicatorRef.current = createHolographicIndicator(viewer, orig.lon, orig.lat, orig.elevation, '#00e5ff');
+    }
+    if (dest && destNode !== -1) {
+      destIndicatorRef.current = createHolographicIndicator(viewer, dest.lon, dest.lat, dest.elevation, '#ff6b35');
+    }
+  }, [originNode, destNode, cityData]);
+
+  // ── Update substation holographic indicators (real-time loads version) ──
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !cityData) return;
+    if (typeof Cesium === 'undefined') return;
+
+    const manualFailedIds = failedSubstations ?? [];
+    const activeCascadedIds = route?.cascaded_substations ?? [];
+
+    const activeOverloadedIds: number[] = [];
+    cityData.substations.forEach((sub) => {
+      const isFailed = manualFailedIds.includes(sub.id) || activeCascadedIds.includes(sub.id);
+      const currentLoad = substationLoads[sub.id] ?? sub.base_load_mw;
+      if (!isFailed && currentLoad > sub.capacity_mw) {
+        activeOverloadedIds.push(sub.id);
+      }
+    });
+
+    const criticalSubIds = new Set([
+      ...activeOverloadedIds,
+      ...activeCascadedIds,
+      ...manualFailedIds
+    ]);
+
+    // 1. Remove indicators that are no longer critical
+    subIndicatorsRef.current.forEach((ind, subId) => {
+      if (!criticalSubIds.has(subId)) {
+        removeHolographicIndicator(viewer, ind);
+        subIndicatorsRef.current.delete(subId);
+      }
+    });
+
+    // 2. Add or update indicators for critical substations
+    criticalSubIds.forEach((subId) => {
+      const sub = cityData.substations.find((s) => s.id === subId);
+      if (!sub) return;
+
+      const isFailed = manualFailedIds.includes(subId) || activeCascadedIds.includes(subId);
+      const colorHex = isFailed ? '#ff3d3d' : '#ff9100';
+
+      const existing = subIndicatorsRef.current.get(subId);
+      if (existing) {
+        const color = Cesium.Color.fromCssColorString(colorHex);
+        const material = new Cesium.ColorMaterialProperty(color.withAlpha(0.65));
+        const ringMaterialInner = new Cesium.ColorMaterialProperty(color.withAlpha(0.08));
+        const ringMaterialOuter = new Cesium.ColorMaterialProperty(color.withAlpha(0.03));
+        const outlineColor = new Cesium.ConstantProperty(color);
+
+        if (existing.lowerCone?.cylinder) {
+          existing.lowerCone.cylinder.material = material;
+        }
+        if (existing.upperCone?.cylinder) {
+          existing.upperCone.cylinder.material = material;
+        }
+        if (existing.innerRing?.ellipse) {
+          existing.innerRing.ellipse.material = ringMaterialInner;
+          existing.innerRing.ellipse.outlineColor = outlineColor;
+        }
+        if (existing.outerRing?.ellipse) {
+          existing.outerRing.ellipse.material = ringMaterialOuter;
+          existing.outerRing.ellipse.outlineColor = new Cesium.ConstantProperty(color.withAlpha(0.6));
+        }
+      } else {
+        const node = cityData.nodes.find((n) => n.id === sub.node);
+        const elev = node?.elevation ?? 10.0;
+        const indicator = createHolographicIndicator(viewer, sub.lon, sub.lat, elev, colorHex);
+        subIndicatorsRef.current.set(subId, indicator);
+      }
+    });
+  }, [failedSubstations, route, cityData, substationLoads]);
+
   const isMapActive = activeSection === 'map';
+
+  let activeFilter = 'none';
+  if (!isMapActive) {
+    activeFilter = 'blur(10px) brightness(0.35)';
+  } else {
+    if (mapFilterMode === 'radar') {
+      activeFilter = 'hue-rotate(90deg) saturate(1.8) brightness(0.85) contrast(1.1)'; // green radar HUD
+    } else if (mapFilterMode === 'thermal') {
+      activeFilter = 'sepia(0.65) saturate(2.2) hue-rotate(320deg) contrast(1.1) brightness(0.9)'; // amber thermal strain
+    }
+  }
 
   return (
     <div
@@ -766,9 +1022,9 @@ export default function CesiumViewer() {
         width: '100%',
         height: '100%',
         zIndex: 1,
-        filter: isMapActive ? 'none' : 'blur(10px) brightness(0.35)',
+        filter: activeFilter,
         pointerEvents: isMapActive ? 'auto' : 'none',
-        transition: 'filter 0.8s ease, brightness 0.8s ease',
+        transition: 'filter 0.6s cubic-bezier(0.16, 1, 0.3, 1), brightness 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     />
   );
@@ -789,14 +1045,13 @@ function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): numbe
   const elevA = nodeA.elevation ?? 10.0;
   const elevB = nodeB.elevation ?? 10.0;
   
-  const heightA = elevA + 70.0;
-  const heightB = elevB + 70.0;
+  const heightA = elevA + 35.0; // Adjusted top arm height for catenary
+  const heightB = elevB + 35.0;
   
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
     const lon = subA.lon + t * (subB.lon - subA.lon);
     const lat = subA.lat + t * (subB.lat - subA.lat);
-    // Catenary approximation using sine curve sag
     const elevation = (1 - t) * heightA + t * heightB - sag * Math.sin(Math.PI * t);
     if (!isNaN(lon) && !isNaN(lat) && !isNaN(elevation)) {
       points.push(lon, lat, elevation);
@@ -842,29 +1097,20 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     edgeEntityMap.set(`${edge.source}-${edge.target}`, entity);
   }
 
-  // ── Substation markers ─────────────────────────────────────────────────────
+  // ── Substation markers (composite towers version) ──────────────────────────
   for (const sub of cityData.substations) {
     if (isNaN(sub.lon) || isNaN(sub.lat)) continue;
-    // Glowing amber tower
-    const cylinder = viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 40),
-      cylinder: {
-        length:        80,
-        topRadius:     6,
-        bottomRadius:  10,
-        material:      Cesium.Color.fromCssColorString('#ffc107').withAlpha(0.95),
-        outline:       true,
-        outlineColor:  Cesium.Color.fromCssColorString('#ff9800'),
-        outlineWidth:  1,
-      },
-    });
-    
-    substationEntityMap.set(sub.id, cylinder);
+
+    const node = cityData.nodes.find(n => n.id === sub.node);
+    const elev = node?.elevation ?? 10.0;
+
+    const subStruct = renderSubstationStructure(viewer, sub, '#ffc107', elev);
+    substationEntityMap.set(sub.id, subStruct);
 
     // Label
     viewer.entities.add({
       id: `sub-label-${sub.id}`,
-      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 90),
+      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, elev + 48),
       label: {
         text:            sub.name,
         font:            '600 11px Rajdhani, sans-serif',
@@ -904,60 +1150,45 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     transmissionEntityMap.set(link.id, entity);
   }
 
-  // ── Safe exits beacons & shields ───────────────────────────────────────────
+  // ── Safe exits protective dome shields ─────────────────────────────────────
   const SAFE_EXITS = [14, 120, 164, 210];
   for (const exitId of SAFE_EXITS) {
     const exitNode = cityData.nodes.find(n => n.id === exitId);
     if (!exitNode || isNaN(exitNode.lon) || isNaN(exitNode.lat) || isNaN(exitNode.elevation)) continue;
     
-    const beaconHeight = 120;
-    const centerElev = exitNode.elevation + (beaconHeight / 2);
-    
-    // Beacon Cylinder
+    // Glowing green protective shield dome sitting on the terrain (scaled down)
     viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(exitNode.lon, exitNode.lat, centerElev),
-      cylinder: {
-        length: beaconHeight,
-        topRadius: 15,
-        bottomRadius: 15,
+      position: Cesium.Cartesian3.fromDegrees(exitNode.lon, exitNode.lat, exitNode.elevation),
+      ellipsoid: {
+        radii: new Cesium.Cartesian3(30.0, 30.0, 20.0), // 30m radius, 20m height
+        slicePartitions: 12,
+        stackPartitions: 12,
         material: Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.12),
         outline: true,
-        outlineColor: Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.35),
+        outlineColor: Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.5),
         outlineWidth: 1.5,
-        numberOfVerticalLines: 4,
-      }
-    });
-    
-    // Glowing green flat circle (ellipse) on the ground
-    viewer.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(exitNode.lon, exitNode.lat, exitNode.elevation + 0.5),
-      ellipse: {
-        semiMajorAxis: 25,
-        semiMinorAxis: 25,
-        material: Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.25),
-        outline: true,
-        outlineColor: Cesium.Color.fromCssColorString('#00ff88'),
-        outlineWidth: 2,
-        height: 1,
       }
     });
   }
 
-  // ── Interactive Neon Grid Dots ─────────────────────────────────────────────
+  // ── Interactive Neon Grid Pyramid Beacons (scaled down) ────────────────────
   for (const node of cityData.nodes) {
     const isExit = SAFE_EXITS.includes(node.id);
     if (isNaN(node.lon) || isNaN(node.lat) || isNaN(node.elevation)) continue;
     
+    const color = isExit ? Cesium.Color.fromCssColorString('#00ff88') : Cesium.Color.fromCssColorString('#00e5ff');
+
     viewer.entities.add({
       id: `node-${node.id}`,
-      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, node.elevation + 1.5),
-      point: {
-        pixelSize: isExit ? 10 : 6,
-        color: isExit ? Cesium.Color.fromCssColorString('#00ff88') : Cesium.Color.fromCssColorString('#00e5ff'),
-        outlineColor: Cesium.Color.BLACK,
-        outlineWidth: 1.5,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        scaleByDistance: new Cesium.NearFarScalar(500, 1.2, 5000, 0.4),
+      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, node.elevation + 2.5),
+      cylinder: {
+        length: 5.0,
+        topRadius: 0.0,
+        bottomRadius: 1.5,
+        material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
+        outline: true,
+        outlineColor: new Cesium.ConstantProperty(color),
+        outlineWidth: 1.2,
       },
       label: {
         text: `Node ${node.id}`,
@@ -966,7 +1197,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 1.5,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new Cesium.Cartesian2(0, -12),
+        pixelOffset: new Cesium.Cartesian2(0, -10),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1000.0),
       }
@@ -974,4 +1205,284 @@ function renderStaticCity(viewer: any, cityData: CityData): {
   }
 
   return { edgeEntityMap, substationEntityMap, transmissionEntityMap };
+}
+
+function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev: number = 10.0) {
+  const color = Cesium.Color.fromCssColorString(colorHex);
+  const lon = sub.lon;
+  const lat = sub.lat;
+  
+  // 1. Central transformer vault (glow box) sitting on ground
+  const transformer = viewer.entities.add({
+    id: `node-${sub.node}-part-transformer`,
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 4.0),
+    box: {
+      dimensions: new Cesium.Cartesian3(8.0, 8.0, 8.0),
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.25)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
+      outlineWidth: 1.5,
+    }
+  });
+
+  // 2. Structural pylon legs (4 corner columns slanting up)
+  const offset = 0.00006; // approx 5-6 meters offset
+  const legOffsets = [
+    { x: -offset, y: -offset },
+    { x: offset, y: -offset },
+    { x: offset, y: offset },
+    { x: -offset, y: offset }
+  ];
+  const legs = legOffsets.map((off, idx) => {
+    return viewer.entities.add({
+      id: `node-${sub.node}-part-leg-${idx}`,
+      position: Cesium.Cartesian3.fromDegrees(lon + off.x, lat + off.y, elev + 17.5),
+      cylinder: {
+        length: 35.0,
+        topRadius: 0.5,
+        bottomRadius: 1.2,
+        material: new Cesium.ColorMaterialProperty(color.withAlpha(0.35)),
+        outline: true,
+        outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.7)),
+        outlineWidth: 1.0,
+      }
+    });
+  });
+
+  // 3. High-voltage bushings (insulator cones on top of transformer box)
+  const insulatorOffsets = [-2.5, 0, 2.5];
+  const insulators = insulatorOffsets.map((offX, idx) => {
+    return viewer.entities.add({
+      id: `node-${sub.node}-part-insulator-${idx}`,
+      position: Cesium.Cartesian3.fromDegrees(lon + offX * 0.00003, lat, elev + 10.5),
+      cylinder: {
+        length: 5.0,
+        topRadius: 0.2,
+        bottomRadius: 0.8,
+        material: new Cesium.ColorMaterialProperty(color.withAlpha(0.55)),
+        outline: true,
+        outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
+        outlineWidth: 1.0,
+      }
+    });
+  });
+
+  // 4. Structural cross-arm support beam at top (35 meters high)
+  const crossArm = viewer.entities.add({
+    id: `node-${sub.node}-part-crossArm`,
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 35.0),
+    box: {
+      dimensions: new Cesium.Cartesian3(16.0, 1.2, 1.0),
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.5)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
+      outlineWidth: 1.5,
+    }
+  });
+
+  // 5. Warning indicator beacon at the very top center of the cross-arm
+  const beacon = viewer.entities.add({
+    id: `node-${sub.node}-part-beacon`,
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 36.0),
+    point: {
+      pixelSize: 6,
+      color: color,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 1.5,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    }
+  });
+
+  return {
+    transformer,
+    legs,
+    insulators,
+    crossArm,
+    beacon
+  };
+}
+
+function createHolographicIndicator(viewer: any, lon: number, lat: number, elev: number, colorHex: string) {
+  const color = Cesium.Color.fromCssColorString(colorHex);
+  const baseHeight = elev + 60.0; // Float 60 meters above base (24m above top cross-arm)
+
+  // Lower cone pointing up (apex at bottom, base at top)
+  const lowerCone = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight - 6.0),
+    cylinder: {
+      length: 12.0,
+      topRadius: 4.0,
+      bottomRadius: 0.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(Cesium.Color.WHITE.withAlpha(0.85)),
+      outlineWidth: 1.5,
+    }
+  });
+
+  // Upper cone pointing down (apex at top, base at bottom)
+  const upperCone = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight + 6.0),
+    cylinder: {
+      length: 12.0,
+      topRadius: 0.0,
+      bottomRadius: 4.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(Cesium.Color.WHITE.withAlpha(0.85)),
+      outlineWidth: 1.5,
+    }
+  });
+
+  // Inner ring rotating clockwise
+  const innerRing = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
+    ellipse: {
+      semiMajorAxis: 10.0,
+      semiMinorAxis: 5.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.08)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(color),
+      outlineWidth: 2.0,
+      height: 0.0,
+    }
+  });
+
+  // Outer ring rotating counter-clockwise
+  const outerRing = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
+    ellipse: {
+      semiMajorAxis: 14.0,
+      semiMinorAxis: 8.0,
+      material: new Cesium.ColorMaterialProperty(color.withAlpha(0.03)),
+      outline: true,
+      outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.6)),
+      outlineWidth: 1.5,
+      height: 0.0,
+    }
+  });
+
+  return {
+    lowerCone,
+    upperCone,
+    innerRing,
+    outerRing,
+    baseHeight,
+    lon,
+    lat,
+  };
+}
+
+function removeHolographicIndicator(viewer: any, indicator: any) {
+  if (!indicator) return;
+  if (indicator.lowerCone) viewer.entities.remove(indicator.lowerCone);
+  if (indicator.upperCone) viewer.entities.remove(indicator.upperCone);
+  if (indicator.innerRing) viewer.entities.remove(indicator.innerRing);
+  if (indicator.outerRing) viewer.entities.remove(indicator.outerRing);
+}
+
+function highlightNodeOrSubstation(viewer: any, nodeId: number, cityData: CityData, substationEntityMap: Map<number, any>) {
+  // 1. Highlight the node pyramid itself
+  const nodeEntity = viewer.entities.getById(`node-${nodeId}`);
+  if (nodeEntity && nodeEntity.cylinder) {
+    nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(Cesium.Color.WHITE);
+    nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(2.5);
+  }
+
+  // 2. Highlight substation structure if it exists at this node
+  const sub = cityData.substations.find(s => s.node === nodeId);
+  if (sub) {
+    const subStruct = substationEntityMap.get(sub.id);
+    if (subStruct) {
+      const whiteOutline = new Cesium.ConstantProperty(Cesium.Color.WHITE);
+      const thickWidth = new Cesium.ConstantProperty(2.5);
+
+      if (subStruct.transformer.box) {
+        subStruct.transformer.box.outlineColor = whiteOutline;
+        subStruct.transformer.box.outlineWidth = thickWidth;
+      }
+      subStruct.legs.forEach((leg: any) => {
+        if (leg.cylinder) {
+          leg.cylinder.outlineColor = whiteOutline;
+          leg.cylinder.outlineWidth = new Cesium.ConstantProperty(2.0);
+        }
+      });
+      if (subStruct.crossArm.box) {
+        subStruct.crossArm.box.outlineColor = whiteOutline;
+        subStruct.crossArm.box.outlineWidth = thickWidth;
+      }
+      subStruct.insulators.forEach((ins: any) => {
+        if (ins.cylinder) {
+          ins.cylinder.outlineColor = whiteOutline;
+          ins.cylinder.outlineWidth = new Cesium.ConstantProperty(2.0);
+        }
+      });
+    }
+  }
+}
+
+function resetNodeOrSubstationHighlight(
+  viewer: any,
+  nodeId: number,
+  cityData: CityData,
+  substationEntityMap: Map<number, any>,
+  substationLoads: Record<number, number>,
+  failedSubstations: number[],
+  route: any
+) {
+  // 1. Reset regular node pyramid outline
+  const nodeEntity = viewer.entities.getById(`node-${nodeId}`);
+  if (nodeEntity && nodeEntity.cylinder) {
+    const isExit = [14, 120, 164, 210].includes(nodeId);
+    const color = isExit ? Cesium.Color.fromCssColorString('#00ff88') : Cesium.Color.fromCssColorString('#00e5ff');
+    nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(color);
+    nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(1.2);
+  }
+
+  // 2. Reset substation structure outlines and materials
+  const sub = cityData.substations.find(s => s.node === nodeId);
+  if (sub) {
+    const subStruct = substationEntityMap.get(sub.id);
+    if (subStruct) {
+      const isManualFailed = failedSubstations.includes(sub.id);
+      const isCascaded = route?.cascaded_substations?.includes(sub.id) ?? false;
+      const isFailed = isManualFailed || isCascaded;
+
+      const currentLoad = substationLoads[sub.id] ?? sub.base_load_mw;
+      const capacity = sub.capacity_mw;
+      const isOverloaded = !isFailed && currentLoad > capacity;
+
+      let color = Cesium.Color.fromCssColorString('#ffc107');
+      let outlineColor = Cesium.Color.fromCssColorString('#ff9800');
+
+      if (isFailed) {
+        color = Cesium.Color.fromCssColorString('#ff3d3d');
+        outlineColor = Cesium.Color.fromCssColorString('#555555').withAlpha(0.5);
+      } else if (isOverloaded) {
+        color = Cesium.Color.fromCssColorString('#ff9100');
+        outlineColor = Cesium.Color.WHITE;
+      }
+
+      if (subStruct.transformer.box) {
+        subStruct.transformer.box.outlineColor = new Cesium.ConstantProperty(outlineColor);
+        subStruct.transformer.box.outlineWidth = new Cesium.ConstantProperty(1.5);
+      }
+      subStruct.legs.forEach((leg: any) => {
+        if (leg.cylinder) {
+          leg.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+          leg.cylinder.outlineWidth = new Cesium.ConstantProperty(1.0);
+        }
+      });
+      if (subStruct.crossArm.box) {
+        subStruct.crossArm.box.outlineColor = new Cesium.ConstantProperty(outlineColor);
+        subStruct.crossArm.box.outlineWidth = new Cesium.ConstantProperty(1.5);
+      }
+      subStruct.insulators.forEach((ins: any) => {
+        if (ins.cylinder) {
+          ins.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+          ins.cylinder.outlineWidth = new Cesium.ConstantProperty(1.0);
+        }
+      });
+    }
+  }
 }

@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import type { RiskLevel } from '@/lib/types';
 import styles from './ControlPanel.module.css';
+import Sparkline from './Sparkline';
 
 const RISK_COLORS: Record<RiskLevel, string> = {
   LOW:      '#00e676',
@@ -52,6 +53,11 @@ export default function ControlPanel() {
     setFlyToNodeId,
     applyScenario,
     activeSection,
+    frequencyHistory,
+    gageHistory,
+    mapFilterMode,
+    setMapFilterMode,
+    setFlyToCoords,
   } = useSimulationStore();
 
   const EXIT_NAMES: Record<number, string> = {
@@ -209,27 +215,33 @@ export default function ControlPanel() {
             <span className={styles.sectionIcon}>📊</span> Grid Telemetry HUD
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
-              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Frequency</span>
-              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88' }}>
-                {gridFrequency.toFixed(2)} Hz
-              </span>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', minHeight: '68px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '2px' }}>Frequency</span>
+                <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88', display: 'block' }}>
+                  {gridFrequency.toFixed(2)} Hz
+                </span>
+              </div>
+              <Sparkline data={frequencyHistory} width={110} height={18} stroke={gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88'} strokeWidth={1.5} />
             </div>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '68px', textAlign: 'center' }}>
               <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Grid Stability</span>
-              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: overloadedSubstations.length > 0 ? '#ffea00' : (cascadedSubstations.length > 0 ? '#ff3d3d' : '#00e5ff') }}>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: overloadedSubstations.length > 0 ? '#ffea00' : (cascadedSubstations.length > 0 ? '#ff3d3d' : '#00e5ff') }}>
                 {cascadedSubstations.length > 0 ? 'CRITICAL' : (overloadedSubstations.length > 0 ? 'OVERLOAD' : 'NOMINAL')}
               </span>
             </div>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
-              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>USGS Gage height</span>
-              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: usgsGageHeight > 10.0 ? '#ff9100' : '#00ff88' }}>
-                {usgsGageHeight.toFixed(2)} ft
-              </span>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', minHeight: '68px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '2px' }}>USGS Gage height</span>
+                <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: usgsGageHeight > 10.0 ? '#ff9100' : '#00ff88', display: 'block' }}>
+                  {usgsGageHeight.toFixed(2)} ft
+                </span>
+              </div>
+              <Sparkline data={gageHistory} width={110} height={18} stroke={usgsGageHeight > 10.0 ? '#ff9100' : '#00e5ff'} strokeWidth={1.5} />
             </div>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '68px', textAlign: 'center' }}>
               <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Micro-Temp</span>
-              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: '#ffea00' }}>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: '#ffea00' }}>
                 {surfaceTemp.toFixed(1)} °F
               </span>
             </div>
@@ -311,6 +323,133 @@ export default function ControlPanel() {
               />
               <span className={styles.toggleLabel}>Grid Waypoints (Dots)</span>
             </label>
+          </div>
+
+          {/* Map Filter HUD Modes */}
+          <div style={{ marginTop: '14px', borderTop: '1px solid rgba(0, 229, 255, 0.1)', paddingTop: '12px' }}>
+            <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '8px' }}>
+              Map HUD Display Mode
+            </span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+              {(['nominal', 'radar', 'thermal'] as const).map((mode) => {
+                const isActive = mapFilterMode === mode;
+                let activeColor = '#00e5ff';
+                if (mode === 'radar') activeColor = '#00ff88';
+                if (mode === 'thermal') activeColor = '#ffea00';
+                
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => setMapFilterMode(mode)}
+                    style={{
+                      background: isActive ? `rgba(${mode === 'nominal' ? '0,229,255' : mode === 'radar' ? '0,255,136' : '255,234,0'}, 0.1)` : 'rgba(255,255,255,0.02)',
+                      border: `1px solid ${isActive ? activeColor : 'rgba(255,255,255,0.1)'}`,
+                      color: isActive ? activeColor : 'rgba(160,210,240,0.7)',
+                      fontSize: '9.5px',
+                      padding: '6px 4px',
+                      borderRadius: '4px',
+                      fontFamily: 'var(--font-rajdhani)',
+                      fontWeight: '600',
+                      letterSpacing: '0.5px',
+                      textTransform: 'uppercase',
+                      cursor: 'none',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {mode === 'nominal' ? 'Nominal' : mode === 'radar' ? 'Radar' : 'Thermal'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Camera Glider Presets */}
+          <div style={{ marginTop: '14px', borderTop: '1px solid rgba(0, 229, 255, 0.1)', paddingTop: '12px' }}>
+            <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '8px' }}>
+              Camera Glider Views
+            </span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <button
+                onClick={() => setFlyToCoords({ lon: -95.395, lat: 29.765, elev: 1200, heading: 0, pitch: -45 })}
+                style={{
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid rgba(0,229,255,0.15)',
+                  color: '#00e5ff',
+                  fontSize: '9.5px',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                  fontFamily: 'var(--font-rajdhani)',
+                  fontWeight: '600',
+                  letterSpacing: '0.5px',
+                  textTransform: 'uppercase',
+                  cursor: 'none',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                🌊 Bayou Gage
+              </button>
+              <button
+                onClick={() => setFlyToCoords({ lon: -95.3800, lat: 29.7700, elev: 4000, heading: 15, pitch: -52 })}
+                style={{
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid rgba(0,229,255,0.15)',
+                  color: '#00e5ff',
+                  fontSize: '9.5px',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                  fontFamily: 'var(--font-rajdhani)',
+                  fontWeight: '600',
+                  letterSpacing: '0.5px',
+                  textTransform: 'uppercase',
+                  cursor: 'none',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                🏢 Grid Core
+              </button>
+              <button
+                onClick={() => setFlyToCoords({ lon: -95.3941, lat: 29.7615, elev: 900, heading: 280, pitch: -30 })}
+                style={{
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid rgba(0,229,255,0.15)',
+                  color: '#00e5ff',
+                  fontSize: '9.5px',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                  fontFamily: 'var(--font-rajdhani)',
+                  fontWeight: '600',
+                  letterSpacing: '0.5px',
+                  textTransform: 'uppercase',
+                  cursor: 'none',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                ⚡ Substation 0
+              </button>
+              <button
+                onClick={() => setFlyToCoords({ lon: -95.3800, lat: 29.7100, elev: 8500, heading: 0, pitch: -65 })}
+                style={{
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid rgba(0,229,255,0.15)',
+                  color: '#00e5ff',
+                  fontSize: '9.5px',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                  fontFamily: 'var(--font-rajdhani)',
+                  fontWeight: '600',
+                  letterSpacing: '0.5px',
+                  textTransform: 'uppercase',
+                  cursor: 'none',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                🛡️ Exits
+              </button>
+            </div>
           </div>
         </section>
       )}
