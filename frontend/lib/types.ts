@@ -26,13 +26,22 @@ export interface SubstationData {
   radius: number;
   lat: number;
   lon: number;
+  capacity_mw: number;
+  base_load_mw: number;
   affected_nodes: number[];
+}
+
+export interface TransmissionLink {
+  id: number;
+  from_sub: number;
+  to_sub: number;
 }
 
 export interface CityData {
   nodes: NodeData[];
   edges: EdgeData[];
   substations: SubstationData[];
+  transmission_links: TransmissionLink[];
   center_lat: number;
   center_lon: number;
   grid_rows: number;
@@ -60,6 +69,13 @@ export interface RouteResponse {
   anomaly_score: number;
   risk_level: RiskLevel;
   message: string;
+  dest_node: number;
+  substation_loads: Record<number, number>;
+  overloaded_substations: number[];
+  cascaded_substations: number[];
+  grid_frequency: number;
+  voltage_readings: Record<number, number>;
+  transmission_line_states: Record<number, string>;
 }
 
 // ── Simulation ────────────────────────────────────────────────────────────────
@@ -68,5 +84,4 @@ export interface SimulationParams {
   flood_level: number;
   failed_substations: number[];
   origin_node: number;
-  dest_node: number;
 }

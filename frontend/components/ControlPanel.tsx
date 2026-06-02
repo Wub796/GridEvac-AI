@@ -28,16 +28,26 @@ export default function ControlPanel() {
     floodLevel, setFloodLevel,
     failedSubstations, toggleSubstation,
     originNode, setOriginNode,
-    destNode,   setDestNode,
+    destNode,
     cityData,
     route,
     isLoading,
     backendOnline,
     error,
     fetchCityData,
-    calculateRoute,
     clearRoute,
+    gridFrequency,
+    substationLoads,
+    overloadedSubstations,
+    cascadedSubstations,
   } = useSimulationStore();
+
+  const EXIT_NAMES: Record<number, string> = {
+    14: 'East Gate (Node 14)',
+    120: 'West Gate (Node 120)',
+    164: 'South Gate (Node 164)',
+    210: 'North Gate (Node 210)',
+  };
 
   const substations = cityData?.substations ?? [];
   const nodes = cityData?.nodes ?? [];
@@ -74,6 +84,29 @@ export default function ControlPanel() {
         <div className={styles.errorBanner}>
           {error}
         </div>
+      )}
+
+      {/* ── Grid Dashboard Telemetry HUD ── */}
+      {backendOnline && (
+        <section className={styles.section} style={{ background: 'rgba(0, 229, 255, 0.02)' }}>
+          <h2 className={styles.sectionTitle}>
+            <span className={styles.sectionIcon}>📊</span> Grid Telemetry HUD
+          </h2>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Frequency</span>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88' }}>
+                {gridFrequency.toFixed(2)} Hz
+              </span>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Grid Stability</span>
+              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', color: overloadedSubstations.length > 0 ? '#ffea00' : (cascadedSubstations.length > 0 ? '#ff3d3d' : '#00e5ff') }}>
+                {cascadedSubstations.length > 0 ? 'CRITICAL' : (overloadedSubstations.length > 0 ? 'OVERLOAD' : 'NOMINAL')}
+              </span>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* ── Section: Flood Simulation ── */}
@@ -117,26 +150,76 @@ export default function ControlPanel() {
             <p className={styles.placeholder}>Load city data to see substations</p>
           ) : (
             substations.map((sub) => {
-              const isFailed = failedSubstations.includes(sub.id);
+              const isManualFailed = failedSubstations.includes(sub.id);
+              const isCascaded = cascadedSubstations.includes(sub.id);
+              const isFailed = isManualFailed || isCascaded;
+
+              const currentLoad = substationLoads[sub.id] ?? sub.base_load_mw;
+              const isOverloaded = overloadedSubstations.includes(sub.id);
+
+              const loadPercent = Math.min(100, Math.round((currentLoad / sub.capacity_mw) * 100));
+
+              let statusLabel = "ONLINE";
+              let statusColor = "#00e676";
+
+              if (isManualFailed) {
+                statusLabel = "OFFLINE";
+                statusColor = "#ff3d3d";
+              } else if (isCascaded) {
+                statusLabel = "CASCADE";
+                statusColor = "#ff3d3d";
+              } else if (isOverloaded) {
+                statusLabel = "OVERLOAD";
+                statusColor = "#ff9100";
+              }
+
+              const barColor = isFailed ? '#1a0d0d' : (isOverloaded ? '#ff9100' : (loadPercent > 80 ? '#ffea00' : '#00ff88'));
+
               return (
                 <div
                   key={sub.id}
                   className={`${styles.substationRow} ${isFailed ? styles.substationFailed : ''}`}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '6px' }}
                 >
-                  <div className={styles.substationInfo}>
-                    <div
-                      className={styles.substationDot}
-                      style={{ background: isFailed ? '#ff4400' : '#ffc107' }}
-                    />
-                    <span className={styles.substationName}>{sub.name}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <div className={styles.substationInfo}>
+                      <div
+                        className={styles.substationDot}
+                        style={{ 
+                          background: statusColor, 
+                          boxShadow: `0 0 8px ${statusColor}`,
+                          animation: isOverloaded ? 'blink 0.6s infinite' : 'none'
+                        }}
+                      />
+                      <span className={styles.substationName}>{sub.name}</span>
+                    </div>
+                    <button
+                      className={`${styles.toggle} ${isFailed ? styles.toggleOff : styles.toggleOn}`}
+                      onClick={() => toggleSubstation(sub.id)}
+                      disabled={isCascaded}
+                      style={{ cursor: isCascaded ? 'not-allowed' : 'pointer' }}
+                    >
+                      {statusLabel}
+                    </button>
                   </div>
-                  <button
-                    className={`${styles.toggle} ${isFailed ? styles.toggleOff : styles.toggleOn}`}
-                    onClick={() => toggleSubstation(sub.id)}
-                    aria-label={`${isFailed ? 'Restore' : 'Fail'} ${sub.name}`}
-                  >
-                    {isFailed ? 'FAILED' : 'ONLINE'}
-                  </button>
+
+                  {/* Dynamic Load Indicator */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '2px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px', color: 'rgba(160,210,240,0.5)' }}>
+                      <span>Load: {isFailed ? '0' : currentLoad.toFixed(1)} MW / {sub.capacity_mw} MW</span>
+                      <span>{isFailed ? '0%' : `${loadPercent}%`}</span>
+                    </div>
+                    <div style={{ height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div 
+                        style={{ 
+                          height: '100%', 
+                          width: `${isFailed ? 0 : loadPercent}%`, 
+                          background: barColor,
+                          transition: 'width 0.5s ease, background 0.5s ease' 
+                        }} 
+                      />
+                    </div>
+                  </div>
                 </div>
               );
             })
@@ -150,39 +233,20 @@ export default function ControlPanel() {
           <span className={styles.sectionIcon}>🗺</span> Evacuation Route
         </h2>
         <div className={styles.routeSelectors}>
-          <div className={styles.selectGroup}>
-            <label htmlFor="origin-select" className={styles.selectLabel}>Origin Node</label>
+          <div className={styles.selectGroup} style={{ width: '100%' }}>
+            <label htmlFor="origin-select" className={styles.selectLabel}>Origin Intersection</label>
             <select
               id="origin-select"
               className={styles.nodeSelect}
               value={originNode}
               onChange={(e) => setOriginNode(parseInt(e.target.value))}
             >
-              {Array.from({ length: 100 }, (_, i) => {
-                const node = nodes.find((n) => n.id === i);
-                const elev = node ? ` (${node.elevation.toFixed(0)}m)` : '';
+              {nodes.map((node) => {
+                const isExit = [14, 120, 164, 210].includes(node.id);
+                const role = isExit ? ' [EXIT]' : '';
                 return (
-                  <option key={i} value={i}>
-                    Node {i}{elev}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-          <div className={styles.selectGroup}>
-            <label htmlFor="dest-select" className={styles.selectLabel}>Destination Node</label>
-            <select
-              id="dest-select"
-              className={styles.nodeSelect}
-              value={destNode}
-              onChange={(e) => setDestNode(parseInt(e.target.value))}
-            >
-              {Array.from({ length: 100 }, (_, i) => {
-                const node = nodes.find((n) => n.id === i);
-                const elev = node ? ` (${node.elevation.toFixed(0)}m)` : '';
-                return (
-                  <option key={i} value={i}>
-                    Node {i}{elev}
+                  <option key={node.id} value={node.id}>
+                    Node {node.id} - Row {node.row}, Col {node.col} ({node.elevation.toFixed(1)}m){role}
                   </option>
                 );
               })}
@@ -190,21 +254,23 @@ export default function ControlPanel() {
           </div>
         </div>
 
-        <button
-          id="calculate-route-btn"
-          className={`${styles.calcBtn} ${isLoading ? styles.calcBtnLoading : ''}`}
-          onClick={calculateRoute}
-          disabled={isLoading || !backendOnline}
-        >
-          {isLoading ? (
+        {/* Real-time calculated Target Exit Node */}
+        <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0, 229, 255, 0.04)', borderRadius: '6px', border: '1px solid rgba(0, 229, 255, 0.15)' }}>
+          <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Safest Calculated Exit</span>
+          <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '15px', fontWeight: '700', color: route?.success && route.dest_node !== -1 ? '#00ff88' : '#ff3d3d' }}>
+            {route?.success && route.dest_node !== -1 ? (EXIT_NAMES[route.dest_node] || `Node ${route.dest_node}`) : 'NO PASSABLE PATH'}
+          </span>
+        </div>
+
+        {isLoading && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 0', marginTop: '10px', color: '#00e5ff' }}>
             <span className={styles.spinner} />
-          ) : (
-            <>⚡ Calculate Evacuation Route</>
-          )}
-        </button>
+            <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>SOLVING DIJKSTRA WEIGHTS...</span>
+          </div>
+        )}
 
         {route && (
-          <button className={styles.clearBtn} onClick={clearRoute}>
+          <button className={styles.clearBtn} onClick={clearRoute} style={{ marginTop: '10px', width: '100%' }}>
             ✕ Clear Route
           </button>
         )}

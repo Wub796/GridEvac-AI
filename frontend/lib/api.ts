@@ -22,7 +22,6 @@ export const api = {
       flood_level:        params.flood_level,
       failed_substations: params.failed_substations,
       origin_node:        params.origin_node,
-      dest_node:          params.dest_node,
     });
     return data;
   },
