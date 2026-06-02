@@ -51,6 +51,7 @@ export default function ControlPanel() {
     showIntersections, setShowIntersections,
     setFlyToNodeId,
     applyScenario,
+    activeSection,
   } = useSimulationStore();
 
   const EXIT_NAMES: Record<number, string> = {
@@ -70,7 +71,7 @@ export default function ControlPanel() {
   const floodHeightM = (floodLevel * 1.7).toFixed(1);
 
   return (
-    <aside className={styles.panel}>
+    <aside className={`${styles.panel} ${activeSection === 'map' ? styles.panelVisible : styles.panelHidden}`}>
       {/* ── Header ── */}
       <div className={styles.header}>
         <div className={styles.logo}>

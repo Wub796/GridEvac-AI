@@ -27,12 +27,12 @@ const CESIUM_TOKEN = process.env.NEXT_PUBLIC_CESIUM_TOKEN!;
 // Center of expanded HISD / TX-18 grid
 const CENTER = { lat: 29.7700, lon: -95.3800 };
 
-// Flood polygon covers the full city grid + margin
+// Flood polygon covers a very large area (out of viewport) so edges are invisible
 const FLOOD_BOUNDS_COORDS = [
-  -95.4500, 29.7100,
-  -95.3100, 29.7100,
-  -95.3100, 29.8300,
-  -95.4500, 29.8300,
+  -96.2000, 29.2000,
+  -94.5000, 29.2000,
+  -94.5000, 30.3000,
+  -96.2000, 30.3000,
 ];
 
 // Flood height formula: metres of water rise per unit of flood_level
@@ -437,6 +437,36 @@ export default function CesiumViewer() {
       }
     }
   }, [flyToNodeId, cityData, setFlyToNodeId]);
+
+  // ── Cinematic fly-to camera trigger when switching sections ─────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || typeof Cesium === 'undefined') return;
+
+    if (activeSection === 'map') {
+      // Cinematic zoom-in directly to the Houston grid center
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat - 0.045, 5500),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch:   Cesium.Math.toRadians(-38),
+          roll:    0.0,
+        },
+        duration: 2.5,
+      });
+    } else if (activeSection === 'briefing' || activeSection === 'audit') {
+      // Reset back to zoomed-out orbital bird's eye view
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 18000),
+        orientation: {
+          heading: Cesium.Math.toRadians(15),
+          pitch:   Cesium.Math.toRadians(-52),
+          roll:    0.0,
+        },
+        duration: 2.5,
+      });
+    }
+  }, [activeSection]);
 
   // ── Update transmission line wire styles dynamically ───────────────────────
   useEffect(() => {

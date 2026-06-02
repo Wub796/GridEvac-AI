@@ -231,6 +231,17 @@ export default function HomePage() {
             <p>Houston · Emergency Evacuation Routing System</p>
           </div>
 
+          {/* Back to Briefing HUD Button */}
+          {activeSection !== 'briefing' && (
+            <button 
+              className="briefing-trigger-btn" 
+              onClick={() => scrollToSection(0)}
+              title="Return to Operational Briefing"
+            >
+              ◀ BRIEFING
+            </button>
+          )}
+
           {/* Help Guide HUD Button */}
           <button 
             className="tutorial-trigger-btn" 
@@ -369,9 +380,11 @@ export default function HomePage() {
           </div>
 
           {/* Quick jump to analytics page */}
-          <div className="scroll-indicator scroll-indicator--top-right" onClick={() => scrollToSection(2)}>
-            <span>ML ANALYSIS REPORT ➔</span>
-          </div>
+          {activeSection !== 'audit' && (
+            <div className="scroll-indicator scroll-indicator--top-right" onClick={() => scrollToSection(2)}>
+              <span>ML ANALYSIS REPORT ➔</span>
+            </div>
+          )}
         </section>
 
 
