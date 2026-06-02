@@ -81,7 +81,7 @@ export default function ControlPanel() {
       {/* ── Header ── */}
       <div className={styles.header}>
         <div className={styles.logo}>
-          <span className={styles.logoIcon}>⚡</span>
+          <img src="/logo.png" alt="GridEvac AI" style={{ width: '28px', height: '28px', borderRadius: '4px', border: '1px solid rgba(0, 229, 255, 0.25)', boxShadow: '0 0 8px rgba(0, 229, 255, 0.15)', marginRight: '8px' }} />
           <div>
             <h2 className={styles.title}>GridEvac AI</h2>
             <p className={styles.subtitle}>Houston Emergency Routing</p>

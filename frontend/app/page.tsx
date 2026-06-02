@@ -128,8 +128,13 @@ export default function HomePage() {
           <div className="briefing-content">
             <div className="briefing-left-panel">
               <header>
-                <span className="badge-glow">OPERATIONAL ALERT SYSTEM</span>
-                <h1 className="hero-title">GridEvac AI</h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+                  <img src="/logo.png" alt="GridEvac AI Logo" style={{ width: '64px', height: '64px', borderRadius: '8px', border: '1px solid rgba(0, 229, 255, 0.35)', boxShadow: '0 0 20px rgba(0, 229, 255, 0.25)' }} />
+                  <div>
+                    <span className="badge-glow" style={{ display: 'inline-block', margin: 0 }}>OPERATIONAL ALERT SYSTEM</span>
+                    <h1 className="hero-title" style={{ marginTop: '4px', fontSize: '32px' }}>GridEvac AI</h1>
+                  </div>
+                </div>
                 <p className="hero-subtitle">Houston Crisis Response & Evacuation Routing</p>
               </header>
               

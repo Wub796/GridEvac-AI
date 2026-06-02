@@ -1190,6 +1190,14 @@ function renderStaticCity(viewer: any, cityData: CityData): {
         outlineColor: new Cesium.ConstantProperty(color),
         outlineWidth: 1.2,
       },
+      point: {
+        pixelSize: isExit ? 9 : 6,
+        color: color,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 1.0,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        scaleByDistance: new Cesium.NearFarScalar(300, 1.0, 8000, 0.5),
+      },
       label: {
         text: `Node ${node.id}`,
         font: '600 10px Rajdhani, sans-serif',
@@ -1382,11 +1390,16 @@ function removeHolographicIndicator(viewer: any, indicator: any) {
 }
 
 function highlightNodeOrSubstation(viewer: any, nodeId: number, cityData: CityData, substationEntityMap: Map<number, any>) {
-  // 1. Highlight the node pyramid itself
+  // 1. Highlight the node pyramid and point itself
   const nodeEntity = viewer.entities.getById(`node-${nodeId}`);
-  if (nodeEntity && nodeEntity.cylinder) {
-    nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(Cesium.Color.WHITE);
-    nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(2.5);
+  if (nodeEntity) {
+    if (nodeEntity.cylinder) {
+      nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(Cesium.Color.WHITE);
+      nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(2.5);
+    }
+    if (nodeEntity.point) {
+      nodeEntity.point.color = new Cesium.ConstantProperty(Cesium.Color.WHITE);
+    }
   }
 
   // 2. Highlight substation structure if it exists at this node
@@ -1430,13 +1443,18 @@ function resetNodeOrSubstationHighlight(
   failedSubstations: number[],
   route: any
 ) {
-  // 1. Reset regular node pyramid outline
+  // 1. Reset regular node pyramid outline and point core
   const nodeEntity = viewer.entities.getById(`node-${nodeId}`);
-  if (nodeEntity && nodeEntity.cylinder) {
+  if (nodeEntity) {
     const isExit = [14, 120, 164, 210].includes(nodeId);
     const color = isExit ? Cesium.Color.fromCssColorString('#00ff88') : Cesium.Color.fromCssColorString('#00e5ff');
-    nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(color);
-    nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(1.2);
+    if (nodeEntity.cylinder) {
+      nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(color);
+      nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(1.2);
+    }
+    if (nodeEntity.point) {
+      nodeEntity.point.color = new Cesium.ConstantProperty(color);
+    }
   }
 
   // 2. Reset substation structure outlines and materials
