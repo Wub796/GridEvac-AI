@@ -60,3 +60,11 @@
 - [x] Code tick animation bindings for spinning and hovering
 - [x] Compile and verify Next.js build
 
+## 3D Infrastructure Geometry Assemblies
+- [x] Create `renderSubstationStructure` helper to construct transformers, insulators, structural legs, and cross-arms
+- [x] Render 3D protective ellipsoid domes for exits
+- [x] Render 3D holographic pyramids for intersection waypoints
+- [x] Wire state updates to pylon colors (nominal, overloaded, cascaded, offline)
+- [x] Compile and verify Next.js build
+
+

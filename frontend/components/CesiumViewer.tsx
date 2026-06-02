@@ -281,18 +281,16 @@ export default function CesiumViewer() {
             destEntityRef.current.point.pixelSize = new Cesium.ConstantProperty(pulse);
           }
 
-        // Pulse overloaded substation cylinders
-          substationEntityMap.current.forEach((entity, subId) => {
+        // Pulse overloaded substation beacons
+          substationEntityMap.current.forEach((subStruct, subId) => {
             const currentRoute = useSimulationStore.getState().route;
             const isOverloaded = currentRoute?.overloaded_substations?.includes(subId) ?? false;
             
-            if (isOverloaded && entity.cylinder) {
-              const scale = 1.0 + Math.sin(tickT * 2.5) * 0.15;
-              entity.cylinder.topRadius = new Cesium.ConstantProperty(6 * scale);
-              entity.cylinder.bottomRadius = new Cesium.ConstantProperty(10 * scale);
-            } else if (entity.cylinder) {
-              entity.cylinder.topRadius = new Cesium.ConstantProperty(6);
-              entity.cylinder.bottomRadius = new Cesium.ConstantProperty(10);
+            if (isOverloaded && subStruct.beacon?.point) {
+              const pulseSize = 10 + Math.sin(tickT * 4.0) * 4;
+              subStruct.beacon.point.pixelSize = new Cesium.ConstantProperty(pulseSize);
+            } else if (subStruct.beacon?.point) {
+              subStruct.beacon.point.pixelSize = new Cesium.ConstantProperty(6);
             }
           });
 
@@ -368,20 +366,21 @@ export default function CesiumViewer() {
             viewer.scene.canvas.style.cursor = 'pointer';
             
             const nodeEntity = pickedObject.id;
-            if (nodeEntity.point) {
-              nodeEntity.point.outlineColor = new Cesium.ConstantProperty(Cesium.Color.WHITE);
-              nodeEntity.point.outlineWidth = new Cesium.ConstantProperty(3.0);
+            if (nodeEntity.cylinder) {
+              nodeEntity.cylinder.outlineColor = new Cesium.ConstantProperty(Cesium.Color.WHITE);
+              nodeEntity.cylinder.outlineWidth = new Cesium.ConstantProperty(2.5);
             }
           } else {
             viewer.scene.canvas.style.cursor = 'default';
             
             // Reset all nodes
             viewer.entities.values.forEach((entity: any) => {
-              if (entity.id && entity.id.startsWith('node-') && entity.point) {
+              if (entity.id && entity.id.startsWith('node-') && entity.cylinder) {
                 const nodeId = parseInt(entity.id.split('-')[1], 10);
                 const isExit = [14, 120, 164, 210].includes(nodeId);
-                entity.point.outlineColor = new Cesium.ConstantProperty(Cesium.Color.BLACK);
-                entity.point.outlineWidth = new Cesium.ConstantProperty(1.5);
+                const color = isExit ? Cesium.Color.fromCssColorString('#00ff88') : Cesium.Color.fromCssColorString('#00e5ff');
+                entity.cylinder.outlineColor = new Cesium.ConstantProperty(color);
+                entity.cylinder.outlineWidth = new Cesium.ConstantProperty(1.2);
               }
             });
           }
@@ -449,8 +448,12 @@ export default function CesiumViewer() {
     });
 
     // Toggle substations
-    substationEntityMap.current.forEach((entity) => {
-      entity.show = showSubstations;
+    substationEntityMap.current.forEach((subStruct) => {
+      subStruct.transformer.show = showSubstations;
+      subStruct.crossArm.show = showSubstations;
+      if (subStruct.beacon) subStruct.beacon.show = showSubstations;
+      subStruct.insulators.forEach((ins: any) => { ins.show = showSubstations; });
+      subStruct.legs.forEach((leg: any) => { leg.show = showSubstations; });
     });
 
     // Toggle substation labels & grid node intersections
@@ -587,26 +590,45 @@ export default function CesiumViewer() {
   useEffect(() => {
     if (typeof Cesium === 'undefined' || !cityData) return;
 
-    substationEntityMap.current.forEach((entity, subId) => {
+    substationEntityMap.current.forEach((subStruct, subId) => {
       const isManualFailed = failedSubstations.includes(subId);
       const isCascaded = route?.cascaded_substations?.includes(subId) ?? false;
       const isFailed = isManualFailed || isCascaded;
       const isOverloaded = route?.overloaded_substations?.includes(subId) ?? false;
 
-      let color = Cesium.Color.fromCssColorString('#ffc107').withAlpha(0.95);
+      let color = Cesium.Color.fromCssColorString('#ffc107');
       let outlineColor = Cesium.Color.fromCssColorString('#ff9800');
 
       if (isFailed) {
-        color = Cesium.Color.fromCssColorString('#ff3d3d').withAlpha(0.3); // faded dark red
-        outlineColor = Cesium.Color.fromCssColorString('#555555');
+        color = Cesium.Color.fromCssColorString('#ff3d3d');
+        outlineColor = Cesium.Color.fromCssColorString('#555555').withAlpha(0.5);
       } else if (isOverloaded) {
-        color = Cesium.Color.fromCssColorString('#ff9100'); // glowing orange
+        color = Cesium.Color.fromCssColorString('#ff9100');
         outlineColor = Cesium.Color.WHITE;
       }
 
-      if (entity.cylinder) {
-        entity.cylinder.material = new Cesium.ColorMaterialProperty(color);
-        entity.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      if (subStruct.transformer.box) {
+        subStruct.transformer.box.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.12 : 0.25));
+        subStruct.transformer.box.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      }
+      subStruct.legs.forEach((leg: any) => {
+        if (leg.cylinder) {
+          leg.cylinder.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.08 : 0.35));
+          leg.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+        }
+      });
+      if (subStruct.crossArm.box) {
+        subStruct.crossArm.box.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.12 : 0.5));
+        subStruct.crossArm.box.outlineColor = new Cesium.ConstantProperty(outlineColor);
+      }
+      subStruct.insulators.forEach((ins: any) => {
+        if (ins.cylinder) {
+          ins.cylinder.material = new Cesium.ColorMaterialProperty(color.withAlpha(isFailed ? 0.12 : 0.55));
+          ins.cylinder.outlineColor = new Cesium.ConstantProperty(outlineColor);
+        }
+      });
+      if (subStruct.beacon && subStruct.beacon.point) {
+        subStruct.beacon.point.color = new Cesium.ConstantProperty(isFailed ? Cesium.Color.RED : (isOverloaded ? Cesium.Color.WHITE : color));
       }
     });
   }, [failedSubstations, route, cityData]);
