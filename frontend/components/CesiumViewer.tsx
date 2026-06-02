@@ -270,6 +270,15 @@ export default function CesiumViewer() {
           const pickedObject = viewer.scene.pick(click.position);
           if (Cesium.defined(pickedObject) && pickedObject.id && typeof pickedObject.id.id === 'string' && pickedObject.id.id.startsWith('node-')) {
             const nodeId = parseInt(pickedObject.id.id.split('-')[1], 10);
+            
+            // Prevent placing origin on flooded nodes
+            const store = useSimulationStore.getState();
+            const isFlooded = store.route?.flooded_nodes?.includes(nodeId) ?? false;
+            if (isFlooded) {
+              store.addLog(`Navigation Alert: Cannot set origin at Node #${nodeId} — intersection is submerged!`);
+              return;
+            }
+            
             useSimulationStore.getState().setOriginNode(nodeId);
           }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);

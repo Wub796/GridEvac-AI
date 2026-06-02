@@ -257,9 +257,10 @@ export default function ControlPanel() {
             >
               {nodes.map((node) => {
                 const isExit = [14, 120, 164, 210].includes(node.id);
-                const role = isExit ? ' [EXIT]' : '';
+                const isFlooded = route?.flooded_nodes?.includes(node.id) ?? false;
+                const role = isExit ? ' [EXIT]' : (isFlooded ? ' [FLOODED]' : '');
                 return (
-                  <option key={node.id} value={node.id}>
+                  <option key={node.id} value={node.id} disabled={isFlooded}>
                     Node {node.id} - Row {node.row}, Col {node.col} ({node.elevation.toFixed(1)}m){role}
                   </option>
                 );
