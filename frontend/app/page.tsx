@@ -338,7 +338,7 @@ export default function HomePage() {
                   Blocked Streets
                 </div>
                 <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: 'rgba(0,85,221,0.7)' }} />
+                  <div className="legend-swatch" style={{ background: 'rgba(0, 136, 255, 0.45)', border: '1px solid rgba(0, 136, 255, 0.8)' }} />
                   Flood Zone
                 </div>
                 <div className="legend-item">

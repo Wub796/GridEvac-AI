@@ -690,16 +690,40 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
 
 .scroll-indicator--top-right {
   position: absolute;
-  top: 24px;
+  top: 20px;
   right: 640px;
   bottom: auto;
   left: auto;
   transform: none;
   z-index: 900;
+  background: rgba(5, 12, 26, 0.72);
+  border: 1px solid rgba(0, 255, 136, 0.35);
+  color: var(--accent-green);
+  padding: 8px 14px;
+  font-family: var(--font-rajdhani);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border-radius: 4px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  opacity: 0.9;
+  box-shadow: 0 0 10px rgba(0, 255, 136, 0.15);
+  transition: all 0.2s ease;
+  pointer-events: auto;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
 
 .scroll-indicator--top-right:hover {
-  transform: translateY(-2px);
+  opacity: 1;
+  border-color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.1);
+  box-shadow: 0 0 15px rgba(0, 255, 136, 0.35);
+  transform: translateY(-1px);
 }
 
 /* ── ML Technical Audit Page Layout ── */
