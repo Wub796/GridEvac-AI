@@ -149,6 +149,7 @@ html, body {
   align-items: center;
   justify-content: center;
   backdrop-filter: blur(8px);
+  pointer-events: auto; /* Ensure modal block intercepts click events */
 }
 
 .tutorial-card {
@@ -275,6 +276,7 @@ html, body {
   cursor: pointer;
   backdrop-filter: blur(8px);
   transition: all 0.2s;
+  pointer-events: auto; /* Override parent pointer-events: none */
 }
 
 .tutorial-trigger-btn:hover {
@@ -664,6 +666,7 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   opacity: 0.7;
   transition: opacity 0.3s, transform 0.3s;
   z-index: 10;
+  pointer-events: auto; /* Enable clicks across snapping boundaries */
 }
 
 .scroll-indicator:hover {
