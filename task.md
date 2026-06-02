@@ -46,3 +46,10 @@
 - [x] Update Cesium viewer visibility and camera fly-to bindings in `CesiumViewer.tsx`
 - [x] Add Preset panel, GIS checkboxes, Node search, and detailed routing display in `ControlPanel.tsx`
 - [x] Style the new ControlPanel elements in `ControlPanel.module.css`
+
+## Cinematic UI & Custom Cursor Overhaul
+- [x] Create custom sci-fi cursor component in `CustomCursor.tsx`
+- [x] Update Zustand store with `activeSection` state and action in `useSimulation.ts`
+- [x] Implement scroll-snapping layout with Briefing, Map, and ML Audit sections in `page.tsx`
+- [x] Connect background blur masking inside `CesiumViewer.tsx`
+- [x] Style scroll-snap sections, custom cursors, and glassmorphic telemetry grids in `globals.css`

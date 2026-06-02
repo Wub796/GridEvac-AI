@@ -70,6 +70,7 @@ export default function CesiumViewer() {
     showIntersections,
     flyToNodeId,
     setFlyToNodeId,
+    activeSection,
   } = useSimulationStore();
 
   // ── Load Cesium script once with dynamic multi-CDN fallback ─────────────────
@@ -197,6 +198,20 @@ export default function CesiumViewer() {
           (viewer.scene.postProcessStages.bloom as any).uniforms.brightness = -0.1;
         }
 
+        // Dark desaturated base imagery to match the high-tech sci-fi blueprint aesthetic
+        try {
+          if (viewer.imageryLayers && viewer.imageryLayers.length > 0) {
+            const baseLayer = viewer.imageryLayers.get(0);
+            if (baseLayer) {
+              baseLayer.brightness = 0.55;
+              baseLayer.contrast = 1.25;
+              baseLayer.saturation = 0.12;
+            }
+          }
+        } catch (e) {
+          console.warn('[GridEvac] Failed to apply base imagery filters:', e);
+        }
+
         viewerRef.current = viewer;
 
         handleResize = () => {
@@ -209,9 +224,14 @@ export default function CesiumViewer() {
         // 3-D OSM Buildings (Houston has excellent coverage)
         try {
           const buildings = await Cesium.createOsmBuildingsAsync();
-          viewer.scene.primitives.add(buildings);
-          buildingsRef.current = buildings;
-          buildings.show = useSimulationStore.getState().showBuildings;
+          if (buildings) {
+            buildings.style = new Cesium.Cesium3DTileStyle({
+              color: 'color("#3a7bb8", 0.50)' // lighter blueprint blue for better visibility
+            });
+            viewer.scene.primitives.add(buildings);
+            buildingsRef.current = buildings;
+            buildings.show = useSimulationStore.getState().showBuildings;
+          }
         } catch (e) {
           console.warn('[GridEvac] OSM Buildings unavailable:', e);
         }
@@ -232,7 +252,7 @@ export default function CesiumViewer() {
           polygon: {
             hierarchy:      Cesium.Cartesian3.fromDegreesArray(FLOOD_BOUNDS_COORDS),
             material:       new Cesium.ColorMaterialProperty(
-                              Cesium.Color.fromCssColorString('#0055ff').withAlpha(0.40)
+                              Cesium.Color.fromCssColorString('#0088ff').withAlpha(0.18)
                             ),
             height:         9.0,         // start at base elevation
             outline:        false,
@@ -705,10 +725,21 @@ export default function CesiumViewer() {
     }
   }, [originNode, destNode, cityData]);
 
+  const isMapActive = activeSection === 'map';
+
   return (
     <div
       ref={containerRef}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        zIndex: 1,
+        filter: isMapActive ? 'none' : 'blur(10px) brightness(0.35)',
+        pointerEvents: isMapActive ? 'auto' : 'none',
+        transition: 'filter 0.8s ease, brightness 0.8s ease',
+      }}
     />
   );
 }

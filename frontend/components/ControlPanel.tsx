@@ -83,6 +83,71 @@ export default function ControlPanel() {
         <div className={`${styles.statusDot} ${backendOnline ? styles.online : styles.offline}`} />
       </div>
 
+      {/* ── Section Quick Navigation ── */}
+      <div style={{
+        display: 'flex',
+        gap: '6px',
+        padding: '8px 16px',
+        borderBottom: '1px solid rgba(0, 229, 255, 0.12)',
+        background: 'rgba(0, 229, 255, 0.02)',
+        justifyContent: 'space-between'
+      }}>
+        <button
+          onClick={() => {
+            const container = document.querySelector('.scroll-container');
+            if (container) {
+              container.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+          }}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(0, 229, 255, 0.3)',
+            color: '#00e5ff',
+            fontSize: '9px',
+            padding: '5px 8px',
+            borderRadius: '4px',
+            fontFamily: 'var(--font-rajdhani)',
+            fontWeight: '600',
+            letterSpacing: '1px',
+            cursor: 'none',
+            flex: 1,
+            textAlign: 'center',
+            transition: 'all 0.2s'
+          }}
+          className="nav-btn-jump"
+          title="Go to Tactical Briefing"
+        >
+          ▲ BRIEFING
+        </button>
+        <button
+          onClick={() => {
+            const container = document.querySelector('.scroll-container');
+            if (container) {
+              container.scrollTo({ top: window.innerHeight * 2, behavior: 'smooth' });
+            }
+          }}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(0, 255, 136, 0.3)',
+            color: '#00ff88',
+            fontSize: '9px',
+            padding: '5px 8px',
+            borderRadius: '4px',
+            fontFamily: 'var(--font-rajdhani)',
+            fontWeight: '600',
+            letterSpacing: '1px',
+            cursor: 'none',
+            flex: 1,
+            textAlign: 'center',
+            transition: 'all 0.2s'
+          }}
+          className="nav-btn-jump"
+          title="Go to Machine Learning Audit"
+        >
+          ▼ ML AUDIT
+        </button>
+      </div>
+
       {/* ── Backend connection ── */}
       {!backendOnline && (
         <div className={styles.warningBanner}>
