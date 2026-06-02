@@ -14,6 +14,7 @@ import { useSimulationStore } from '@/hooks/useSimulation';
 import ControlPanel from '@/components/ControlPanel';
 import TutorialModal from '@/components/TutorialModal';
 import CustomCursor from '@/components/CustomCursor';
+import Sparkline from '@/components/Sparkline';
 
 const CesiumViewer = dynamic(() => import('@/components/CesiumViewer'), {
   ssr: false,
@@ -45,7 +46,9 @@ export default function HomePage() {
     cityData,
     failedSubstations,
     overloadedSubstations,
-    cascadedSubstations
+    cascadedSubstations,
+    frequencyHistory,
+    gageHistory
   } = useSimulationStore();
 
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
@@ -173,9 +176,12 @@ export default function HomePage() {
             <div className="briefing-right-panel">
               <div className="hud-metric-card">
                 <span className="metric-label">USGS Buffalo Bayou Gage</span>
-                <span className="metric-num" style={{ color: usgsGageHeight > 10.0 ? '#ffea00' : '#00e5ff' }}>
-                  {usgsGageHeight.toFixed(2)} ft
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
+                  <span className="metric-num" style={{ color: usgsGageHeight > 10.0 ? '#ffea00' : '#00e5ff', margin: 0 }}>
+                    {usgsGageHeight.toFixed(2)} ft
+                  </span>
+                  <Sparkline data={gageHistory} width={130} height={32} stroke={usgsGageHeight > 10.0 ? '#ffea00' : '#00e5ff'} strokeWidth={1.5} />
+                </div>
                 <div className="metric-footer">
                   Site ID: 08074000 · Hydrological Feed
                 </div>
@@ -193,9 +199,12 @@ export default function HomePage() {
 
               <div className="hud-metric-card">
                 <span className="metric-label">Electrical Grid Frequency</span>
-                <span className="metric-num" style={{ color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88' }}>
-                  {gridFrequency.toFixed(2)} Hz
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
+                  <span className="metric-num" style={{ color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88', margin: 0 }}>
+                    {gridFrequency.toFixed(2)} Hz
+                  </span>
+                  <Sparkline data={frequencyHistory} width={130} height={32} stroke={gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88'} strokeWidth={1.5} />
+                </div>
                 <div className="metric-footer">
                   Telemetry Frequency · Target: 60.00 Hz
                 </div>

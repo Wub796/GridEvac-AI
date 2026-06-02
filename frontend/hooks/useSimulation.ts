@@ -22,6 +22,8 @@ interface SimulationStore {
   liveLogs:              string[];
   usgsGageHeight:        number;
   surfaceTemp:           number;
+  frequencyHistory:      number[];
+  gageHistory:           number[];
 
   // ── GIS Display Options ────────────────────────────────────────────────────
   showBuildings:         boolean;
@@ -29,6 +31,8 @@ interface SimulationStore {
   showSubstations:       boolean;
   showIntersections:     boolean;
   flyToNodeId:           number | null;
+  flyToCoords:           { lon: number, lat: number, elev: number, heading?: number, pitch?: number } | null;
+  mapFilterMode:         'nominal' | 'radar' | 'thermal';
   activeSection:         'briefing' | 'map' | 'audit';
 
   // ── Derived / async state ──────────────────────────────────────────────────
@@ -53,6 +57,8 @@ interface SimulationStore {
   setShowSubstations:   (b: boolean) => void;
   setShowIntersections: (b: boolean) => void;
   setFlyToNodeId:       (id: number | null) => void;
+  setFlyToCoords:       (coords: { lon: number, lat: number, elev: number, heading?: number, pitch?: number } | null) => void;
+  setMapFilterMode:     (mode: 'nominal' | 'radar' | 'thermal') => void;
   applyScenario:        (preset: 'flood' | 'cascade' | 'heatwave' | 'clear') => void;
   setActiveSection:     (s: 'briefing' | 'map' | 'audit') => void;
 }
@@ -70,6 +76,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   voltageReadings:       {},
   usgsGageHeight:        4.5,
   surfaceTemp:           87.5,
+  frequencyHistory:      Array(12).fill(60.00),
+  gageHistory:           Array(12).fill(4.5),
   liveLogs:              [
     "GridEvac AI: Core monitoring console initialized.",
     "Grid status: Nominal. Awaiting simulation parameter changes."
@@ -80,6 +88,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   showSubstations:       true,
   showIntersections:     true,
   flyToNodeId:           null,
+  flyToCoords:           null,
+  mapFilterMode:         'nominal',
   activeSection:         'briefing',
 
   cityData:          null,
@@ -280,12 +290,14 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     const nextGage = Math.max(1.0, get().usgsGageHeight + (Math.random() - 0.5) * 0.1);
     const nextTemp = Math.max(50.0, get().surfaceTemp + (Math.random() - 0.5) * 0.15);
 
-    set({
+    set((state) => ({
       substationLoads: nextLoads,
       gridFrequency: nextFreq,
       usgsGageHeight: parseFloat(nextGage.toFixed(2)),
-      surfaceTemp: parseFloat(nextTemp.toFixed(1))
-    });
+      surfaceTemp: parseFloat(nextTemp.toFixed(1)),
+      frequencyHistory: [...state.frequencyHistory.slice(1), nextFreq],
+      gageHistory: [...state.gageHistory.slice(1), parseFloat(nextGage.toFixed(2))]
+    }));
 
     // 3. Occasionally post a sensor reading update in log
     if (Math.random() < 0.25) {
@@ -340,5 +352,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     calculateRoute();
   },
 
-  setActiveSection: (s) => set({ activeSection: s })
+  setActiveSection: (s) => set({ activeSection: s }),
+  setFlyToCoords: (coords) => set({ flyToCoords: coords }),
+  setMapFilterMode: (mode) => set({ mapFilterMode: mode })
 }));

@@ -71,6 +71,9 @@ export default function CesiumViewer() {
     flyToNodeId,
     setFlyToNodeId,
     activeSection,
+    mapFilterMode,
+    flyToCoords,
+    setFlyToCoords,
   } = useSimulationStore();
 
   // ── Load Cesium script once with dynamic multi-CDN fallback ─────────────────
@@ -468,6 +471,25 @@ export default function CesiumViewer() {
     }
   }, [activeSection]);
 
+  // ── Fly to selected preset coordinates ──────────────────────────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || flyToCoords === null) return;
+    if (typeof Cesium === 'undefined') return;
+
+    const { lon, lat, elev, heading, pitch } = flyToCoords;
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(lon, lat, elev),
+      orientation: {
+        heading: Cesium.Math.toRadians(heading ?? 0),
+        pitch:   Cesium.Math.toRadians(pitch ?? -45),
+        roll:    0.0,
+      },
+      duration: 2.0,
+    });
+    setFlyToCoords(null); // Reset preset
+  }, [flyToCoords, setFlyToCoords]);
+
   // ── Update transmission line wire styles dynamically ───────────────────────
   useEffect(() => {
     if (typeof Cesium === 'undefined' || !cityData) return;
@@ -757,6 +779,17 @@ export default function CesiumViewer() {
 
   const isMapActive = activeSection === 'map';
 
+  let activeFilter = 'none';
+  if (!isMapActive) {
+    activeFilter = 'blur(10px) brightness(0.35)';
+  } else {
+    if (mapFilterMode === 'radar') {
+      activeFilter = 'hue-rotate(90deg) saturate(1.8) brightness(0.85) contrast(1.1)'; // green radar HUD
+    } else if (mapFilterMode === 'thermal') {
+      activeFilter = 'sepia(0.65) saturate(2.2) hue-rotate(320deg) contrast(1.1) brightness(0.9)'; // amber thermal strain
+    }
+  }
+
   return (
     <div
       ref={containerRef}
@@ -766,9 +799,9 @@ export default function CesiumViewer() {
         width: '100%',
         height: '100%',
         zIndex: 1,
-        filter: isMapActive ? 'none' : 'blur(10px) brightness(0.35)',
+        filter: activeFilter,
         pointerEvents: isMapActive ? 'auto' : 'none',
-        transition: 'filter 0.8s ease, brightness 0.8s ease',
+        transition: 'filter 0.6s cubic-bezier(0.16, 1, 0.3, 1), brightness 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     />
   );
