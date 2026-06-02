@@ -10,8 +10,8 @@ interface SimulationStore {
   // ── Simulation parameters ──────────────────────────────────────────────────
   floodLevel:        number;           // 0–10
   failedSubstations: number[];         // substation IDs that are manually offline
-  originNode:        number;           // 0–99
-  destNode:          number;           // 0–99
+  originNode:        number;           // 0–224
+  destNode:          number;           // Safest exit node (returned from backend)
 
   // ── Live Grid Telemetry ────────────────────────────────────────────────────
   gridFrequency:         number;
@@ -32,7 +32,6 @@ interface SimulationStore {
   setFloodLevel:        (v: number)  => void;
   toggleSubstation:     (id: number) => void;
   setOriginNode:        (id: number) => void;
-  setDestNode:          (id: number) => void;
   fetchCityData:        () => Promise<void>;
   calculateRoute:       () => Promise<void>;
   clearRoute:           () => void;
@@ -45,7 +44,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   floodLevel:        0,
   failedSubstations: [],
   originNode:        0,
-  destNode:          99,
+  destNode:          14,
   
   gridFrequency:         60.00,
   substationLoads:       {},
@@ -73,6 +72,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setFloodLevel: (v) => {
     set({ floodLevel: v });
     get().addLog(`Simulation: Flood slider adjusted to level ${v.toFixed(1)}`);
+    get().calculateRoute();
   },
 
   toggleSubstation: (id) => {
@@ -94,11 +94,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setOriginNode: (id) => {
     set({ originNode: id });
     get().addLog(`Navigation: Origin waypoint updated to Node #${id}`);
-  },
-  
-  setDestNode: (id) => {
-    set({ destNode: id });
-    get().addLog(`Navigation: Destination waypoint updated to Node #${id}`);
+    get().calculateRoute();
   },
 
   clearRoute: () => set({ route: null, error: null }),
@@ -137,14 +133,13 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
 
   calculateRoute: async () => {
-    const { floodLevel, failedSubstations, originNode, destNode } = get();
+    const { floodLevel, failedSubstations, originNode } = get();
     set({ isLoading: true, error: null });
     try {
       const route = await api.calculateRoute({
         flood_level:        floodLevel,
         failed_substations: failedSubstations,
         origin_node:        originNode,
-        dest_node:          destNode,
       });
 
       // Update telemetry variables from calculations
@@ -171,6 +166,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
       set({ 
         route, 
+        destNode: route.dest_node,
         gridFrequency: route.grid_frequency,
         substationLoads: route.substation_loads,
         overloadedSubstations: route.overloaded_substations,

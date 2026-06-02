@@ -3,10 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from models import (
-    CityResponse, NodeData, EdgeData, SubstationData,
+    CityResponse, NodeData, EdgeData, SubstationData, TransmissionLink,
     SimulationRequest, RouteResponse, RouteCoord, FloodZoneResponse,
 )
-from city_graph import _G, _NODES, _SUBSTATIONS, CENTER_LAT, CENTER_LON, GRID_ROWS, GRID_COLS
+from city_graph import _G, _NODES, _SUBSTATIONS, TRANSMISSION_LINKS, CENTER_LAT, CENTER_LON, GRID_ROWS, GRID_COLS
 from routing import compute_route, get_flooded_nodes, FLOOD_RISE_PER_LEVEL
 from anomaly import detect_anomaly
 
@@ -47,11 +47,13 @@ async def get_city():
         for u, v, data in _G.edges(data=True)
     ]
     substations = [SubstationData(**sub) for sub in _SUBSTATIONS]
+    links = [TransmissionLink(**l) for l in TRANSMISSION_LINKS]
 
     return CityResponse(
         nodes=nodes,
         edges=edges,
         substations=substations,
+        transmission_links=links,
         center_lat=CENTER_LAT,
         center_lon=CENTER_LON,
         grid_rows=GRID_ROWS,
@@ -79,7 +81,6 @@ async def calculate_route(req: SimulationRequest):
     """
     result = compute_route(
         origin=req.origin_node,
-        dest=req.dest_node,
         flood_level=req.flood_level,
         failed_substations=req.failed_substations,
     )
@@ -133,11 +134,13 @@ async def calculate_route(req: SimulationRequest):
         anomaly_score=round(anomaly_score, 4),
         risk_level=risk_level,
         message=result["message"],
+        dest_node=result["dest_node"],
         substation_loads=flow["substation_loads"],
         overloaded_substations=flow["overloaded_substations"],
         cascaded_substations=flow["cascaded_substations"],
         grid_frequency=flow["grid_frequency"],
         voltage_readings=flow["voltage_readings"],
+        transmission_line_states=flow["transmission_line_states"],
     )
 
 # ── Entry point ────────────────────────────────────────────────────────────────

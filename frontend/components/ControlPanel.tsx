@@ -28,20 +28,26 @@ export default function ControlPanel() {
     floodLevel, setFloodLevel,
     failedSubstations, toggleSubstation,
     originNode, setOriginNode,
-    destNode,   setDestNode,
+    destNode,
     cityData,
     route,
     isLoading,
     backendOnline,
     error,
     fetchCityData,
-    calculateRoute,
     clearRoute,
     gridFrequency,
     substationLoads,
     overloadedSubstations,
     cascadedSubstations,
   } = useSimulationStore();
+
+  const EXIT_NAMES: Record<number, string> = {
+    14: 'East Gate (Node 14)',
+    120: 'West Gate (Node 120)',
+    164: 'South Gate (Node 164)',
+    210: 'North Gate (Node 210)',
+  };
 
   const substations = cityData?.substations ?? [];
   const nodes = cityData?.nodes ?? [];
@@ -227,39 +233,20 @@ export default function ControlPanel() {
           <span className={styles.sectionIcon}>🗺</span> Evacuation Route
         </h2>
         <div className={styles.routeSelectors}>
-          <div className={styles.selectGroup}>
-            <label htmlFor="origin-select" className={styles.selectLabel}>Origin Node</label>
+          <div className={styles.selectGroup} style={{ width: '100%' }}>
+            <label htmlFor="origin-select" className={styles.selectLabel}>Origin Intersection</label>
             <select
               id="origin-select"
               className={styles.nodeSelect}
               value={originNode}
               onChange={(e) => setOriginNode(parseInt(e.target.value))}
             >
-              {Array.from({ length: 100 }, (_, i) => {
-                const node = nodes.find((n) => n.id === i);
-                const elev = node ? ` (${node.elevation.toFixed(0)}m)` : '';
+              {nodes.map((node) => {
+                const isExit = [14, 120, 164, 210].includes(node.id);
+                const role = isExit ? ' [EXIT]' : '';
                 return (
-                  <option key={i} value={i}>
-                    Node {i}{elev}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
-          <div className={styles.selectGroup}>
-            <label htmlFor="dest-select" className={styles.selectLabel}>Destination Node</label>
-            <select
-              id="dest-select"
-              className={styles.nodeSelect}
-              value={destNode}
-              onChange={(e) => setDestNode(parseInt(e.target.value))}
-            >
-              {Array.from({ length: 100 }, (_, i) => {
-                const node = nodes.find((n) => n.id === i);
-                const elev = node ? ` (${node.elevation.toFixed(0)}m)` : '';
-                return (
-                  <option key={i} value={i}>
-                    Node {i}{elev}
+                  <option key={node.id} value={node.id}>
+                    Node {node.id} - Row {node.row}, Col {node.col} ({node.elevation.toFixed(1)}m){role}
                   </option>
                 );
               })}
@@ -267,21 +254,23 @@ export default function ControlPanel() {
           </div>
         </div>
 
-        <button
-          id="calculate-route-btn"
-          className={`${styles.calcBtn} ${isLoading ? styles.calcBtnLoading : ''}`}
-          onClick={calculateRoute}
-          disabled={isLoading || !backendOnline}
-        >
-          {isLoading ? (
+        {/* Real-time calculated Target Exit Node */}
+        <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0, 229, 255, 0.04)', borderRadius: '6px', border: '1px solid rgba(0, 229, 255, 0.15)' }}>
+          <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Safest Calculated Exit</span>
+          <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '15px', fontWeight: '700', color: route?.success && route.dest_node !== -1 ? '#00ff88' : '#ff3d3d' }}>
+            {route?.success && route.dest_node !== -1 ? (EXIT_NAMES[route.dest_node] || `Node ${route.dest_node}`) : 'NO PASSABLE PATH'}
+          </span>
+        </div>
+
+        {isLoading && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 0', marginTop: '10px', color: '#00e5ff' }}>
             <span className={styles.spinner} />
-          ) : (
-            <>⚡ Calculate Evacuation Route</>
-          )}
-        </button>
+            <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>SOLVING DIJKSTRA WEIGHTS...</span>
+          </div>
+        )}
 
         {route && (
-          <button className={styles.clearBtn} onClick={clearRoute}>
+          <button className={styles.clearBtn} onClick={clearRoute} style={{ marginTop: '10px', width: '100%' }}>
             ✕ Clear Route
           </button>
         )}

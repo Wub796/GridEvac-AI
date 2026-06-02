@@ -96,57 +96,68 @@ export default function HomePage() {
         pointerEvents: 'none'
       }}>
         
-        {/* Live Grid Event Logs */}
-        <div style={{
-          width: '420px',
-          height: '140px',
-          background: 'rgba(5, 12, 26, 0.82)',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
-          border: '1px solid rgba(0, 200, 255, 0.14)',
-          borderRadius: '8px',
-          padding: '12px 16px',
-          display: 'flex',
-          flexDirection: 'column',
-          pointerEvents: 'auto'
-        }}>
+        {/* Live Grid Event Logs (SCADA Retro CRT Terminal style) */}
+        <div 
+          className="scada-terminal"
+          style={{
+            width: '420px',
+            height: '140px',
+            borderRadius: '6px',
+            padding: '12px 16px',
+            display: 'flex',
+            flexDirection: 'column',
+            pointerEvents: 'auto'
+          }}
+        >
+          {/* CRT sweep scanning line */}
+          <div className="scada-sweep-line" aria-hidden="true" />
+          
           <div style={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
-            borderBottom: '1px solid rgba(0,200,255,0.08)', 
+            borderBottom: '1px solid rgba(0,255,102,0.15)', 
             paddingBottom: '4px',
-            marginBottom: '6px'
+            marginBottom: '6px',
+            zIndex: 3
           }}>
-            <span style={{ fontFamily: 'Rajdhani, sans-serif', fontSize: '11px', fontWeight: '600', letterSpacing: '1px', color: '#00e5ff' }}>
+            <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '11px', fontWeight: '600', letterSpacing: '1px', color: '#00ff66', textShadow: '0 0 6px rgba(0,255,102,0.6)' }}>
               📡 LIVE SCADA TELEMETRY FEED
             </span>
-            <span style={{ width: '6px', height: '6px', background: '#00e5ff', borderRadius: '50%', boxShadow: '0 0 6px #00e5ff', alignSelf: 'center', animation: 'blink 1s infinite' }} />
+            <span style={{ width: '6px', height: '6px', background: '#00ff66', borderRadius: '50%', boxShadow: '0 0 6px #00ff66', alignSelf: 'center', animation: 'blink 1s infinite' }} />
           </div>
           
-          <div style={{ 
-            flex: 1, 
-            overflowY: 'auto', 
-            display: 'flex', 
-            flexDirection: 'column-reverse', 
-            gap: '5px',
-            fontFamily: 'monospace',
-            fontSize: '10px',
-            color: 'rgba(160, 210, 240, 0.85)',
-            scrollbarWidth: 'none'
-          }}>
+          <div 
+            className="scada-terminal-crt-glow"
+            style={{ 
+              flex: 1, 
+              overflowY: 'auto', 
+              display: 'flex', 
+              flexDirection: 'column-reverse', 
+              gap: '5px',
+              fontFamily: 'monospace',
+              fontSize: '10px',
+              color: '#00ff55',
+              scrollbarWidth: 'none',
+              zIndex: 3
+            }}
+          >
             {liveLogs.slice().reverse().map((log, idx) => {
-              // Highlight alerts / warnings / successes
-              let color = 'rgba(160, 210, 240, 0.85)';
+              // Highlight alerts / warnings / successes in phosphor green / neon amber / warning red
+              let color = '#00ff55';
+              let glow = 'rgba(0, 255, 85, 0.4)';
               if (log.includes('Alert') || log.includes('warning') || log.includes('Warning') || log.includes('REDISTRIBUTION')) {
-                color = '#ff9100';
+                color = '#ffb300';
+                glow = 'rgba(255, 179, 0, 0.4)';
               } else if (log.includes('CRITICAL') || log.includes('Error') || log.includes('FAILED')) {
-                color = '#ff3d3d';
+                color = '#ff3333';
+                glow = 'rgba(255, 51, 51, 0.4)';
               } else if (log.includes('Evacuation') || log.includes('ONLINE') || log.includes('Nominal') || log.includes('Successfully')) {
                 color = '#00ff88';
+                glow = 'rgba(0, 255, 136, 0.4)';
               }
               
               return (
-                <div key={idx} style={{ color, wordBreak: 'break-all', textShadow: color !== 'rgba(160, 210, 240, 0.85)' ? `0 0 4px ${color}40` : 'none' }}>
+                <div key={idx} style={{ color, wordBreak: 'break-all', textShadow: `0 0 4px ${glow}` }}>
                   {log}
                 </div>
               );
