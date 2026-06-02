@@ -595,13 +595,18 @@ export default function CesiumViewer() {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function generateCatenaryPoints(subA: any, subB: any): number[] {
+function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): number[] {
   const points: number[] = [];
   const segments = 10;
   const sag = 6.0; // 6 metres sag in the middle
   
-  const heightA = subA.elevation + 70.0;
-  const heightB = subB.elevation + 70.0;
+  const nodeA = cityData.nodes.find(n => n.id === subA.node);
+  const nodeB = cityData.nodes.find(n => n.id === subB.node);
+  const elevA = nodeA ? nodeA.elevation : 10.0;
+  const elevB = nodeB ? nodeB.elevation : 10.0;
+  
+  const heightA = elevA + 70.0;
+  const heightB = elevB + 70.0;
   
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
@@ -689,7 +694,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     const subB = cityData.substations.find(s => s.id === link.to_sub);
     if (!subA || !subB) continue;
     
-    const positions = generateCatenaryPoints(subA, subB);
+    const positions = generateCatenaryPoints(subA, subB, cityData);
     
     const entity = viewer.entities.add({
       id: `transmission-link-${link.id}`,
