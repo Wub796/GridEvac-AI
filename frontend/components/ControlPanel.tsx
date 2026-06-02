@@ -67,7 +67,7 @@ export default function ControlPanel() {
         <div className={styles.logo}>
           <span className={styles.logoIcon}>⚡</span>
           <div>
-            <h1 className={styles.title}>GridEvac AI</h1>
+            <h2 className={styles.title}>GridEvac AI</h2>
             <p className={styles.subtitle}>Houston Emergency Routing</p>
           </div>
         </div>
@@ -257,7 +257,7 @@ export default function ControlPanel() {
             >
               {nodes.map((node) => {
                 const isExit = [14, 120, 164, 210].includes(node.id);
-                const isFlooded = route?.flooded_nodes?.includes(node.id) ?? false;
+                const isFlooded = node.elevation <= floodLevel * 1.7;
                 const role = isExit ? ' [EXIT]' : (isFlooded ? ' [FLOODED]' : '');
                 return (
                   <option key={node.id} value={node.id} disabled={isFlooded}>

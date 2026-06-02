@@ -188,6 +188,14 @@ export default function HomePage() {
             Safe Route
           </div>
           <div className="legend-item">
+            <div className="legend-swatch" style={{ background: '#ff6600', boxShadow: '0 0 4px #ff6600' }} />
+            Dead Wire Hazard
+          </div>
+          <div className="legend-item">
+            <div className="legend-swatch" style={{ background: '#ffea00', boxShadow: '0 0 4px #ffea00' }} />
+            Overloaded Line Hazard
+          </div>
+          <div className="legend-item">
             <div className="legend-swatch" style={{ background: '#ffc107' }} />
             Substation
           </div>

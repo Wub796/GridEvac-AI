@@ -78,6 +78,7 @@ export interface RouteResponse {
   transmission_line_states: Record<number, string>;
   usgs_gage_height: number;
   surface_temp: number;
+  hazard_roads?: Record<string, string>;
 }
 
 // ── Simulation ────────────────────────────────────────────────────────────────

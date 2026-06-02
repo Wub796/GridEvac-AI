@@ -76,6 +76,37 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setFloodLevel: (v) => {
     set({ floodLevel: v });
     get().addLog(`Simulation: Flood slider adjusted to level ${v.toFixed(1)}`);
+
+    // Auto-relocate origin if it is now flooded
+    const { originNode, cityData } = get();
+    if (cityData) {
+      const currentOrigin = cityData.nodes.find(n => n.id === originNode);
+      if (currentOrigin && currentOrigin.elevation <= v * 1.7) {
+        let bestNodeId = -1;
+        let minDistance = Number.POSITIVE_INFINITY;
+
+        cityData.nodes.forEach(node => {
+          // Skip if flooded or is an exit node
+          const isExit = [14, 120, 164, 210].includes(node.id);
+          const isFlooded = node.elevation <= v * 1.7;
+          if (!isFlooded && !isExit) {
+            const dist = Math.hypot(node.lat - currentOrigin.lat, node.lon - currentOrigin.lon);
+            if (dist < minDistance) {
+              minDistance = dist;
+              bestNodeId = node.id;
+            }
+          }
+        });
+
+        if (bestNodeId !== -1) {
+          set({ originNode: bestNodeId });
+          get().addLog(`Navigation Alert: Origin Node #${originNode} flooded! Automatically relocated to closest dry Node #${bestNodeId}.`);
+        } else {
+          get().addLog(`Navigation Alert: Origin Node #${originNode} flooded! No dry intersections remaining on grid.`);
+        }
+      }
+    }
+
     get().calculateRoute();
   },
 

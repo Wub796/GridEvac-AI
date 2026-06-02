@@ -146,6 +146,7 @@ export default function CesiumViewer() {
     loadedRef.current = true;
 
     let destroyed = false;
+    let handleResize: (() => void) | undefined;
 
     (async () => {
       try {
@@ -190,6 +191,13 @@ export default function CesiumViewer() {
         }
 
         viewerRef.current = viewer;
+
+        handleResize = () => {
+          if (viewer && !viewer.isDestroyed()) {
+            viewer.resize();
+          }
+        };
+        window.addEventListener('resize', handleResize);
 
         // 3-D OSM Buildings (Houston has excellent coverage)
         try {
@@ -273,7 +281,9 @@ export default function CesiumViewer() {
             
             // Prevent placing origin on flooded nodes
             const store = useSimulationStore.getState();
-            const isFlooded = store.route?.flooded_nodes?.includes(nodeId) ?? false;
+            const node = store.cityData?.nodes.find(n => n.id === nodeId);
+            const isFlooded = node ? node.elevation <= store.floodLevel * 1.7 : false;
+            
             if (isFlooded) {
               store.addLog(`Navigation Alert: Cannot set origin at Node #${nodeId} — intersection is submerged!`);
               return;
@@ -318,6 +328,11 @@ export default function CesiumViewer() {
       if (viewerRef.current && !viewerRef.current.isDestroyed()) {
         viewerRef.current.destroy();
         viewerRef.current = null;
+      }
+      loadedRef.current = false;
+      staticRenderedRef.current = false;
+      if (handleResize) {
+        window.removeEventListener('resize', handleResize);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -485,6 +500,31 @@ export default function CesiumViewer() {
 
     if (!route) return;
 
+    // Colour hazard roads (streets under compromised transmission lines)
+    if (route.hazard_roads) {
+      for (const [key, state] of Object.entries(route.hazard_roads)) {
+        const [uStr, vStr] = key.split('-');
+        const u = parseInt(uStr, 10);
+        const v = parseInt(vStr, 10);
+        const key1 = `${u}-${v}`;
+        const key2 = `${v}-${u}`;
+        const entity = edgeEntityMap.current.get(key1) ?? edgeEntityMap.current.get(key2);
+        if (entity?.polyline) {
+          if (state === 'dead') {
+            entity.polyline.material = new Cesium.ColorMaterialProperty(
+              Cesium.Color.fromCssColorString('#ff6600').withAlpha(0.85)
+            );
+            entity.polyline.width = new Cesium.ConstantProperty(4.5);
+          } else if (state === 'overloaded') {
+            entity.polyline.material = new Cesium.ColorMaterialProperty(
+              Cesium.Color.fromCssColorString('#ffea00').withAlpha(0.85)
+            );
+            entity.polyline.width = new Cesium.ConstantProperty(3.5);
+          }
+        }
+      }
+    }
+
     // Colour blocked edges red
     for (const [u, v] of route.blocked_edges) {
       const key1 = `${u}-${v}`;
@@ -501,7 +541,16 @@ export default function CesiumViewer() {
     if (!route.success || route.path_coords.length < 2) return;
 
     // Draw glowing green route
-    const positions = route.path_coords.flatMap((c) => [c.lon, c.lat, c.elevation]);
+    const positions: number[] = [];
+    for (const c of route.path_coords) {
+      if (c && typeof c.lon === 'number' && !isNaN(c.lon) &&
+          typeof c.lat === 'number' && !isNaN(c.lat) &&
+          typeof c.elevation === 'number' && !isNaN(c.elevation)) {
+        positions.push(c.lon, c.lat, c.elevation);
+      }
+    }
+    if (positions.length < 6) return;
+
     routeEntityRef.current = viewer.entities.add({
       polyline: {
         positions:        Cesium.Cartesian3.fromDegreesArrayHeights(positions),
@@ -608,8 +657,9 @@ function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): numbe
   
   const nodeA = cityData.nodes.find(n => n.id === subA.node);
   const nodeB = cityData.nodes.find(n => n.id === subB.node);
-  const elevA = nodeA ? nodeA.elevation : 10.0;
-  const elevB = nodeB ? nodeB.elevation : 10.0;
+  if (!nodeA || !nodeB) return [];
+  const elevA = nodeA.elevation ?? 10.0;
+  const elevB = nodeB.elevation ?? 10.0;
   
   const heightA = elevA + 70.0;
   const heightB = elevB + 70.0;
@@ -620,7 +670,9 @@ function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): numbe
     const lat = subA.lat + t * (subB.lat - subA.lat);
     // Catenary approximation using sine curve sag
     const elevation = (1 - t) * heightA + t * heightB - sag * Math.sin(Math.PI * t);
-    points.push(lon, lat, elevation);
+    if (!isNaN(lon) && !isNaN(lat) && !isNaN(elevation)) {
+      points.push(lon, lat, elevation);
+    }
   }
   return points;
 }
@@ -641,6 +693,9 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     if (!src || !tgt) continue;
 
     const height = Math.min(src.elevation, tgt.elevation) + 2;
+    if (isNaN(src.lon) || isNaN(src.lat) || isNaN(tgt.lon) || isNaN(tgt.lat) || isNaN(height)) {
+      continue;
+    }
 
     const entity = viewer.entities.add({
       polyline: {
@@ -661,6 +716,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
 
   // ── Substation markers ─────────────────────────────────────────────────────
   for (const sub of cityData.substations) {
+    if (isNaN(sub.lon) || isNaN(sub.lat)) continue;
     // Glowing amber tower
     const cylinder = viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 40),
@@ -701,6 +757,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     if (!subA || !subB) continue;
     
     const positions = generateCatenaryPoints(subA, subB, cityData);
+    if (positions.length < 6) continue;
     
     const entity = viewer.entities.add({
       id: `transmission-link-${link.id}`,
@@ -722,7 +779,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
   const SAFE_EXITS = [14, 120, 164, 210];
   for (const exitId of SAFE_EXITS) {
     const exitNode = cityData.nodes.find(n => n.id === exitId);
-    if (!exitNode) continue;
+    if (!exitNode || isNaN(exitNode.lon) || isNaN(exitNode.lat) || isNaN(exitNode.elevation)) continue;
     
     const beaconHeight = 120;
     const centerElev = exitNode.elevation + (beaconHeight / 2);
@@ -760,6 +817,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
   // ── Interactive Neon Grid Dots ─────────────────────────────────────────────
   for (const node of cityData.nodes) {
     const isExit = SAFE_EXITS.includes(node.id);
+    if (isNaN(node.lon) || isNaN(node.lat) || isNaN(node.elevation)) continue;
     
     viewer.entities.add({
       id: `node-${node.id}`,
