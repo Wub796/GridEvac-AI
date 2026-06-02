@@ -70,6 +70,7 @@ export default function CesiumViewer() {
     showIntersections,
     flyToNodeId,
     setFlyToNodeId,
+    activeSection,
   } = useSimulationStore();
 
   // ── Load Cesium script once with dynamic multi-CDN fallback ─────────────────
@@ -705,10 +706,21 @@ export default function CesiumViewer() {
     }
   }, [originNode, destNode, cityData]);
 
+  const isMapActive = activeSection === 'map';
+
   return (
     <div
       ref={containerRef}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        zIndex: 1,
+        filter: isMapActive ? 'none' : 'blur(10px) brightness(0.35)',
+        pointerEvents: isMapActive ? 'auto' : 'none',
+        transition: 'filter 0.8s ease, brightness 0.8s ease',
+      }}
     />
   );
 }

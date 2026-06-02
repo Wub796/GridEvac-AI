@@ -340,4 +340,472 @@ html, body {
   animation: crt-sweep 6s linear infinite;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Cinematic Scroll Snapping & Section Overlays
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.scroll-container {
+  scroll-snap-type: y mandatory;
+  overflow-y: scroll;
+  height: 100vh;
+  width: 100vw;
+  position: relative;
+  scroll-behavior: smooth;
+  scrollbar-width: none; /* Hide scrollbar for immersive visual layout */
+}
+.scroll-container::-webkit-scrollbar {
+  display: none;
+}
+
+.scroll-section {
+  scroll-snap-align: start;
+  height: 100vh;
+  width: 100vw;
+  position: relative;
+  overflow: hidden;
+}
+
+.scroll-section--briefing,
+.scroll-section--audit {
+  background: rgba(2, 9, 18, 0.45);
+  backdrop-filter: blur(14px) brightness(0.35);
+  -webkit-backdrop-filter: blur(14px) brightness(0.35);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.scroll-section--map {
+  background: transparent;
+  pointer-events: none; /* Let clicks pass to Cesium */
+  z-index: 2;
+}
+
+.map-view-overlays {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.map-view-overlays * {
+  pointer-events: auto; /* Enable clicks inside active HUD elements */
+}
+
+/* ── Global Custom Cursor Reset ── */
+html, body, button, a, select, input, option, label, textarea, [role="button"], .scroll-indicator, .cta-btn-glow, .secondary-btn, .tutorial-trigger-btn {
+  cursor: none !important;
+}
+
+/* ── Custom Cursor Styles ── */
+.custom-cursor-dot {
+  position: fixed;
+  width: 6px;
+  height: 6px;
+  background-color: var(--accent-cyan);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 9999;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 10px var(--accent-cyan);
+  transition: background-color 0.2s, width 0.2s, height 0.2s;
+}
+
+.custom-cursor-follower {
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(0, 229, 255, 0.5);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 9998;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
+  transition: border-color 0.2s, width 0.2s, height 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+
+.custom-cursor-dot--hover {
+  background-color: var(--accent-green);
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 12px var(--accent-green);
+}
+
+.custom-cursor-follower--hover {
+  width: 38px;
+  height: 38px;
+  border-color: var(--accent-green);
+  background-color: rgba(0, 255, 136, 0.05);
+  box-shadow: 0 0 15px rgba(0, 255, 136, 0.35);
+}
+
+/* ── Tactical Briefing Page Layout ── */
+.briefing-content {
+  width: 90%;
+  max-width: 1200px;
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 40px;
+  align-items: center;
+  padding: 0 20px;
+}
+
+.briefing-left-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.badge-glow {
+  display: inline-block;
+  font-family: var(--font-rajdhani);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  padding: 4px 10px;
+  border-radius: 4px;
+  letter-spacing: 2px;
+  background: rgba(0, 229, 255, 0.03);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.05);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+
+.hero-title {
+  font-family: var(--font-rajdhani);
+  font-size: 56px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  letter-spacing: 4px;
+  line-height: 1.1;
+  text-shadow: 0 0 30px rgba(0, 229, 255, 0.25);
+}
+
+.hero-subtitle {
+  font-size: 16px;
+  color: var(--accent-cyan);
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  margin-top: 8px;
+  font-weight: 500;
+  font-family: var(--font-rajdhani);
+}
+
+.briefing-summary-card {
+  background: rgba(5, 12, 26, 0.65);
+  border: 1px solid rgba(0, 229, 255, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.briefing-summary-card h3 {
+  font-family: var(--font-rajdhani);
+  font-size: 18px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent-amber);
+  margin-bottom: 12px;
+}
+
+.briefing-summary-card p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(224, 242, 255, 0.85);
+}
+
+.threat-badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-rajdhani);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  letter-spacing: 1px;
+}
+
+.threat-badge--low {
+  border-color: rgba(0, 255, 136, 0.3);
+  color: var(--accent-green);
+  background: rgba(0, 255, 136, 0.05);
+}
+.threat-badge--medium {
+  border-color: rgba(255, 234, 0, 0.3);
+  color: #ffea00;
+  background: rgba(255, 234, 0, 0.05);
+}
+.threat-badge--high {
+  border-color: rgba(255, 145, 0, 0.3);
+  color: #ff9100;
+  background: rgba(255, 145, 0, 0.05);
+}
+.threat-badge--critical {
+  border-color: rgba(255, 61, 61, 0.3);
+  color: var(--accent-danger);
+  background: rgba(255, 61, 61, 0.05);
+  animation: borderFlicker 2s infinite;
+}
+
+@keyframes borderFlicker {
+  0%, 100% { border-color: rgba(255, 61, 61, 0.3); box-shadow: none; }
+  50% { border-color: rgba(255, 61, 61, 0.8); box-shadow: 0 0 10px rgba(255, 61, 61, 0.25); }
+}
+
+.cta-btn-glow {
+  background: var(--accent-cyan);
+  border: 1px solid var(--accent-cyan);
+  color: var(--bg-void);
+  font-family: var(--font-rajdhani);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 12px 24px;
+  border-radius: 4px;
+  transition: all 0.25s ease;
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.3);
+}
+
+.cta-btn-glow:hover {
+  background: #00b8cc;
+  border-color: #00b8cc;
+  box-shadow: 0 0 25px rgba(0, 229, 255, 0.6);
+  transform: translateY(-1px);
+}
+
+.secondary-btn {
+  background: transparent;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  color: var(--accent-cyan);
+  font-family: var(--font-rajdhani);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 12px 24px;
+  border-radius: 4px;
+  transition: all 0.25s ease;
+}
+
+.secondary-btn:hover {
+  background: rgba(0, 229, 255, 0.08);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.briefing-right-panel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.hud-metric-card {
+  background: rgba(5, 12, 26, 0.55);
+  border: 1px solid rgba(0, 229, 255, 0.1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 6px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.hud-metric-card:hover {
+  border-color: rgba(0, 229, 255, 0.25);
+  box-shadow: 0 8px 24px rgba(0, 229, 255, 0.08);
+}
+
+.metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.metric-num {
+  font-family: var(--font-rajdhani);
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1.2;
+}
+
+.metric-footer {
+  font-size: 9.5px;
+  color: rgba(160, 210, 240, 0.4);
+}
+
+/* ── Scroll Indicators ── */
+.scroll-indicator {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-cyan);
+  font-family: var(--font-rajdhani);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  opacity: 0.7;
+  transition: opacity 0.3s, transform 0.3s;
+  z-index: 10;
+}
+
+.scroll-indicator:hover {
+  opacity: 1;
+  transform: translate(-50%, -2px);
+}
+
+.arrow-down {
+  width: 12px;
+  height: 12px;
+  border-bottom: 2px solid var(--accent-cyan);
+  border-right: 2px solid var(--accent-cyan);
+  transform: rotate(45deg);
+  animation: bounceDown 1.5s infinite;
+}
+
+@keyframes bounceDown {
+  0%, 100% { transform: rotate(45deg) translate(0, 0); }
+  50% { transform: rotate(45deg) translate(4px, 4px); }
+}
+
+.scroll-indicator--top-right {
+  position: absolute;
+  top: 24px;
+  right: 640px;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  z-index: 900;
+}
+
+.scroll-indicator--top-right:hover {
+  transform: translateY(-2px);
+}
+
+/* ── ML Technical Audit Page Layout ── */
+.audit-content {
+  width: 90%;
+  max-width: 1200px;
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 40px;
+  align-items: center;
+  padding: 0 20px;
+}
+
+.audit-left-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.audit-right-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-title {
+  font-family: var(--font-rajdhani);
+  font-size: 38px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  letter-spacing: 2.5px;
+  line-height: 1.1;
+  text-shadow: 0 0 25px rgba(0, 255, 136, 0.15);
+}
+
+.audit-features-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.feature-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 11px;
+  color: rgba(224, 242, 255, 0.85);
+}
+
+.audit-table-wrapper {
+  background: rgba(5, 12, 26, 0.65);
+  border: 1px solid rgba(0, 229, 255, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 480px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 229, 255, 0.2) transparent;
+}
+
+.audit-table-wrapper::-webkit-scrollbar {
+  width: 4px;
+}
+.audit-table-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+.audit-table-wrapper::-webkit-scrollbar-thumb {
+  background: rgba(0, 229, 255, 0.25);
+  border-radius: 2px;
+}
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.audit-table th {
+  background: rgba(0, 229, 255, 0.05);
+  font-family: var(--font-rajdhani);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent-cyan);
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.audit-table td {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: rgba(224, 242, 255, 0.85);
+}
+
+.audit-table tr:hover td {
+  background: rgba(0, 229, 255, 0.02);
+  color: #fff;
+}
+
+
 

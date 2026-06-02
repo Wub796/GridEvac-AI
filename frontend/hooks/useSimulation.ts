@@ -29,6 +29,7 @@ interface SimulationStore {
   showSubstations:       boolean;
   showIntersections:     boolean;
   flyToNodeId:           number | null;
+  activeSection:         'briefing' | 'map' | 'audit';
 
   // ── Derived / async state ──────────────────────────────────────────────────
   cityData:      CityData    | null;
@@ -53,6 +54,7 @@ interface SimulationStore {
   setShowIntersections: (b: boolean) => void;
   setFlyToNodeId:       (id: number | null) => void;
   applyScenario:        (preset: 'flood' | 'cascade' | 'heatwave' | 'clear') => void;
+  setActiveSection:     (s: 'briefing' | 'map' | 'audit') => void;
 }
 
 export const useSimulationStore = create<SimulationStore>((set, get) => ({
@@ -78,6 +80,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   showSubstations:       true,
   showIntersections:     true,
   flyToNodeId:           null,
+  activeSection:         'briefing',
 
   cityData:          null,
   route:             null,
@@ -335,5 +338,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       addLog("Scenario Loaded: All Clear. Parameters reset to nominal safety baseline. Origin snapped to Node #0.");
     }
     calculateRoute();
-  }
+  },
+
+  setActiveSection: (s) => set({ activeSection: s })
 }));
