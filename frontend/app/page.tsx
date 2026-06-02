@@ -232,13 +232,15 @@ export default function HomePage() {
           </div>
 
           {/* Back to Briefing HUD Button */}
-          <button 
-            className="briefing-trigger-btn" 
-            onClick={() => scrollToSection(0)}
-            title="Return to Operational Briefing"
-          >
-            ◀ BRIEFING
-          </button>
+          {activeSection !== 'briefing' && (
+            <button 
+              className="briefing-trigger-btn" 
+              onClick={() => scrollToSection(0)}
+              title="Return to Operational Briefing"
+            >
+              ◀ BRIEFING
+            </button>
+          )}
 
           {/* Help Guide HUD Button */}
           <button 
@@ -378,9 +380,11 @@ export default function HomePage() {
           </div>
 
           {/* Quick jump to analytics page */}
-          <div className="scroll-indicator scroll-indicator--top-right" onClick={() => scrollToSection(2)}>
-            <span>ML ANALYSIS REPORT ➔</span>
-          </div>
+          {activeSection !== 'audit' && (
+            <div className="scroll-indicator scroll-indicator--top-right" onClick={() => scrollToSection(2)}>
+              <span>ML ANALYSIS REPORT ➔</span>
+            </div>
+          )}
         </section>
 
 
