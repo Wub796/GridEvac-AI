@@ -315,7 +315,7 @@ export default function CesiumViewer() {
           });
 
           // --- Animated 3D Holographic Indicators ---
-          const hoverOffset = Math.sin(tickT * 2.2) * 15.0; // hover up and down ±15m (scaled up)
+          const hoverOffset = Math.sin(tickT * 2.2) * 30.0; // hover up and down ±30m (scaled up)
           const rotAngleA = tickT * 1.5; // rotate clockwise
           const rotAngleB = -tickT * 1.0; // rotate counter-clockwise
 
@@ -323,9 +323,9 @@ export default function CesiumViewer() {
             if (!ind) return;
             const newHeight = ind.baseHeight + hoverOffset;
 
-            // Update positions (using upscaled 15m offsets for 30m length cones)
-            const posLower = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight - 15.0);
-            const posUpper = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight + 15.0);
+            // Update positions (using upscaled 60m offsets for 120m length cones)
+            const posLower = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight - 60.0);
+            const posUpper = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight + 60.0);
             const posCenter = Cesium.Cartesian3.fromDegrees(ind.lon, ind.lat, newHeight);
 
             if (ind.lowerCone) ind.lowerCone.position = new Cesium.ConstantProperty(posLower);
@@ -839,12 +839,12 @@ export default function CesiumViewer() {
 
     if (orig) {
       originEntityRef.current = viewer.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(orig.lon, orig.lat, orig.elevation + 20),
+        position: Cesium.Cartesian3.fromDegrees(orig.lon, orig.lat, orig.elevation + 60),
         point: {
-          pixelSize:    16,
+          pixelSize:    32,
           color:        Cesium.Color.fromCssColorString('#00e5ff'),
           outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 3,
+          outlineWidth: 4,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
@@ -854,7 +854,7 @@ export default function CesiumViewer() {
           outlineColor:    Cesium.Color.BLACK,
           outlineWidth:    2,
           style:           Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset:     new Cesium.Cartesian2(0, -28),
+          pixelOffset:     new Cesium.Cartesian2(0, -45),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -862,12 +862,12 @@ export default function CesiumViewer() {
 
     if (dest) {
       destEntityRef.current = viewer.entities.add({
-        position: Cesium.Cartesian3.fromDegrees(dest.lon, dest.lat, dest.elevation + 20),
+        position: Cesium.Cartesian3.fromDegrees(dest.lon, dest.lat, dest.elevation + 60),
         point: {
-          pixelSize:    16,
+          pixelSize:    32,
           color:        Cesium.Color.fromCssColorString('#ff6b35'),
           outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 3,
+          outlineWidth: 4,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
         label: {
@@ -877,7 +877,7 @@ export default function CesiumViewer() {
           outlineColor:    Cesium.Color.BLACK,
           outlineWidth:    2,
           style:           Cesium.LabelStyle.FILL_AND_OUTLINE,
-          pixelOffset:     new Cesium.Cartesian2(0, -28),
+          pixelOffset:     new Cesium.Cartesian2(0, -45),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -1037,7 +1037,7 @@ export default function CesiumViewer() {
 function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): number[] {
   const points: number[] = [];
   const segments = 10;
-  const sag = 12.0; // 12 metres sag in the middle for the upscaled pylons
+  const sag = 30.0; // 30 metres sag in the middle for the upscaled pylons
   
   const nodeA = cityData.nodes.find(n => n.id === subA.node);
   const nodeB = cityData.nodes.find(n => n.id === subB.node);
@@ -1045,8 +1045,8 @@ function generateCatenaryPoints(subA: any, subB: any, cityData: CityData): numbe
   const elevA = nodeA.elevation ?? 10.0;
   const elevB = nodeB.elevation ?? 10.0;
   
-  const heightA = elevA + 90.0; // Adjusted top arm height for catenary (upscaled)
-  const heightB = elevB + 90.0;
+  const heightA = elevA + 360.0; // Adjusted top arm height for catenary (upscaled pylon cross-arm height is 360m)
+  const heightB = elevB + 360.0;
   
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
@@ -1110,7 +1110,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     // Label
     viewer.entities.add({
       id: `sub-label-${sub.id}`,
-      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, elev + 115),
+      position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, elev + 450),
       label: {
         text:            sub.name,
         font:            '600 11px Rajdhani, sans-serif',
@@ -1160,7 +1160,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
     viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(exitNode.lon, exitNode.lat, exitNode.elevation),
       ellipsoid: {
-        radii: new Cesium.Cartesian3(80.0, 80.0, 50.0), // 80m radius, 50m height
+        radii: new Cesium.Cartesian3(400.0, 400.0, 240.0), // 400m radius, 240m height (upscaled)
         slicePartitions: 12,
         stackPartitions: 12,
         material: Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.12),
@@ -1180,18 +1180,18 @@ function renderStaticCity(viewer: any, cityData: CityData): {
 
     viewer.entities.add({
       id: `node-${node.id}`,
-      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, node.elevation + 7.5),
+      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, node.elevation + 90.0),
       cylinder: {
-        length: 15.0,
+        length: 180.0,
         topRadius: 0.0,
-        bottomRadius: 4.5,
+        bottomRadius: 40.0,
         material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
         outline: true,
         outlineColor: new Cesium.ConstantProperty(color),
         outlineWidth: 1.2,
       },
       point: {
-        pixelSize: isExit ? 12 : 8,
+        pixelSize: isExit ? 16 : 10,
         color: color,
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 1.0,
@@ -1205,7 +1205,7 @@ function renderStaticCity(viewer: any, cityData: CityData): {
         outlineColor: Cesium.Color.BLACK,
         outlineWidth: 1.5,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new Cesium.Cartesian2(0, -18),
+        pixelOffset: new Cesium.Cartesian2(0, -90),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1000.0),
       }
@@ -1223,9 +1223,9 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   // 1. Central transformer vault (glow box) sitting on ground
   const transformer = viewer.entities.add({
     id: `node-${sub.node}-part-transformer`,
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 10.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 50.0),
     box: {
-      dimensions: new Cesium.Cartesian3(20.0, 20.0, 20.0),
+      dimensions: new Cesium.Cartesian3(100.0, 100.0, 100.0),
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.25)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
@@ -1234,7 +1234,7 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   });
 
   // 2. Structural pylon legs (4 corner columns slanting up)
-  const offset = 0.00015; // approx 15 meters offset
+  const offset = 0.0006; // approx 60 meters offset
   const legOffsets = [
     { x: -offset, y: -offset },
     { x: offset, y: -offset },
@@ -1244,59 +1244,59 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
   const legs = legOffsets.map((off, idx) => {
     return viewer.entities.add({
       id: `node-${sub.node}-part-leg-${idx}`,
-      position: Cesium.Cartesian3.fromDegrees(lon + off.x, lat + off.y, elev + 45.0),
+      position: Cesium.Cartesian3.fromDegrees(lon + off.x, lat + off.y, elev + 180.0),
       cylinder: {
-        length: 90.0,
-        topRadius: 1.0,
-        bottomRadius: 3.0,
+        length: 360.0,
+        topRadius: 4.0,
+        bottomRadius: 12.0,
         material: new Cesium.ColorMaterialProperty(color.withAlpha(0.35)),
         outline: true,
         outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.7)),
-        outlineWidth: 1.0,
+        outlineWidth: 2.0,
       }
     });
   });
 
   // 3. High-voltage bushings (insulator cones on top of transformer box)
-  const insulatorOffsets = [-6.0, 0, 6.0];
+  const insulatorOffsets = [-30.0, 0, 30.0];
   const insulators = insulatorOffsets.map((offX, idx) => {
     return viewer.entities.add({
       id: `node-${sub.node}-part-insulator-${idx}`,
-      position: Cesium.Cartesian3.fromDegrees(lon + offX * 0.00003, lat, elev + 27.5),
+      position: Cesium.Cartesian3.fromDegrees(lon + offX * 0.00006, lat, elev + 135.0),
       cylinder: {
-        length: 15.0,
-        topRadius: 0.5,
-        bottomRadius: 2.0,
+        length: 70.0,
+        topRadius: 2.0,
+        bottomRadius: 8.0,
         material: new Cesium.ColorMaterialProperty(color.withAlpha(0.55)),
         outline: true,
         outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
-        outlineWidth: 1.0,
+        outlineWidth: 2.0,
       }
     });
   });
 
-  // 4. Structural cross-arm support beam at top (90 meters high)
+  // 4. Structural cross-arm support beam at top (360 meters high)
   const crossArm = viewer.entities.add({
     id: `node-${sub.node}-part-crossArm`,
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 90.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 360.0),
     box: {
-      dimensions: new Cesium.Cartesian3(45.0, 3.0, 2.5),
+      dimensions: new Cesium.Cartesian3(200.0, 12.0, 10.0),
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.5)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.8)),
-      outlineWidth: 1.5,
+      outlineWidth: 3.0,
     }
   });
 
   // 5. Warning indicator beacon at the very top center of the cross-arm
   const beacon = viewer.entities.add({
     id: `node-${sub.node}-part-beacon`,
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 92.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, elev + 368.0),
     point: {
-      pixelSize: 8,
+      pixelSize: 16,
       color: color,
       outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 1.5,
+      outlineWidth: 3.0,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     }
   });
@@ -1312,14 +1312,14 @@ function renderSubstationStructure(viewer: any, sub: any, colorHex: string, elev
 
 function createHolographicIndicator(viewer: any, lon: number, lat: number, elev: number, colorHex: string) {
   const color = Cesium.Color.fromCssColorString(colorHex);
-  const baseHeight = elev + 140.0; // Float 140 meters above base (50m above upscaled top cross-arm)
- 
+  const baseHeight = elev + 500.0; // Float 500 meters above base (140m above upscaled top cross-arm)
+  
   // Lower cone pointing up (apex at bottom, base at top)
   const lowerCone = viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight - 15.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight - 60.0),
     cylinder: {
-      length: 30.0,
-      topRadius: 10.0,
+      length: 120.0,
+      topRadius: 40.0,
       bottomRadius: 0.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
       outline: true,
@@ -1330,11 +1330,11 @@ function createHolographicIndicator(viewer: any, lon: number, lat: number, elev:
  
   // Upper cone pointing down (apex at top, base at bottom)
   const upperCone = viewer.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight + 15.0),
+    position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight + 30.0),
     cylinder: {
-      length: 30.0,
+      length: 60.0,
       topRadius: 0.0,
-      bottomRadius: 10.0,
+      bottomRadius: 20.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.65)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(Cesium.Color.WHITE.withAlpha(0.85)),
@@ -1346,8 +1346,8 @@ function createHolographicIndicator(viewer: any, lon: number, lat: number, elev:
   const innerRing = viewer.entities.add({
     position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
     ellipse: {
-      semiMajorAxis: 25.0,
-      semiMinorAxis: 12.5,
+      semiMajorAxis: 50.0,
+      semiMinorAxis: 25.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.08)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color),
@@ -1360,8 +1360,8 @@ function createHolographicIndicator(viewer: any, lon: number, lat: number, elev:
   const outerRing = viewer.entities.add({
     position: Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight),
     ellipse: {
-      semiMajorAxis: 35.0,
-      semiMinorAxis: 20.0,
+      semiMajorAxis: 70.0,
+      semiMinorAxis: 40.0,
       material: new Cesium.ColorMaterialProperty(color.withAlpha(0.03)),
       outline: true,
       outlineColor: new Cesium.ConstantProperty(color.withAlpha(0.6)),
