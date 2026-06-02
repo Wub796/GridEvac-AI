@@ -199,11 +199,17 @@ export default function CesiumViewer() {
         }
 
         // Dark desaturated base imagery to match the high-tech sci-fi blueprint aesthetic
-        if (viewer.imageryLayers.length > 0) {
-          const baseLayer = viewer.imageryLayers.get(0);
-          baseLayer.brightness = 0.22;
-          baseLayer.contrast = 1.4;
-          baseLayer.saturation = 0.02;
+        try {
+          if (viewer.imageryLayers && viewer.imageryLayers.length > 0) {
+            const baseLayer = viewer.imageryLayers.get(0);
+            if (baseLayer) {
+              baseLayer.brightness = 0.22;
+              baseLayer.contrast = 1.4;
+              baseLayer.saturation = 0.02;
+            }
+          }
+        } catch (e) {
+          console.warn('[GridEvac] Failed to apply base imagery filters:', e);
         }
 
         viewerRef.current = viewer;
@@ -218,16 +224,14 @@ export default function CesiumViewer() {
         // 3-D OSM Buildings (Houston has excellent coverage)
         try {
           const buildings = await Cesium.createOsmBuildingsAsync();
-          buildings.style = new Cesium.Cesium3DTileStyle({
-            color: {
-              conditions: [
-                ['true', "color('rgba(30, 60, 95, 0.45)')"]
-              ]
-            }
-          });
-          viewer.scene.primitives.add(buildings);
-          buildingsRef.current = buildings;
-          buildings.show = useSimulationStore.getState().showBuildings;
+          if (buildings) {
+            buildings.style = new Cesium.Cesium3DTileStyle({
+              color: 'color("#1e3c5f", 0.45)' // clean standard Cesium color expression
+            });
+            viewer.scene.primitives.add(buildings);
+            buildingsRef.current = buildings;
+            buildings.show = useSimulationStore.getState().showBuildings;
+          }
         } catch (e) {
           console.warn('[GridEvac] OSM Buildings unavailable:', e);
         }
