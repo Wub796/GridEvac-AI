@@ -261,17 +261,25 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   // Fluctuate telemetry values dynamically to show live monitoring
   triggerLiveTick: () => {
-    const { route, substationLoads, gridFrequency, cascadedSubstations, failedSubstations } = get();
+    const { route, substationLoads, gridFrequency, cascadedSubstations, failedSubstations, cityData } = get();
     if (!route || Object.keys(substationLoads).length === 0) return;
 
     // 1. Fluctuates loads slightly (±0.2 to ±1.2 MW) for active substations
     const nextLoads = { ...substationLoads };
+    const nextOverloaded: number[] = [];
+
     Object.keys(nextLoads).forEach((key) => {
       const id = parseInt(key, 10);
       const isFailed = failedSubstations.includes(id) || cascadedSubstations.includes(id);
       if (!isFailed) {
         const delta = (Math.random() - 0.5) * 1.8;
         nextLoads[id] = Math.max(10.0, parseFloat((nextLoads[id] + delta).toFixed(1)));
+
+        // Dynamic overload check against substation capacity
+        const sub = cityData?.substations.find(s => s.id === id);
+        if (sub && nextLoads[id] > sub.capacity_mw) {
+          nextOverloaded.push(id);
+        }
       }
     });
 
@@ -292,6 +300,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
     set((state) => ({
       substationLoads: nextLoads,
+      overloadedSubstations: nextOverloaded,
       gridFrequency: nextFreq,
       usgsGageHeight: parseFloat(nextGage.toFixed(2)),
       surfaceTemp: parseFloat(nextTemp.toFixed(1)),
