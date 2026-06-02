@@ -24,29 +24,29 @@ import numpy as np
 from typing import Dict, List, Tuple
 
 # ── Geographic parameters ──────────────────────────────────────────────────────
-CENTER_LAT: float = 29.7604      # Downtown Houston
-CENTER_LON: float = -95.3698
+CENTER_LAT: float = 29.7700      # Center of expanded HISD / TX-18 grid
+CENTER_LON: float = -95.3800
 
 GRID_ROWS: int = 15
 GRID_COLS: int = 15
 
-LAT_STEP: float = 0.0006        # ≈ 67 m per row (N–S)
-LON_STEP: float = 0.0007        # ≈ 64 m per col (E–W)
+LAT_STEP: float = 0.0070        # ≈ 780 m per row (covers inner Loop 610)
+LON_STEP: float = 0.0080        # ≈ 770 m per col (covers 77019/Montrose to East Loop)
 
 # ── Elevation parameters ───────────────────────────────────────────────────────
 BASE_ELEV: float  = 9.0         # metres ASL
-ROW_RISE:  float  = 0.4         # m gained per row going north
-COL_RISE:  float  = 0.3         # m gained per col going west
+ROW_RISE:  float  = 0.5         # m gained per row going north
+COL_RISE:  float  = 0.6         # m gained per col going west
 NOISE_AMP: float  = 0.8         # sinusoidal noise amplitude
 
 # ── Substation definitions ─────────────────────────────────────────────────────
 #   node  = row*GRID_COLS + col
 SUBSTATION_DEFS: List[Dict] = [
-    {"id": 0, "node": 32,  "name": "Main Street Substation",    "radius": 2.8, "capacity_mw": 150.0, "base_load_mw": 90.0},
-    {"id": 1, "node": 56,  "name": "Midtown Substation",        "radius": 3.1, "capacity_mw": 120.0, "base_load_mw": 85.0},
+    {"id": 0, "node": 32,  "name": "Third Ward Substation",     "radius": 2.8, "capacity_mw": 150.0, "base_load_mw": 90.0},
+    {"id": 1, "node": 56,  "name": "River Oaks Substation",     "radius": 3.1, "capacity_mw": 120.0, "base_load_mw": 85.0},
     {"id": 2, "node": 112, "name": "Downtown Core Substation",  "radius": 3.4, "capacity_mw": 250.0, "base_load_mw": 180.0},
-    {"id": 3, "node": 168, "name": "Heights Substation",        "radius": 2.6, "capacity_mw": 110.0, "base_load_mw": 70.0},
-    {"id": 4, "node": 192, "name": "Montrose Substation",       "radius": 3.0, "capacity_mw": 130.0, "base_load_mw": 95.0},
+    {"id": 3, "node": 168, "name": "Fifth Ward Substation",     "radius": 2.6, "capacity_mw": 110.0, "base_load_mw": 70.0},
+    {"id": 4, "node": 192, "name": "Heights Substation",        "radius": 3.0, "capacity_mw": 130.0, "base_load_mw": 95.0},
 ]
 
 # ── Transmission lines (power lines) mesh ──────────────────────────────────────
