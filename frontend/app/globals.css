@@ -927,6 +927,64 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   color: #fff;
 }
 
+/* ── Mobile layout ── */
+@media (max-width: 768px) {
+  .hud-title {
+    top: max(12px, env(safe-area-inset-top));
+    left: 16px;
+  }
+  .hud-title h1 { font-size: 22px; letter-spacing: 2px; }
+  .hud-title p { font-size: 9px; letter-spacing: 1px; max-width: 190px; }
+
+  .briefing-content,
+  .audit-content {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 20px;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+  }
+  .briefing-left-panel,
+  .audit-left-panel { gap: 16px; }
+  .briefing-right-panel { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .hud-metric-card { padding: 12px; }
+  .metric-num { font-size: 24px; }
+  .metric-footer { font-size: 8px; }
+  .hero-subtitle { font-size: 12px; letter-spacing: 1.5px; }
+  .hero-title { font-size: 38px !important; }
+  .briefing-summary-card { padding: 18px; }
+  .briefing-summary-card p { font-size: 13px; }
+  .briefing-actions,
+  .audit-actions { flex-wrap: wrap; }
+  .briefing-actions > button,
+  .audit-actions > button { flex: 1 1 140px; }
+  .cta-btn-glow,
+  .secondary-btn { min-height: 44px; padding: 10px 14px; font-size: 12px; }
+  .scroll-indicator { bottom: max(14px, env(safe-area-inset-bottom)); font-size: 9px; letter-spacing: 1px; }
+  .scroll-indicator--top-right,
+  .tutorial-trigger-btn,
+  .briefing-trigger-btn { right: 16px; top: auto; bottom: max(14px, env(safe-area-inset-bottom)); padding: 10px 12px; font-size: 10px; }
+  .tutorial-trigger-btn { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 48px); }
+
+  .audit-title { font-size: 28px; }
+  .audit-right-panel { min-width: 0; }
+  .audit-table-wrapper { max-width: 100%; overflow-x: auto; }
+  .audit-table { min-width: 620px; }
+  .tutorial-card { width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - 24px); overflow-y: auto; padding: 20px; gap: 16px; }
+  .tutorial-header h2 { font-size: 19px; }
+  .tutorial-body { font-size: 13px; }
+  .tutorial-footer { gap: 12px; align-items: stretch; }
+  .tutorial-btn-skip,
+  .tutorial-btn { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
 /* ── HUD Back to Briefing Button ── */
 .briefing-trigger-btn {
   position: fixed;
@@ -962,6 +1020,4 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   box-shadow: 0 0 15px rgba(0, 229, 255, 0.35);
   transform: translateY(-1px);
 }
-
-
 

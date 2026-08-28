@@ -160,7 +160,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+              <div className="briefing-actions" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <button 
                   className="cta-btn-glow" 
                   onClick={() => scrollToSection(1)}
@@ -439,7 +439,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '16px', marginTop: '20px' }}>
+              <div className="audit-actions" style={{ display: 'flex', gap: '16px', marginTop: '20px' }}>
                 <button 
                   className="secondary-btn" 
                   onClick={() => scrollToSection(0)}

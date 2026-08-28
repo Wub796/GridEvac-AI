@@ -5,8 +5,8 @@
   position: fixed;
   top: 0;
   right: 0;
-  width: 340px;
-  height: 100vh;
+  width: min(340px, 100vw);
+  height: 100dvh;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
@@ -83,6 +83,42 @@
 .online  { background: #00e676; box-shadow: 0 0 8px #00e676; }
 .offline { background: #ff1744; box-shadow: 0 0 8px #ff1744; animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0.3; } }
+
+.quickActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(0, 200, 255, 0.08);
+}
+.quickAction,
+.quickActionPrimary {
+  min-height: 40px;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--font-rajdhani), sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.quickAction {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(0, 229, 255, 0.2);
+  color: rgba(224, 242, 255, 0.8);
+}
+.quickActionPrimary {
+  background: rgba(0, 229, 255, 0.1);
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  color: #00e5ff;
+}
+.quickAction:hover,
+.quickActionPrimary:hover {
+  background: rgba(0, 229, 255, 0.16);
+  border-color: #00e5ff;
+}
 
 /* ── Banners ── */
 .warningBanner {
