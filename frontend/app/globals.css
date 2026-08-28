@@ -49,6 +49,10 @@ html, body {
   display: none !important;
 }
 
+.mobile-utility-bar,
+.briefing-card-kicker,
+.briefing-panel-label { display: none; }
+
 /* ── HUD overlay title ── */
 .hud-title {
   position: fixed;
@@ -929,6 +933,29 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
 
 /* ── Mobile layout ── */
 @media (max-width: 768px) {
+  .mobile-utility-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 950;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+    background: rgba(2, 9, 18, 0.82);
+    border-bottom: 1px solid rgba(0, 229, 255, 0.14);
+    backdrop-filter: blur(14px);
+    font-family: var(--font-rajdhani);
+    font-size: 11px;
+    letter-spacing: 1.2px;
+  }
+  .mobile-utility-brand { color: var(--text-primary); font-weight: 700; }
+  .mobile-utility-brand b { color: var(--accent-cyan); }
+  .mobile-utility-status { color: var(--accent-amber); font-size: 9px; }
+  .mobile-utility-status.is-online { color: var(--accent-green); }
+  .mobile-utility-status i { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; }
+
   .hud-title {
     top: max(12px, env(safe-area-inset-top));
     left: 16px;
@@ -938,6 +965,7 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
 
   .briefing-content,
   .audit-content {
+    padding-top: max(58px, env(safe-area-inset-top) + 48px);
     width: 100%;
     max-height: calc(100dvh - 24px);
     overflow-y: auto;
@@ -956,6 +984,11 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   .hero-subtitle { font-size: 12px; letter-spacing: 1.5px; }
   .hero-title { font-size: 38px !important; }
   .briefing-summary-card { padding: 18px; }
+  .briefing-card-kicker,
+  .briefing-panel-label { display: flex; align-items: center; gap: 8px; color: var(--accent-cyan); font: 600 9px var(--font-rajdhani); letter-spacing: 1.4px; }
+  .briefing-card-kicker { margin-bottom: 10px; }
+  .briefing-card-kicker span { flex: 1; height: 1px; background: rgba(0, 229, 255, 0.25); }
+  .briefing-panel-label { margin-bottom: -4px; }
   .briefing-summary-card p { font-size: 13px; }
   .briefing-actions,
   .audit-actions { flex-wrap: wrap; }

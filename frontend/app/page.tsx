@@ -44,6 +44,7 @@ export default function HomePage() {
     substationLoads,
     route,
     cityData,
+    backendOnline,
     failedSubstations,
     overloadedSubstations,
     cascadedSubstations,
@@ -115,11 +116,17 @@ export default function HomePage() {
       <div className="corner corner--bl" aria-hidden="true" />
 
       {/* ── Scroll Snapping Container ── */}
-      <div 
+      <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
         className="scroll-container"
       >
+        <div className="mobile-utility-bar" aria-label="Quick status">
+          <span className="mobile-utility-brand">GRIDEVAC <b>AI</b></span>
+          <span className={`mobile-utility-status ${backendOnline ? 'is-online' : ''}`}>
+            <i aria-hidden="true" /> {backendOnline ? 'SYSTEM ONLINE' : 'OFFLINE MODE'}
+          </span>
+        </div>
         
         {/* ==========================================
             SECTION 1: TACTICAL BRIEFING LANDING PAGE
@@ -139,6 +146,7 @@ export default function HomePage() {
               </header>
               
               <div className="briefing-summary-card">
+                <div className="briefing-card-kicker"><span /> LIVE SITUATION REPORT <span /></div>
                 <h3>Crisis Assessment Brief</h3>
                 <p>
                   Severe storm fronts over Harris County have initiated localized flash flooding and power grid overloading. 
@@ -179,6 +187,7 @@ export default function HomePage() {
             </div>
 
             <div className="briefing-right-panel">
+              <div className="briefing-panel-label">TODAY&apos;S OPERATIONS SNAPSHOT</div>
               <div className="hud-metric-card">
                 <span className="metric-label">USGS Buffalo Bayou Gage</span>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
