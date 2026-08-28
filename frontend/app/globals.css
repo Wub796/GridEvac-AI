@@ -16,8 +16,6 @@
   --accent-green:  #00ff88;
   --text-primary:  #e0f2ff;
   --text-muted:    rgba(160, 210, 240, 0.6);
-  --surface-panel: rgba(5, 12, 26, 0.72);
-  --surface-edge: rgba(0, 229, 255, 0.16);
   --focus-ring: 0 0 0 2px rgba(2, 9, 18, 0.9), 0 0 0 4px rgba(0, 229, 255, 0.55);
 
   --font-inter:    'Inter', system-ui, -apple-system, sans-serif;
@@ -763,10 +761,6 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   z-index: 10;
   pointer-events: auto; /* Enable clicks across snapping boundaries */
 }
-.scroll-indicator:focus-visible {
-  outline: none;
-}
-
 
 .scroll-indicator:hover {
   opacity: 1;
