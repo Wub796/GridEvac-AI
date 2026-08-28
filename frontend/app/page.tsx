@@ -98,7 +98,7 @@ export default function HomePage() {
   const riskLevel = route?.risk_level ?? 'LOW';
   const anonScore = route?.anomaly_score ?? 0.04;
 
-  const totalOutages = failedSubstations.length + cascadedSubstations.length;
+  const totalOutages = new Set([...failedSubstations, ...cascadedSubstations]).size;
 
   return (
     <main style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -154,7 +154,7 @@ export default function HomePage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                     <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase' }}>Anomaly Index</span>
                     <span className="threat-badge" style={{ borderColor: 'rgba(0, 229, 255, 0.4)', color: '#00e5ff' }}>
-                      ⚡ {(anonScore * 100).toFixed(0)}% STRstrain
+                      ⚡ {(anonScore * 100).toFixed(0)}% STRESS
                     </span>
                   </div>
                 </div>

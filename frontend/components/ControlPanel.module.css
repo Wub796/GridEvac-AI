@@ -12,12 +12,13 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  background: rgba(5, 12, 26, 0.92);
+  background: linear-gradient(180deg, rgba(7, 18, 36, 0.96), rgba(3, 9, 20, 0.94));
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   border-left: 1px solid rgba(0, 200, 255, 0.18);
   box-shadow: -8px 0 60px rgba(0, 0, 0, 0.6),
-              inset 1px 0 0 rgba(255, 255, 255, 0.04);
+              inset 1px 0 0 rgba(255, 255, 255, 0.04),
+              inset 0 1px 0 rgba(0, 229, 255, 0.06);
   font-family: var(--font-inter), 'Inter', sans-serif;
   z-index: 1000;
   scrollbar-width: thin;
@@ -306,6 +307,18 @@
   transform: translateY(-1px);
 }
 .calcBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.calcBtn:focus-visible,
+.clearBtn:focus-visible,
+.toggle:focus-visible,
+.nodeSelect:focus-visible,
+.scenarioBtn:focus-visible,
+.scenarioBtnClear:focus-visible,
+.flyToBtn:focus-visible,
+.connectBtn:focus-visible,
+.toggleCheckbox:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(5, 12, 26, 0.95), 0 0 0 4px rgba(0, 229, 255, 0.55);
+}
 .calcBtnLoading { opacity: 0.7; }
 
 .spinner {
@@ -377,12 +390,22 @@
 }
 .statCard {
   display: flex;
+  position: relative;
+  overflow: hidden;
   flex-direction: column;
   align-items: center;
   padding: 10px 6px;
   border-radius: 6px;
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.07);
+}
+.statCard::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.45), transparent);
+  opacity: 0.65;
 }
 .statNum {
   font-family: var(--font-rajdhani), 'Rajdhani', sans-serif;
