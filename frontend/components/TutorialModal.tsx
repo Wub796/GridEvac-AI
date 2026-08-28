@@ -36,7 +36,7 @@ const STEPS = [
     title: "Elevated Evacuation Routing",
     content: (
       <>
-        Pick your <strong>Origin and Destination Waypoints</strong> (Nodes 0 to 99) in the sidebar. Click <strong>Calculate Route</strong>. The engine computes the safest path, avoiding flooded zones and penalizing blackouts, shown as a <strong>pulsing green elevated corridor</strong> on the map.
+        Pick your <strong>Origin Waypoint</strong> (Nodes 0 to 224) in the sidebar; the system selects the safest exit automatically. Click <strong>Calculate Route</strong>. The engine computes the safest path, avoiding flooded zones and penalizing blackouts, shown as a <strong>pulsing green elevated corridor</strong> on the map.
       </>
     )
   },

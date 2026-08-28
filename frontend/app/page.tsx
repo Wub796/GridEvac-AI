@@ -44,6 +44,7 @@ export default function HomePage() {
     substationLoads,
     route,
     cityData,
+    backendOnline,
     failedSubstations,
     overloadedSubstations,
     cascadedSubstations,
@@ -98,7 +99,7 @@ export default function HomePage() {
   const riskLevel = route?.risk_level ?? 'LOW';
   const anonScore = route?.anomaly_score ?? 0.04;
 
-  const totalOutages = failedSubstations.length + cascadedSubstations.length;
+  const totalOutages = new Set([...failedSubstations, ...cascadedSubstations]).size;
 
   return (
     <main style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -115,11 +116,17 @@ export default function HomePage() {
       <div className="corner corner--bl" aria-hidden="true" />
 
       {/* ── Scroll Snapping Container ── */}
-      <div 
+      <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
         className="scroll-container"
       >
+        <div className="mobile-utility-bar" aria-label="Quick status">
+          <span className="mobile-utility-brand">GRIDEVAC <b>AI</b></span>
+          <span className={`mobile-utility-status ${backendOnline ? 'is-online' : ''}`}>
+            <i aria-hidden="true" /> {backendOnline ? 'SYSTEM ONLINE' : 'OFFLINE MODE'}
+          </span>
+        </div>
         
         {/* ==========================================
             SECTION 1: TACTICAL BRIEFING LANDING PAGE
@@ -139,6 +146,7 @@ export default function HomePage() {
               </header>
               
               <div className="briefing-summary-card">
+                <div className="briefing-card-kicker"><span /> LIVE SITUATION REPORT <span /></div>
                 <h3>Crisis Assessment Brief</h3>
                 <p>
                   Severe storm fronts over Harris County have initiated localized flash flooding and power grid overloading. 
@@ -154,13 +162,13 @@ export default function HomePage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                     <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase' }}>Anomaly Index</span>
                     <span className="threat-badge" style={{ borderColor: 'rgba(0, 229, 255, 0.4)', color: '#00e5ff' }}>
-                      ⚡ {(anonScore * 100).toFixed(0)}% STRstrain
+                      ⚡ {(anonScore * 100).toFixed(0)}% STRESS
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+              <div className="briefing-actions" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <button 
                   className="cta-btn-glow" 
                   onClick={() => scrollToSection(1)}
@@ -179,6 +187,7 @@ export default function HomePage() {
             </div>
 
             <div className="briefing-right-panel">
+              <div className="briefing-panel-label">TODAY&apos;S OPERATIONS SNAPSHOT</div>
               <div className="hud-metric-card">
                 <span className="metric-label">USGS Buffalo Bayou Gage</span>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
@@ -439,7 +448,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '16px', marginTop: '20px' }}>
+              <div className="audit-actions" style={{ display: 'flex', gap: '16px', marginTop: '20px' }}>
                 <button 
                   className="secondary-btn" 
                   onClick={() => scrollToSection(0)}

@@ -8,7 +8,7 @@ export interface NodeData {
   id: number;
   lat: number;
   lon: number;
-  elevation: number;   // metres ASL (synthetic)
+  elevation: number;
   row: number;
   col: number;
 }

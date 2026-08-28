@@ -27,6 +27,7 @@ const RISK_LABELS: Record<RiskLevel, string> = {
 
 export default function ControlPanel() {
   const [searchNodeInput, setSearchNodeInput] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const {
     floodLevel, setFloodLevel,
@@ -169,6 +170,13 @@ export default function ControlPanel() {
         </div>
       )}
 
+      <section className={styles.quickActions} aria-label="Quick actions">
+        <button className={styles.quickActionPrimary} onClick={() => applyScenario('clear')}>↺ Start fresh</button>
+        <button className={styles.quickAction} onClick={() => setShowAdvanced((visible) => !visible)} aria-expanded={showAdvanced}>
+          {showAdvanced ? '⌃ Hide tools' : '⌄ More tools'}
+        </button>
+      </section>
+
       {/* ── Section: Disaster Scenario Presets ── */}
       {backendOnline && (
         <section className={styles.section} style={{ background: 'rgba(255, 145, 0, 0.02)', borderBottom: '1px solid rgba(255, 145, 0, 0.12)' }}>
@@ -281,7 +289,7 @@ export default function ControlPanel() {
       </section>
 
       {/* ── Section: GIS Layer Options ── */}
-      {backendOnline && (
+      {backendOnline && showAdvanced && (
         <section className={styles.section}>
           <h3 className={styles.sectionTitle}>
             <span className={styles.sectionIcon}>👁</span> Map Display Options

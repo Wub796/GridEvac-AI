@@ -16,6 +16,7 @@
   --accent-green:  #00ff88;
   --text-primary:  #e0f2ff;
   --text-muted:    rgba(160, 210, 240, 0.6);
+  --focus-ring: 0 0 0 2px rgba(2, 9, 18, 0.9), 0 0 0 4px rgba(0, 229, 255, 0.55);
 
   --font-inter:    'Inter', system-ui, -apple-system, sans-serif;
   --font-rajdhani: 'Rajdhani', 'Inter', sans-serif;
@@ -47,6 +48,10 @@ html, body {
 .cesium-credit-expand-link {
   display: none !important;
 }
+
+.mobile-utility-bar,
+.briefing-card-kicker,
+.briefing-panel-label { display: none; }
 
 /* ── HUD overlay title ── */
 .hud-title {
@@ -616,7 +621,7 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
 }
 
 .cta-btn-glow {
-  background: var(--accent-cyan);
+  background: linear-gradient(135deg, #00e5ff 0%, #00b8cc 100%);
   border: 1px solid var(--accent-cyan);
   color: var(--bg-void);
   font-family: var(--font-rajdhani);
@@ -638,7 +643,7 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
 }
 
 .secondary-btn {
-  background: transparent;
+  background: rgba(0, 229, 255, 0.035);
   border: 1px solid rgba(0, 229, 255, 0.4);
   color: var(--accent-cyan);
   font-family: var(--font-rajdhani);
@@ -649,6 +654,15 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   padding: 12px 24px;
   border-radius: 4px;
   transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.secondary-btn:focus-visible,
+.cta-btn-glow:focus-visible,
+.tutorial-trigger-btn:focus-visible,
+.briefing-trigger-btn:focus-visible,
+.scroll-indicator:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .secondary-btn:hover {
@@ -732,6 +746,8 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
 /* ── Scroll Indicators ── */
 .scroll-indicator {
   position: absolute;
+  cursor: pointer;
+
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
@@ -915,6 +931,93 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   color: #fff;
 }
 
+/* ── Mobile layout ── */
+@media (max-width: 768px) {
+  .mobile-utility-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 950;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+    background: rgba(2, 9, 18, 0.82);
+    border-bottom: 1px solid rgba(0, 229, 255, 0.14);
+    backdrop-filter: blur(14px);
+    font-family: var(--font-rajdhani);
+    font-size: 11px;
+    letter-spacing: 1.2px;
+  }
+  .mobile-utility-brand { color: var(--text-primary); font-weight: 700; }
+  .mobile-utility-brand b { color: var(--accent-cyan); }
+  .mobile-utility-status { color: var(--accent-amber); font-size: 9px; }
+  .mobile-utility-status.is-online { color: var(--accent-green); }
+  .mobile-utility-status i { display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; }
+
+  .hud-title {
+    top: max(12px, env(safe-area-inset-top));
+    left: 16px;
+  }
+  .hud-title h1 { font-size: 22px; letter-spacing: 2px; }
+  .hud-title p { font-size: 9px; letter-spacing: 1px; max-width: 190px; }
+
+  .briefing-content,
+  .audit-content {
+    padding-top: max(58px, env(safe-area-inset-top) + 48px);
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 20px;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+  }
+  .briefing-left-panel,
+  .audit-left-panel { gap: 16px; }
+  .briefing-right-panel { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .hud-metric-card { padding: 12px; }
+  .metric-num { font-size: 24px; }
+  .metric-footer { font-size: 8px; }
+  .hero-subtitle { font-size: 12px; letter-spacing: 1.5px; }
+  .hero-title { font-size: 38px !important; }
+  .briefing-summary-card { padding: 18px; }
+  .briefing-card-kicker,
+  .briefing-panel-label { display: flex; align-items: center; gap: 8px; color: var(--accent-cyan); font: 600 9px var(--font-rajdhani); letter-spacing: 1.4px; }
+  .briefing-card-kicker { margin-bottom: 10px; }
+  .briefing-card-kicker span { flex: 1; height: 1px; background: rgba(0, 229, 255, 0.25); }
+  .briefing-panel-label { margin-bottom: -4px; }
+  .briefing-summary-card p { font-size: 13px; }
+  .briefing-actions,
+  .audit-actions { flex-wrap: wrap; }
+  .briefing-actions > button,
+  .audit-actions > button { flex: 1 1 140px; }
+  .cta-btn-glow,
+  .secondary-btn { min-height: 44px; padding: 10px 14px; font-size: 12px; }
+  .scroll-indicator { bottom: max(14px, env(safe-area-inset-bottom)); font-size: 9px; letter-spacing: 1px; }
+  .scroll-indicator--top-right,
+  .tutorial-trigger-btn,
+  .briefing-trigger-btn { right: 16px; top: auto; bottom: max(14px, env(safe-area-inset-bottom)); padding: 10px 12px; font-size: 10px; }
+  .tutorial-trigger-btn { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 48px); }
+
+  .audit-title { font-size: 28px; }
+  .audit-right-panel { min-width: 0; }
+  .audit-table-wrapper { max-width: 100%; overflow-x: auto; }
+  .audit-table { min-width: 620px; }
+  .tutorial-card { width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - 24px); overflow-y: auto; padding: 20px; gap: 16px; }
+  .tutorial-header h2 { font-size: 19px; }
+  .tutorial-body { font-size: 13px; }
+  .tutorial-footer { gap: 12px; align-items: stretch; }
+  .tutorial-btn-skip,
+  .tutorial-btn { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
 /* ── HUD Back to Briefing Button ── */
 .briefing-trigger-btn {
   position: fixed;
@@ -950,6 +1053,4 @@ html, body, button, a, select, input, option, label, textarea, [role="button"], 
   box-shadow: 0 0 15px rgba(0, 229, 255, 0.35);
   transform: translateY(-1px);
 }
-
-
 
