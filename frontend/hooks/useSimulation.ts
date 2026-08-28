@@ -315,11 +315,15 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   // Fluctuate telemetry values dynamically to show live monitoring
   triggerLiveTick: () => {
     const { route, substationLoads, gridFrequency, cascadedSubstations, failedSubstations, cityData } = get();
-    if (!route || Object.keys(substationLoads).length === 0) return;
+    if (!route || !cityData || Object.keys(substationLoads).length === 0) return;
 
     // 1. Fluctuates loads slightly (±0.2 to ±1.2 MW) for active substations
     const nextLoads = { ...substationLoads };
-    const nextOverloaded = [...get().overloadedSubstations];
+    const nextOverloaded = get().overloadedSubstations.filter(id =>
+      cityData.substations.some(sub => sub.id === id) &&
+      !failedSubstations.includes(id) &&
+      !cascadedSubstations.includes(id)
+    );
 
     Object.keys(nextLoads).forEach((key) => {
       const id = parseInt(key, 10);
