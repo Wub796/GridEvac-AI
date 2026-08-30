@@ -1,534 +1,104 @@
 'use client';
 
-/**
- * page.tsx — Refactored scroll-snapping narrative layout for GridEvac AI
- * Snaps between three operations sheets:
- *   - Section 1: Tactical Briefing (Hero Landing Page)
- *   - Section 2: Interactive 3D Evacuation Map (Operations Center)
- *   - Section 3: ML Technical Audit & Substation Analytics
- */
-
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import ControlPanel from '@/components/ControlPanel';
 import TutorialModal from '@/components/TutorialModal';
-import CustomCursor from '@/components/CustomCursor';
 import Sparkline from '@/components/Sparkline';
 
 const CesiumViewer = dynamic(() => import('@/components/CesiumViewer'), {
   ssr: false,
-  loading: () => (
-    <div style={{
-      position: 'absolute', inset: 0,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: '#020912', color: '#00e5ff',
-      fontFamily: 'Rajdhani, sans-serif', fontSize: '18px', letterSpacing: '3px',
-      zIndex: 100
-    }}>
-      INITIALISING 3D MAP…
-    </div>
-  ),
+  loading: () => <div className="map-loading">Loading live geospatial operations map…</div>,
 });
 
+const zones = [
+  { name: 'Downtown', detail: 'Harris County · Zone 01', status: 'MONITOR', tone: 'cyan' },
+  { name: 'East Houston', detail: 'Harris County · Zone 04', status: 'READY', tone: 'green' },
+  { name: 'Buffalo Bayou', detail: 'Harris County · Zone 06', status: 'WATCH', tone: 'amber' },
+];
+
 export default function HomePage() {
-  const { 
-    fetchCityData, 
-    triggerLiveTick, 
-    liveLogs, 
-    activeSection, 
-    setActiveSection,
-    usgsGageHeight,
-    surfaceTemp,
-    gridFrequency,
-    substationLoads,
-    route,
-    cityData,
-    backendOnline,
-    failedSubstations,
-    overloadedSubstations,
-    cascadedSubstations,
-    frequencyHistory,
-    gageHistory
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const {
+    fetchCityData, triggerLiveTick, activeSection, setActiveSection,
+    route, backendOnline, gridFrequency, usgsGageHeight, surfaceTemp,
+    failedSubstations, overloadedSubstations, cascadedSubstations,
+    frequencyHistory, gageHistory, cityData,
   } = useSimulationStore();
 
-  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  // Fetch city graph data on load
   useEffect(() => {
     fetchCityData();
-    setIsTutorialOpen(true);
-  }, [fetchCityData]);
-
-  // Dynamic telemetry tick interval (every 3 seconds)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      triggerLiveTick();
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [triggerLiveTick]);
-
-  // Scroll event handler to track active snap sections
-  const handleScroll = () => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const scrollY = container.scrollTop;
-    const height = container.clientHeight;
-    const index = Math.round(scrollY / height);
-
-    const sections: ('briefing' | 'map' | 'audit')[] = ['briefing', 'map', 'audit'];
-    const activeSec = sections[index] || 'briefing';
-
-    if (activeSection !== activeSec) {
-      setActiveSection(activeSec);
-    }
-  };
-
-  // Jump to specific snap section
-  const scrollToSection = (index: number) => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    container.scrollTo({
-      top: index * container.clientHeight,
-      behavior: 'smooth',
-    });
-  };
-
-  const riskLevel = route?.risk_level ?? 'LOW';
-  const anonScore = route?.anomaly_score ?? 0.04;
+    const interval = window.setInterval(triggerLiveTick, 3000);
+    return () => window.clearInterval(interval);
+  }, [fetchCityData, triggerLiveTick]);
 
   const totalOutages = new Set([...failedSubstations, ...cascadedSubstations]).size;
+  const risk = route?.risk_level ?? 'LOW';
+  const riskLabel = risk === 'LOW' ? 'Operational' : risk === 'MEDIUM' ? 'Elevated' : risk === 'HIGH' ? 'High risk' : 'Critical';
+  const scrollTo = (section: 'briefing' | 'map' | 'audit') => {
+    setActiveSection(section);
+    document.querySelector(`[data-section="${section}"]`)?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   return (
-    <main style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
-      
-      {/* ── Custom Sci-Fi Cursor ── */}
-      <CustomCursor />
-
-      {/* ── Background 3D Cesium Map ── */}
-      <CesiumViewer />
-
-      {/* ── Scanlines HUD background effect ── */}
-      <div className="scanlines" aria-hidden="true" />
-      <div className="corner corner--tl" aria-hidden="true" />
-      <div className="corner corner--bl" aria-hidden="true" />
-
-      {/* ── Scroll Snapping Container ── */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={handleScroll}
-        className="scroll-container"
-      >
-        <div className="mobile-utility-bar" aria-label="Quick status">
-          <span className="mobile-utility-brand">GRIDEVAC <b>AI</b></span>
-          <span className={`mobile-utility-status ${backendOnline ? 'is-online' : ''}`}>
-            <i aria-hidden="true" /> {backendOnline ? 'SYSTEM ONLINE' : 'OFFLINE MODE'}
-          </span>
+    <main className="app-shell">
+      <div className="ambient-grid" aria-hidden="true" />
+      <header className="topbar">
+        <div className="brand-lockup">
+          <div className="brand-mark">GE</div>
+          <div><strong>GridEvac</strong><span>Emergency intelligence</span></div>
         </div>
-        
-        {/* ==========================================
-            SECTION 1: TACTICAL BRIEFING LANDING PAGE
-           ========================================== */}
-        <section className="scroll-section scroll-section--briefing" aria-label="Tactical Briefing Page">
-          <div className="briefing-content">
-            <div className="briefing-left-panel">
-              <header>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
-                  <img src="/logo.png" alt="GridEvac AI Logo" style={{ width: '64px', height: '64px', borderRadius: '8px', border: '1px solid rgba(0, 229, 255, 0.35)', boxShadow: '0 0 20px rgba(0, 229, 255, 0.25)' }} />
-                  <div>
-                    <span className="badge-glow" style={{ display: 'inline-block', margin: 0 }}>OPERATIONAL ALERT SYSTEM</span>
-                    <h1 className="hero-title" style={{ marginTop: '4px', fontSize: '32px' }}>GridEvac AI</h1>
-                  </div>
-                </div>
-                <p className="hero-subtitle">Houston Crisis Response & Evacuation Routing</p>
-              </header>
-              
-              <div className="briefing-summary-card">
-                <div className="briefing-card-kicker"><span /> LIVE SITUATION REPORT <span /></div>
-                <h3>Crisis Assessment Brief</h3>
-                <p>
-                  Severe storm fronts over Harris County have initiated localized flash flooding and power grid overloading. 
-                  GridEvac AI leverages real-time hydrologic USGS sensors alongside CenterPoint electrical substation feeds to dynamically plot evacuation paths that bypass flooded roads and active blackout zones.
-                </p>
-                <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                    <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase' }}>Threat Level</span>
-                    <span className={`threat-badge threat-badge--${riskLevel.toLowerCase()}`}>
-                      ⚠️ {riskLevel} RISK
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                    <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase' }}>Anomaly Index</span>
-                    <span className="threat-badge" style={{ borderColor: 'rgba(0, 229, 255, 0.4)', color: '#00e5ff' }}>
-                      ⚡ {(anonScore * 100).toFixed(0)}% STRESS
-                    </span>
-                  </div>
-                </div>
-              </div>
+        <div className="topbar-center"><span className="live-dot" /> Houston regional operations · <b>08:42 CST</b></div>
+        <div className="topbar-actions">
+          <span className={`connection-pill ${backendOnline ? 'online' : ''}`}><i /> {backendOnline ? 'Live feeds connected' : 'Local fallback mode'}</span>
+          <button className="icon-button" onClick={() => setIsTutorialOpen(true)} aria-label="Open help">?</button>
+        </div>
+      </header>
 
-              <div className="briefing-actions" style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                <button 
-                  className="cta-btn-glow" 
-                  onClick={() => scrollToSection(1)}
-                  title="Load 3D Evacuation Map"
-                >
-                  Access Tactical Map ➔
-                </button>
-                <button 
-                  className="secondary-btn" 
-                  onClick={() => scrollToSection(2)}
-                  title="View ML Technical Audit"
-                >
-                  ML System Audit
-                </button>
-              </div>
+      <div className="workspace">
+        <aside className="nav-rail">
+          <div className="rail-label">Workspace</div>
+          <button className={activeSection === 'briefing' ? 'rail-link active' : 'rail-link'} onClick={() => scrollTo('briefing')}><span>01</span> Briefing</button>
+          <button className={activeSection === 'map' ? 'rail-link active' : 'rail-link'} onClick={() => scrollTo('map')}><span>02</span> Live map</button>
+          <button className={activeSection === 'audit' ? 'rail-link active' : 'rail-link'} onClick={() => scrollTo('audit')}><span>03</span> Grid audit</button>
+          <div className="rail-spacer" />
+          <div className="rail-footer">SIM<br /><b>v1.0</b></div>
+        </aside>
+
+        <div className="content-scroll">
+          <section className="overview-section" data-section="briefing">
+            <div className="section-heading">
+              <div><p className="eyebrow">Regional situation room / Houston, Texas</p><h1>Good morning, <em>operator.</em></h1><p className="lede">Monitor hazards, validate evacuation routes, and coordinate a safer response across the city grid.</p></div>
+              <div className="date-card"><span>THU</span><strong>24</strong><small>OCT 2024</small></div>
             </div>
 
-            <div className="briefing-right-panel">
-              <div className="briefing-panel-label">TODAY&apos;S OPERATIONS SNAPSHOT</div>
-              <div className="hud-metric-card">
-                <span className="metric-label">USGS Buffalo Bayou Gage</span>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
-                  <span className="metric-num" style={{ color: usgsGageHeight > 10.0 ? '#ffea00' : '#00e5ff', margin: 0 }}>
-                    {usgsGageHeight.toFixed(2)} ft
-                  </span>
-                  <Sparkline data={gageHistory} width={130} height={32} stroke={usgsGageHeight > 10.0 ? '#ffea00' : '#00e5ff'} strokeWidth={1.5} />
-                </div>
-                <div className="metric-footer">
-                  Site ID: 08074000 · Hydrological Feed
-                </div>
-              </div>
+            <div className="alert-banner"><div className="alert-icon">!</div><div><strong>{riskLabel} conditions detected</strong><span>{route ? route.message : 'No active route assessment. Start a scenario to evaluate the network.'}</span></div><button onClick={() => scrollTo('map')}>Review map <b>↗</b></button></div>
 
-              <div className="hud-metric-card">
-                <span className="metric-label">Micro-Climate Surface Temp</span>
-                <span className="metric-num" style={{ color: '#ffc107' }}>
-                  {surfaceTemp.toFixed(1)} °F
-                </span>
-                <div className="metric-footer">
-                  Houston Surface Telemetry Feed
-                </div>
-              </div>
-
-              <div className="hud-metric-card">
-                <span className="metric-label">Electrical Grid Frequency</span>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' }}>
-                  <span className="metric-num" style={{ color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88', margin: 0 }}>
-                    {gridFrequency.toFixed(2)} Hz
-                  </span>
-                  <Sparkline data={frequencyHistory} width={130} height={32} stroke={gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88'} strokeWidth={1.5} />
-                </div>
-                <div className="metric-footer">
-                  Telemetry Frequency · Target: 60.00 Hz
-                </div>
-              </div>
-
-              <div className="hud-metric-card">
-                <span className="metric-label">Substation Outages</span>
-                <span className="metric-num" style={{ color: totalOutages > 0 ? '#ff3d3d' : '#00ff88' }}>
-                  {totalOutages} Towers
-                </span>
-                <div className="metric-footer">
-                  Manual + Cascade Blackout Zones
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="scroll-indicator" onClick={() => scrollToSection(1)}>
-            <span>SCROLL TO INITIALISE MAP</span>
-            <div className="arrow-down" />
-          </div>
-        </section>
-
-
-        {/* ==========================================
-            SECTION 2: ACTIVE TACTICAL EVACUATION MAP
-           ========================================== */}
-        <section className="scroll-section scroll-section--map" aria-label="Tactical Evacuation Map">
-          
-          {/* Top-left HUD title */}
-          <div className="hud-title" role="banner">
-            <h1>GridEvac AI</h1>
-            <p>Houston · Emergency Evacuation Routing System</p>
-          </div>
-
-          {/* Back to Briefing HUD Button */}
-          {activeSection !== 'briefing' && (
-            <button 
-              className="briefing-trigger-btn" 
-              onClick={() => scrollToSection(0)}
-              title="Return to Operational Briefing"
-            >
-              ◀ BRIEFING
-            </button>
-          )}
-
-          {/* Help Guide HUD Button */}
-          <button 
-            className="tutorial-trigger-btn" 
-            onClick={() => setIsTutorialOpen(true)}
-            title="Open Interactive User Guide"
-          >
-            ❓ User Guide
-          </button>
-
-          {/* Tutorial Overlay */}
-          <TutorialModal 
-            isOpen={isTutorialOpen} 
-            onClose={() => setIsTutorialOpen(false)} 
-          />
-
-          {/* Sidebar and HUD widgets fade in */}
-          <div className="map-view-overlays">
-            
-            {/* Bottom-left Console Ticker & Legend Container */}
-            <div style={{
-              position: 'absolute',
-              bottom: '24px',
-              left: '20px',
-              zIndex: 900,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-              pointerEvents: 'none'
-            }}>
-              
-              {/* SCADA Terminal Log */}
-              <div 
-                className="scada-terminal"
-                style={{
-                  width: '420px',
-                  height: '140px',
-                  borderRadius: '6px',
-                  padding: '12px 16px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  pointerEvents: 'auto'
-                }}
-              >
-                <div className="scada-sweep-line" aria-hidden="true" />
-                <div style={{ 
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  borderBottom: '1px solid rgba(0,255,102,0.15)', 
-                  paddingBottom: '4px',
-                  marginBottom: '6px',
-                  zIndex: 3
-                }}>
-                  <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '11px', fontWeight: '600', letterSpacing: '1px', color: '#00ff66', textShadow: '0 0 6px rgba(0,255,102,0.6)' }}>
-                    📡 LIVE SCADA TELEMETRY FEED
-                  </span>
-                  <span style={{ width: '6px', height: '6px', background: '#00ff66', borderRadius: '50%', boxShadow: '0 0 6px #00ff66', alignSelf: 'center', animation: 'blink 1s infinite' }} />
-                </div>
-                
-                <div 
-                  className="scada-terminal-crt-glow"
-                  style={{ 
-                    flex: 1, 
-                    overflowY: 'auto', 
-                    display: 'flex', 
-                    flexDirection: 'column-reverse', 
-                    gap: '5px',
-                    fontFamily: 'monospace',
-                    fontSize: '10px',
-                    color: '#00ff55',
-                    scrollbarWidth: 'none',
-                    zIndex: 3
-                  }}
-                >
-                  {liveLogs.slice().reverse().map((log, idx) => {
-                    let color = '#00ff55';
-                    let glow = 'rgba(0, 255, 85, 0.4)';
-                    if (log.includes('Alert') || log.includes('warning') || log.includes('Warning') || log.includes('REDISTRIBUTION')) {
-                      color = '#ffb300';
-                      glow = 'rgba(255, 179, 0, 0.4)';
-                    } else if (log.includes('CRITICAL') || log.includes('Error') || log.includes('FAILED')) {
-                      color = '#ff3333';
-                      glow = 'rgba(255, 51, 51, 0.4)';
-                    } else if (log.includes('Evacuation') || log.includes('ONLINE') || log.includes('Nominal') || log.includes('Successfully')) {
-                      color = '#00ff88';
-                      glow = 'rgba(0, 255, 136, 0.4)';
-                    }
-                    
-                    return (
-                      <div key={idx} style={{ color, wordBreak: 'break-all', textShadow: `0 0 4px ${glow}` }}>
-                        {log}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Map Legend */}
-              <nav className="legend" style={{ position: 'static', pointerEvents: 'auto' }} aria-label="Map Legend">
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: '#1e4a8a' }} />
-                  Street Grid
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: '#ff2222' }} />
-                  Blocked Streets
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: 'rgba(0, 136, 255, 0.45)', border: '1px solid rgba(0, 136, 255, 0.8)' }} />
-                  Flood Zone
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: 'rgba(26,5,0,0.85)', border: '1px solid #ff4400' }} />
-                  Blackout Zone
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: '#00ff88', boxShadow: '0 0 6px #00ff88' }} />
-                  Safe Route
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: '#ff6600', boxShadow: '0 0 4px #ff6600' }} />
-                  Dead Wire Hazard
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: '#ffea00', boxShadow: '0 0 4px #ffea00' }} />
-                  Overloaded Line Hazard
-                </div>
-                <div className="legend-item">
-                  <div className="legend-swatch" style={{ background: '#ffc107' }} />
-                  Substation
-                </div>
-              </nav>
+            <div className="metric-grid">
+              <article className="metric-card"><div className="metric-top"><span>Grid frequency</span><span className="metric-status green">STABLE</span></div><strong>{gridFrequency.toFixed(2)}<small> Hz</small></strong><Sparkline data={frequencyHistory} width={180} height={36} stroke="#39d98a" /><footer>Target 60.00 Hz · live SCADA</footer></article>
+              <article className="metric-card"><div className="metric-top"><span>Bayou gage height</span><span className="metric-status amber">WATCH</span></div><strong>{usgsGageHeight.toFixed(2)}<small> ft</small></strong><Sparkline data={gageHistory} width={180} height={36} stroke="#f4b860" /><footer>USGS 08074000 · updated just now</footer></article>
+              <article className="metric-card"><div className="metric-top"><span>Substations offline</span><span className={`metric-status ${totalOutages ? 'red' : 'green'}`}>{totalOutages ? 'ACTION' : 'CLEAR'}</span></div><strong>{String(totalOutages).padStart(2, '0')}<small> nodes</small></strong><div className="mini-bars"><i style={{ height: `${Math.max(12, totalOutages * 20)}%` }} /><i style={{ height: `${Math.max(18, overloadedSubstations.length * 28)}%` }} /><i style={{ height: `${Math.max(22, cascadedSubstations.length * 35)}%` }} /><i style={{ height: '72%' }} /><i style={{ height: '55%' }} /></div><footer>{overloadedSubstations.length} overloaded · {cascadedSubstations.length} cascaded</footer></article>
+              <article className="metric-card"><div className="metric-top"><span>Surface temperature</span><span className="metric-status amber">HEAT INDEX</span></div><strong>{surfaceTemp.toFixed(1)}<small> °F</small></strong><div className="temperature-scale"><i /><span>82°</span><span>95°</span><span>105°</span></div><footer>Houston surface telemetry feed</footer></article>
             </div>
 
-            {/* Right sidebar control panel */}
+            <div className="overview-columns">
+              <article className="panel-card zone-card"><div className="panel-heading"><div><p className="eyebrow">Coverage</p><h2>Response zones</h2></div><button className="text-button" onClick={() => scrollTo('map')}>View map ↗</button></div>{zones.map((zone) => <div className="zone-row" key={zone.name}><div className={`zone-avatar ${zone.tone}`}>{zone.name.slice(0, 2).toUpperCase()}</div><div className="zone-info"><strong>{zone.name}</strong><span>{zone.detail}</span></div><span className={`zone-status ${zone.tone}`}>{zone.status}</span><span className="row-arrow">›</span></div>)}</article>
+              <article className="panel-card readiness-card"><div className="panel-heading"><div><p className="eyebrow">System readiness</p><h2>Response posture</h2></div><span className="score">86<span>%</span></span></div><div className="readiness-track"><i style={{ width: '86%' }} /></div><div className="readiness-list"><span><i className="check">✓</i> Data feeds connected <b>4/4</b></span><span><i className="check">✓</i> Evacuation exits available <b>4</b></span><span><i className="warn">!</i> Grid anomalies detected <b>{route ? Math.round((route.anomaly_score ?? 0) * 100) : 0}%</b></span></div></article>
+            </div>
+          </section>
+
+          <section className="map-section" data-section="map">
+            <div className="map-header"><div><p className="eyebrow">Live operations / geospatial view</p><h2>Houston network map</h2></div><div className="map-header-actions"><span className="map-coordinates">29.7604° N&nbsp;&nbsp; 95.3698° W</span><button className="outline-button" onClick={() => scrollTo('audit')}>Grid audit ↗</button></div></div>
+            <div className="map-frame"><CesiumViewer /><div className="map-vignette" /><div className="map-chip"><span className="live-dot" /> LIVE NETWORK VIEW <b>·</b> {cityData?.nodes.length ?? 0} intersections</div><div className="map-legend"><span><i className="legend-line route" /> Safe route</span><span><i className="legend-line flood" /> Flood zone</span><span><i className="legend-dot power" /> Substation</span></div><div className="map-help">Drag to explore&nbsp; · &nbsp;Scroll to zoom</div></div>
+            <div className="map-bottom-grid"><div className="map-stat"><span>Active route</span><strong>{route?.success ? 'Validated' : 'Awaiting input'}</strong><small>{route?.path.length ?? 0} waypoints</small></div><div className="map-stat"><span>Current risk</span><strong className={`risk-${risk.toLowerCase()}`}>{riskLabel}</strong><small>ML anomaly scan</small></div><div className="map-stat"><span>Next update</span><strong>00:03</strong><small>Automatic telemetry refresh</small></div></div>
             <ControlPanel />
-          </div>
+          </section>
 
-          {/* Quick jump to analytics page */}
-          {activeSection !== 'audit' && (
-            <div className="scroll-indicator scroll-indicator--top-right" onClick={() => scrollToSection(2)}>
-              <span>ML ANALYSIS REPORT ➔</span>
-            </div>
-          )}
-        </section>
-
-
-        {/* ==========================================
-            SECTION 3: ML SYSTEM AUDIT & ANALYTICS
-           ========================================== */}
-        <section className="scroll-section scroll-section--audit" aria-label="ML Technical Audit Page">
-          <div className="audit-content">
-            
-            <div className="audit-left-panel">
-              <header style={{ marginBottom: '16px' }}>
-                <span className="badge-glow" style={{ borderColor: 'rgba(0, 255, 136, 0.4)', color: '#00ff88' }}>TECHNICAL AUDIT SHEET</span>
-                <h2 className="audit-title">IsolationForest Predictive Engine</h2>
-                <p style={{ fontSize: '11px', color: 'rgba(160,210,240,0.6)', letterSpacing: '1px', marginTop: '4px' }}>
-                  Model Dimensions & Telemetry Boundary Envelopes
-                </p>
-              </header>
-
-              <div className="briefing-summary-card">
-                <h3>Anomaly Scoring Math</h3>
-                <p style={{ fontSize: '12px', lineHeight: '1.5' }}>
-                  The anomaly model operates inside a 9-dimensional space, assessing grid stability. If the scored features drift outside the trained normal boundary, the anomaly index spikes, triggering a threat escalation.
-                </p>
-                
-                <h4 style={{ fontSize: '10px', color: '#00e5ff', textTransform: 'uppercase', letterSpacing: '1px', marginTop: '14px', marginBottom: '8px' }}>
-                  9-D Input Vector Space
-                </h4>
-                <div className="audit-features-grid">
-                  <div className="feature-item"><span>[1] Flood Level Slider</span></div>
-                  <div className="feature-item"><span>[2] Failed Substations Count</span></div>
-                  <div className="feature-item"><span>[3] Overloaded Substations</span></div>
-                  <div className="feature-item"><span>[4] Mean Grid Load Ratio</span></div>
-                  <div className="feature-item"><span>[5] Node Voltage Stability</span></div>
-                  <div className="feature-item"><span>[6] Cascading Risk Score</span></div>
-                  <div className="feature-item"><span>[7] Concurrent Deluge/Trip</span></div>
-                  <div className="feature-item"><span>[8] USGS Bayou Gage height</span></div>
-                  <div className="feature-item"><span>[9] Micro-climate Temp (°F)</span></div>
-                </div>
-              </div>
-
-              <div className="audit-actions" style={{ display: 'flex', gap: '16px', marginTop: '20px' }}>
-                <button 
-                  className="secondary-btn" 
-                  onClick={() => scrollToSection(0)}
-                  title="Return to briefing"
-                >
-                  ➔ Briefing Page
-                </button>
-                <button 
-                  className="cta-btn-glow" 
-                  onClick={() => scrollToSection(1)}
-                  title="Return to Map"
-                >
-                  ➔ Back to Map
-                </button>
-              </div>
-            </div>
-
-            <div className="audit-right-panel">
-              <h3 style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '18px', fontWeight: '700', letterSpacing: '1.5px', textTransform: 'uppercase', color: '#ffea00', marginBottom: '12px' }}>
-                CenterPoint Electrical SCADA Nodes
-              </h3>
-              
-              <div className="audit-table-wrapper">
-                <table className="audit-table">
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>Substation Name</th>
-                      <th>Base Load</th>
-                      <th>Curr Load</th>
-                      <th>Capacity</th>
-                      <th>Telemetry Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cityData?.substations.map(sub => {
-                      const isManualFailed = failedSubstations.includes(sub.id);
-                      const isCascaded = cascadedSubstations.includes(sub.id);
-                      const isFailed = isManualFailed || isCascaded;
-                      const isOverloaded = overloadedSubstations.includes(sub.id);
-
-                      const currLoad = isFailed ? 0.0 : (substationLoads[sub.id] ?? sub.base_load_mw);
-
-                      let label = 'NOMINAL';
-                      let color = '#00ff88';
-                      if (isManualFailed) {
-                        label = 'MANUAL OUT';
-                        color = '#ff3d3d';
-                      } else if (isCascaded) {
-                        label = 'CASCADE';
-                        color = '#ff3d3d';
-                      } else if (isOverloaded) {
-                        label = 'OVERLOADED';
-                        color = '#ffb300';
-                      }
-
-                      return (
-                        <tr key={sub.id} style={{ opacity: isFailed ? 0.5 : 1 }}>
-                          <td style={{ color: '#00e5ff', fontFamily: 'monospace' }}>#{sub.id}</td>
-                          <td style={{ fontWeight: '500' }}>{sub.name}</td>
-                          <td>{sub.base_load_mw} MW</td>
-                          <td style={{ fontFamily: 'monospace', color: isOverloaded ? '#ffea00' : 'inherit' }}>
-                            {currLoad.toFixed(1)} MW
-                          </td>
-                          <td>{sub.capacity_mw} MW</td>
-                          <td style={{ color, fontWeight: '700', fontSize: '9px', letterSpacing: '1px' }}>
-                            {label}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-          </div>
-        </section>
-
+          <section className="audit-section" data-section="audit"><div className="audit-intro"><p className="eyebrow">Decision support / model transparency</p><h2>Grid audit <em>&amp; controls</em></h2><p>Understand the signals behind each evacuation recommendation. Adjust a scenario in the control center to see the network respond in real time.</p><button className="primary-button" onClick={() => scrollTo('map')}>Open control center ↗</button></div><div className="audit-cards"><article className="audit-feature"><span className="feature-number">01</span><h3>IsolationForest</h3><p>Monitors nine telemetry dimensions to surface unusual combinations before they become incidents.</p><div className="feature-foot">MODEL HEALTH <b>98.4%</b></div></article><article className="audit-feature"><span className="feature-number">02</span><h3>Weighted routing</h3><p>NetworkX pathfinding avoids flooded roads, blackout zones, and overloaded transmission corridors.</p><div className="feature-foot">ROUTES TESTED <b>{route?.total_nodes ?? 0}</b></div></article><article className="audit-feature accent-card"><span className="feature-number">03</span><h3>Operator controls</h3><p>Test flood levels, substation failures, and heatwave conditions without affecting live infrastructure.</p><div className="feature-foot">SAFE SIMULATION <b>ENABLED</b></div></article></div></section>
+        </div>
       </div>
+      <TutorialModal isOpen={isTutorialOpen} onClose={() => setIsTutorialOpen(false)} />
     </main>
   );
 }
