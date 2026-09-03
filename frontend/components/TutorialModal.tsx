@@ -9,98 +9,68 @@ interface TutorialModalProps {
 
 const STEPS = [
   {
-    title: "Welcome to GridEvac AI",
+    title: 'Welcome to the operations desk',
     content: (
       <>
-        This platform acts as a <strong>3D emergency command center</strong> designed to optimize evacuation routing in downtown Houston, TX. It dynamically responds to flash flooding and electric substation outages.
+        GridEvac AI is a <strong>street-aware emergency planning workspace</strong> for the Houston operations district. Use it to compare flood exposure, utility interruptions, and passable evacuation corridors before dispatching a response.
       </>
-    )
+    ),
   },
   {
-    title: "Flood Simulation",
+    title: 'Load a scenario',
     content: (
       <>
-        Drag the <strong>Flood Level Slider</strong> (0–10) in the right sidebar. As the water level rises, low-lying intersections will flood (rendering in translucent blue) and the affected streets will turn <strong>danger red</strong> (impassable).
+        In the route planning desk, start with <strong>Clear, Bayou rise, Feeder loss, or Heat peak</strong>. Presets change the modeled conditions and automatically recalculate the recommended route. You can fine-tune the water surface with the slider afterward.
       </>
-    )
+    ),
   },
   {
-    title: "Substation Failures & Overloads",
+    title: 'Select a real street origin',
     content: (
       <>
-        Click the <strong>Substation Toggles</strong> to simulate power outages. Active electrical load will be redistributed to nearby substations. Watch out! Drawing more load than capacity triggers <strong>Grid Overloads</strong> and can cause cascading system failures.
+        Choose an intersection from the origin list, locate a node, or <strong>click any dry intersection on the map</strong>. Flooded origins are disabled so the planner never starts a response from an already submerged point.
       </>
-    )
+    ),
   },
   {
-    title: "Elevated Evacuation Routing",
+    title: 'Read the route on the ground',
     content: (
       <>
-        Pick your <strong>Origin Waypoint</strong> (Nodes 0 to 224) in the sidebar; the system selects the safest exit automatically. Click <strong>Calculate Route</strong>. The engine computes the safest path, avoiding flooded zones and penalizing blackouts, shown as a <strong>pulsing green elevated corridor</strong> on the map.
+        Routes follow named road centerlines and remain clamped to the street surface. The planner reports <strong>street distance, estimated travel time, road segments, and grouped driving instructions</strong> while inset building footprints keep blocks visibly separate from the corridor.
       </>
-    )
+    ),
   },
   {
-    title: "IsolationForest Anomaly HUD",
+    title: 'Inspect what changed',
     content: (
       <>
-        Our <strong>Machine Learning Model</strong> continuously evaluates grid stability (monitoring voltages, loads, and hazards) to score current threat severity (Low to Critical). View the scrolling telemetry logs at the bottom for live updates.
+        Toggle block footprints, road labels, intersections, substations, and utility links from the map layers section. The route audit shows closures, anomaly score, field notes, and the live operator event stream behind the recommendation.
       </>
-    )
-  }
+    ),
+  },
 ];
 
 export default function TutorialModal({ isOpen, onClose }: TutorialModalProps) {
   const [currentStep, setCurrentStep] = useState(0);
-
   if (!isOpen) return null;
 
-  const handleNext = () => {
-    if (currentStep < STEPS.length - 1) {
-      setCurrentStep(currentStep + 1);
-    } else {
-      onClose();
-    }
-  };
-
-  const handlePrev = () => {
-    if (currentStep > 0) {
-      setCurrentStep(currentStep - 1);
-    }
-  };
-
   const step = STEPS[currentStep];
+  const handleNext = () => currentStep < STEPS.length - 1 ? setCurrentStep(currentStep + 1) : onClose();
+  const handlePrev = () => { if (currentStep > 0) setCurrentStep(currentStep - 1); };
 
   return (
     <div className="tutorial-overlay" onClick={onClose}>
-      <div className="tutorial-card" onClick={(e) => e.stopPropagation()}>
+      <div className="tutorial-card" onClick={(event) => event.stopPropagation()}>
         <div className="tutorial-header">
           <h2>{step.title}</h2>
-          <span className="tutorial-step-indicator">
-            {currentStep + 1} / {STEPS.length}
-          </span>
+          <span className="tutorial-step-indicator">{currentStep + 1} / {STEPS.length}</span>
         </div>
-        
-        <div className="tutorial-body">
-          <div style={{ minHeight: '80px', display: 'flex', alignItems: 'center' }}>
-            <p style={{ margin: 0 }}>{step.content}</p>
-          </div>
-        </div>
-
+        <div className="tutorial-body"><p>{step.content}</p></div>
         <div className="tutorial-footer">
-          <button className="tutorial-btn-skip" onClick={onClose}>
-            Skip Guide
-          </button>
-          
+          <button className="tutorial-btn-skip" onClick={onClose}>Close guide</button>
           <div className="tutorial-nav-btns">
-            {currentStep > 0 && (
-              <button className="tutorial-btn" onClick={handlePrev}>
-                Back
-              </button>
-            )}
-            <button className="tutorial-btn tutorial-btn--primary" onClick={handleNext}>
-              {currentStep === STEPS.length - 1 ? "Finish" : "Next"}
-            </button>
+            {currentStep > 0 && <button className="tutorial-btn" onClick={handlePrev}>Back</button>}
+            <button className="tutorial-btn tutorial-btn--primary" onClick={handleNext}>{currentStep === STEPS.length - 1 ? 'Finish' : 'Next'}</button>
           </div>
         </div>
       </div>

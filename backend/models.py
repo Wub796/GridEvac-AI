@@ -1,37 +1,50 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, List, Optional, Tuple
 
-
-# ─── Request Models ────────────────────────────────────────────────────────────
 
 class SimulationRequest(BaseModel):
-    flood_level: float = Field(ge=0.0, le=10.0, description="Flood level 0–10 scale")
+    flood_level: float = Field(ge=0.0, le=10.0, description="Flood level 0-10 scale")
     failed_substations: List[int] = Field(default=[], description="IDs of failed substations")
     origin_node: int = Field(ge=0, le=224, description="Origin intersection node ID (15x15)")
 
-
-# ─── City Graph Models ─────────────────────────────────────────────────────────
 
 class NodeData(BaseModel):
     id: int
     lat: float
     lon: float
-    elevation: float          # metres above sea level (synthetic)
+    elevation: float
     row: int
     col: int
+    intersection_name: str = ""
+    district: str = ""
 
 
 class EdgeData(BaseModel):
     source: int
     target: int
     weight: float
+    distance_m: float = 0.0
+    road_name: str = ""
+    road_class: str = "local"
+    lanes: int = 2
+    speed_limit_mph: int = 25
+
+
+class BlockData(BaseModel):
+    id: str
+    row: int
+    col: int
+    lat: float
+    lon: float
+    kind: str
+    height_m: float
 
 
 class SubstationData(BaseModel):
     id: int
-    node: int                 # grid node the substation sits on
+    node: int
     name: str
-    radius: float             # blackout radius in grid-unit distance
+    radius: float
     lat: float
     lon: float
     capacity_mw: float
@@ -48,6 +61,7 @@ class TransmissionLink(BaseModel):
 class CityResponse(BaseModel):
     nodes: List[NodeData]
     edges: List[EdgeData]
+    blocks: List[BlockData] = []
     substations: List[SubstationData]
     transmission_links: List[TransmissionLink]
     center_lat: float
@@ -56,38 +70,47 @@ class CityResponse(BaseModel):
     grid_cols: int
 
 
-# ─── Route Models ──────────────────────────────────────────────────────────────
-
 class RouteCoord(BaseModel):
     lat: float
     lon: float
-    elevation: float          # elevated for 3-D visibility
+    elevation: float
+
+
+class RouteStep(BaseModel):
+    instruction: str
+    road_name: str
+    road_class: str
+    distance_m: float
+    duration_s: float
+    from_node: int
+    to_node: int
 
 
 class RouteResponse(BaseModel):
     success: bool
-    path: List[int]                         # ordered list of node IDs
-    path_coords: List[RouteCoord]           # 3-D coordinates for each waypoint
+    path: List[int]
+    path_coords: List[RouteCoord]
     total_nodes: int
+    distance_m: float = 0.0
+    eta_minutes: float = 0.0
+    route_steps: List[RouteStep] = []
     flooded_nodes: List[int]
     blackout_nodes: List[int]
-    blocked_edges: List[List[int]]          # list of [source, target] pairs
-    anomaly_score: float                    # 0 (normal) → 1 (critical)
-    risk_level: str                         # LOW | MEDIUM | HIGH | CRITICAL
+    blocked_edges: List[List[int]]
+    anomaly_score: float
+    risk_level: str
     message: str
-    dest_node: int                          # algorithm-selected exit node
-    substation_loads: Dict[int, float]      # live load in MW for each substation
-    overloaded_substations: List[int]       # IDs of substations currently overloaded
-    cascaded_substations: List[int]         # IDs of substations failed by cascade
-    grid_frequency: float                   # live grid frequency (e.g. 59.98 Hz)
-    voltage_readings: Dict[int, float]      # local node voltage stability percentage (0-100%)
-    transmission_line_states: Dict[int, str] # map of link ID to state: 'active' | 'overloaded' | 'dead'
-    usgs_gage_height: float                  # dynamic USGS gauge height reading in feet
-    surface_temp: float                      # average grid-wide micro-climate temperature in Fahrenheit
-    hazard_roads: Dict[str, str]             # map of street edge key to warning state: 'dead' | 'overloaded'
+    dest_node: int
+    substation_loads: Dict[int, float]
+    overloaded_substations: List[int]
+    cascaded_substations: List[int]
+    grid_frequency: float
+    voltage_readings: Dict[int, float]
+    transmission_line_states: Dict[int, str]
+    usgs_gage_height: float
+    surface_temp: float
+    hazard_roads: Dict[str, str] = {}
 
-
-# ─── Anomaly Scan Models ───────────────────────────────────────────────────────
 
 class FloodZoneResponse(BaseModel):
     flood_level: float

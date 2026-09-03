@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# start.sh — GridEvac AI · Houston, TX
+# start.sh - GridEvac AI · Houston, TX
 # Starts both the FastAPI backend (port 8000) and Next.js frontend (port 3000)
 # Usage: bash start.sh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 echo ""
 echo "┌────────────────────────────────────────────────┐"
-echo "│   ⚡  GridEvac AI  —  Houston, TX              │"
+echo "│   ⚡  GridEvac AI  -  Houston, TX              │"
 echo "│   Emergency Evacuation Routing System          │"
 echo "└────────────────────────────────────────────────┘"
 echo ""

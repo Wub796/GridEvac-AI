@@ -1,755 +1,156 @@
 'use client';
 
-/**
- * ControlPanel.tsx — Glass-morphic right-sidebar control panel
- * Houston, TX — GridEvac AI
- */
-
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import type { RiskLevel } from '@/lib/types';
 import styles from './ControlPanel.module.css';
-import Sparkline from './Sparkline';
 
+/* Aligned with the WCAG-AA status tokens in globals.css */
 const RISK_COLORS: Record<RiskLevel, string> = {
-  LOW:      '#00e676',
-  MEDIUM:   '#ffea00',
-  HIGH:     '#ff9100',
-  CRITICAL: '#ff1744',
+  LOW: '#157050',
+  MEDIUM: '#96601c',
+  HIGH: '#9a5321',
+  CRITICAL: '#a8453e',
 };
 
-const RISK_LABELS: Record<RiskLevel, string> = {
-  LOW:      '✓ LOW RISK',
-  MEDIUM:   '⚠ MEDIUM RISK',
-  HIGH:     '⚡ HIGH RISK',
-  CRITICAL: '☢ CRITICAL',
+const EXIT_NAMES: Record<number, string> = {
+  7: 'South exit',
+  105: 'West exit',
+  119: 'East exit',
+  217: 'North exit',
 };
+
+function formatDistance(meters: number) {
+  if (!meters) return '-';
+  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+}
 
 export default function ControlPanel() {
   const [searchNodeInput, setSearchNodeInput] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
   const {
-    floodLevel, setFloodLevel,
-    failedSubstations, toggleSubstation,
-    originNode, setOriginNode,
-    destNode,
+    floodLevel,
+    setFloodLevel,
+    failedSubstations,
+    toggleSubstation,
+    originNode,
+    setOriginNode,
     cityData,
     route,
     isLoading,
     backendOnline,
     error,
     fetchCityData,
+    calculateRoute,
     clearRoute,
-    gridFrequency,
     substationLoads,
     overloadedSubstations,
     cascadedSubstations,
-    usgsGageHeight,
-    surfaceTemp,
-    showBuildings, setShowBuildings,
-    showPowerLines, setShowPowerLines,
-    showSubstations, setShowSubstations,
-    showIntersections, setShowIntersections,
+    showBuildings,
+    setShowBuildings,
+    showPowerLines,
+    setShowPowerLines,
+    showSubstations,
+    setShowSubstations,
+    showIntersections,
+    setShowIntersections,
+    showRoadNames,
+    setShowRoadNames,
     setFlyToNodeId,
     applyScenario,
-    activeSection,
-    frequencyHistory,
-    gageHistory,
     mapFilterMode,
     setMapFilterMode,
     setFlyToCoords,
   } = useSimulationStore();
 
-  const EXIT_NAMES: Record<number, string> = {
-    14: 'East Gate (Node 14)',
-    120: 'West Gate (Node 120)',
-    164: 'South Gate (Node 164)',
-    210: 'North Gate (Node 210)',
-  };
-
-  const substations = cityData?.substations ?? [];
   const nodes = cityData?.nodes ?? [];
-
-  const riskLevel  = route?.risk_level ?? null;
-  const anonScore  = route?.anomaly_score ?? null;
-
-  // Flood height in metres
-  const floodHeightM = (floodLevel * 1.7).toFixed(1);
+  const substations = cityData?.substations ?? [];
+  const riskLevel = route?.risk_level ?? 'LOW';
+  const riskColor = RISK_COLORS[riskLevel];
+  const floodedCount = route?.flooded_nodes.length ?? nodes.filter((node) => node.elevation <= floodLevel * 1.7).length;
 
   return (
-    <aside className={`${styles.panel} ${activeSection === 'map' ? styles.panelVisible : styles.panelHidden}`}>
-      {/* ── Header ── */}
-      <div className={styles.header}>
-        <div className={styles.logo}>
-          <img src="/logo.png" alt="GridEvac AI" style={{ width: '28px', height: '28px', borderRadius: '4px', border: '1px solid rgba(0, 229, 255, 0.25)', boxShadow: '0 0 8px rgba(0, 229, 255, 0.15)', marginRight: '8px' }} />
-          <div>
-            <h2 className={styles.title}>GridEvac AI</h2>
-            <p className={styles.subtitle}>Houston Emergency Routing</p>
-          </div>
+    <aside className={styles.panel} aria-label="Route planning controls">
+      <div className={styles.panelHeader}>
+        <div>
+          <p className={styles.kicker}>Route planning desk</p>
+          <h2>Scenario controls</h2>
         </div>
-        <div className={`${styles.statusDot} ${backendOnline ? styles.online : styles.offline}`} />
+        <span className={`${styles.connection} ${backendOnline ? styles.connectionOnline : ''}`}><i />{backendOnline ? 'API live' : 'Local'}</span>
       </div>
 
-      {/* ── Section Quick Navigation ── */}
-      <div style={{
-        display: 'flex',
-        gap: '6px',
-        padding: '8px 16px',
-        borderBottom: '1px solid rgba(0, 229, 255, 0.12)',
-        background: 'rgba(0, 229, 255, 0.02)',
-        justifyContent: 'space-between'
-      }}>
-        <button
-          onClick={() => {
-            const container = document.querySelector('.scroll-container');
-            if (container) {
-              container.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-          }}
-          style={{
-            background: 'transparent',
-            border: '1px solid rgba(0, 229, 255, 0.3)',
-            color: '#00e5ff',
-            fontSize: '9px',
-            padding: '5px 8px',
-            borderRadius: '4px',
-            fontFamily: 'var(--font-rajdhani)',
-            fontWeight: '600',
-            letterSpacing: '1px',
-            cursor: 'none',
-            flex: 1,
-            textAlign: 'center',
-            transition: 'all 0.2s'
-          }}
-          className="nav-btn-jump"
-          title="Go to Tactical Briefing"
-        >
-          ▲ BRIEFING
-        </button>
-        <button
-          onClick={() => {
-            const container = document.querySelector('.scroll-container');
-            if (container) {
-              container.scrollTo({ top: window.innerHeight * 2, behavior: 'smooth' });
-            }
-          }}
-          style={{
-            background: 'transparent',
-            border: '1px solid rgba(0, 255, 136, 0.3)',
-            color: '#00ff88',
-            fontSize: '9px',
-            padding: '5px 8px',
-            borderRadius: '4px',
-            fontFamily: 'var(--font-rajdhani)',
-            fontWeight: '600',
-            letterSpacing: '1px',
-            cursor: 'none',
-            flex: 1,
-            textAlign: 'center',
-            transition: 'all 0.2s'
-          }}
-          className="nav-btn-jump"
-          title="Go to Machine Learning Audit"
-        >
-          ▼ ML AUDIT
-        </button>
-      </div>
+      {error && <div className={styles.errorBanner}>{error}</div>}
+      {!backendOnline && <div className={styles.notice}><span>Local solver is active.</span><button onClick={fetchCityData}>Retry API</button></div>}
 
-      {/* ── Backend connection ── */}
-      {!backendOnline && (
-        <div className={styles.warningBanner}>
-          <span>⚠ Backend offline</span>
-          <button className={styles.connectBtn} onClick={fetchCityData}>Connect</button>
-        </div>
-      )}
-
-      {error && (
-        <div className={styles.errorBanner}>
-          {error}
-        </div>
-      )}
-
-      <section className={styles.quickActions} aria-label="Quick actions">
-        <button className={styles.quickActionPrimary} onClick={() => applyScenario('clear')}>↺ Start fresh</button>
-        <button className={styles.quickAction} onClick={() => setShowAdvanced((visible) => !visible)} aria-expanded={showAdvanced}>
-          {showAdvanced ? '⌃ Hide tools' : '⌄ More tools'}
-        </button>
-      </section>
-
-      {/* ── Section: Disaster Scenario Presets ── */}
-      {backendOnline && (
-        <section className={styles.section} style={{ background: 'rgba(255, 145, 0, 0.02)', borderBottom: '1px solid rgba(255, 145, 0, 0.12)' }}>
-          <h3 className={styles.sectionTitle}>
-            <span className={styles.sectionIcon}>🚨</span> Scenario Manager
-          </h3>
-          <div className={styles.scenarioGrid}>
-            <button 
-              className={styles.scenarioBtn} 
-              onClick={() => applyScenario('flood')}
-              title="Simulate flash flooding at 8.5m"
-            >
-              🌊 Bayou Flood
-            </button>
-            <button 
-              className={styles.scenarioBtn} 
-              onClick={() => applyScenario('cascade')}
-              title="Simulate substation outages triggering cascading failures"
-            >
-              ⚡ Cascades
-            </button>
-            <button 
-              className={styles.scenarioBtn} 
-              onClick={() => applyScenario('heatwave')}
-              title="Simulate severe summer grid load strain"
-            >
-              🔥 Heatwave
-            </button>
-            <button 
-              className={styles.scenarioBtnClear} 
-              onClick={() => applyScenario('clear')}
-              title="Restore nominal operating states"
-            >
-              🔄 Reset Grid
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* ── Grid Dashboard Telemetry HUD ── */}
-      {backendOnline && (
-        <section className={styles.section} style={{ background: 'rgba(0, 229, 255, 0.02)' }}>
-          <h2 className={styles.sectionTitle}>
-            <span className={styles.sectionIcon}>📊</span> Grid Telemetry HUD
-          </h2>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', minHeight: '68px' }}>
-              <div style={{ textAlign: 'center' }}>
-                <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '2px' }}>Frequency</span>
-                <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88', display: 'block' }}>
-                  {gridFrequency.toFixed(2)} Hz
-                </span>
-              </div>
-              <Sparkline data={frequencyHistory} width={110} height={18} stroke={gridFrequency < 59.8 ? '#ff3d3d' : '#00ff88'} strokeWidth={1.5} />
-            </div>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '68px', textAlign: 'center' }}>
-              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Grid Stability</span>
-              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: overloadedSubstations.length > 0 ? '#ffea00' : (cascadedSubstations.length > 0 ? '#ff3d3d' : '#00e5ff') }}>
-                {cascadedSubstations.length > 0 ? 'CRITICAL' : (overloadedSubstations.length > 0 ? 'OVERLOAD' : 'NOMINAL')}
-              </span>
-            </div>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', minHeight: '68px' }}>
-              <div style={{ textAlign: 'center' }}>
-                <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '2px' }}>USGS Gage height</span>
-                <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: usgsGageHeight > 10.0 ? '#ff9100' : '#00ff88', display: 'block' }}>
-                  {usgsGageHeight.toFixed(2)} ft
-                </span>
-              </div>
-              <Sparkline data={gageHistory} width={110} height={18} stroke={usgsGageHeight > 10.0 ? '#ff9100' : '#00e5ff'} strokeWidth={1.5} />
-            </div>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '68px', textAlign: 'center' }}>
-              <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.5)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Micro-Temp</span>
-              <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '16px', fontWeight: '700', color: '#ffea00' }}>
-                {surfaceTemp.toFixed(1)} °F
-              </span>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ── Section: Flood Simulation ── */}
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>
-          <span className={styles.sectionIcon}>🌊</span> Flood Level
-        </h2>
-        <div className={styles.sliderRow}>
-          <input
-            id="flood-slider"
-            type="range"
-            min={0} max={10} step={0.1}
-            value={floodLevel}
-            onChange={(e) => setFloodLevel(parseFloat(e.target.value))}
-            className={styles.slider}
-            style={{ '--fill': `${floodLevel * 10}%` } as any}
-          />
-          <span className={styles.sliderValue}>{floodLevel.toFixed(1)}</span>
-        </div>
-        <div className={styles.floodMeta}>
-          <span className={styles.metaLabel}>Water rise:</span>
-          <span className={styles.metaValue} style={{ color: floodLevel > 5 ? '#ff3d3d' : '#00bcd4' }}>
-            {floodHeightM} m ASL
-          </span>
-        </div>
-        <div className={styles.floodBar}>
-          <div
-            className={styles.floodFill}
-            style={{ width: `${floodLevel * 10}%` }}
-          />
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Load a scenario</h3></div><span className={styles.sectionHint}>Auto-solves</span></div>
+        <div className={styles.scenarioGrid}>
+          <button onClick={() => applyScenario('clear')} className={styles.scenarioButton}><b>Clear</b><span>Normal grid</span></button>
+          <button onClick={() => applyScenario('flood')} className={styles.scenarioButton}><b>Bayou rise</b><span>Flood stress</span></button>
+          <button onClick={() => applyScenario('cascade')} className={styles.scenarioButton}><b>Feeder loss</b><span>Utility cascade</span></button>
+          <button onClick={() => applyScenario('heatwave')} className={styles.scenarioButton}><b>Heat peak</b><span>Transmission strain</span></button>
         </div>
       </section>
 
-      {/* ── Section: GIS Layer Options ── */}
-      {backendOnline && showAdvanced && (
-        <section className={styles.section}>
-          <h3 className={styles.sectionTitle}>
-            <span className={styles.sectionIcon}>👁</span> Map Display Options
-          </h3>
-          <div className={styles.toggleGrid}>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={showBuildings}
-                onChange={(e) => setShowBuildings(e.target.checked)}
-                className={styles.toggleCheckbox}
-              />
-              <span className={styles.toggleLabel}>3D City Buildings</span>
-            </label>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={showPowerLines}
-                onChange={(e) => setShowPowerLines(e.target.checked)}
-                className={styles.toggleCheckbox}
-              />
-              <span className={styles.toggleLabel}>Transmission Lines</span>
-            </label>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={showSubstations}
-                onChange={(e) => setShowSubstations(e.target.checked)}
-                className={styles.toggleCheckbox}
-              />
-              <span className={styles.toggleLabel}>Substation Towers</span>
-            </label>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={showIntersections}
-                onChange={(e) => setShowIntersections(e.target.checked)}
-                className={styles.toggleCheckbox}
-              />
-              <span className={styles.toggleLabel}>Grid Waypoints (Pyramids)</span>
-            </label>
-          </div>
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Water surface</h3></div><strong className={styles.value}>{floodLevel.toFixed(1)}<small>/ 10</small></strong></div>
+        <input aria-label="Flood scenario level" className={styles.slider} type="range" min="0" max="10" step="0.1" value={floodLevel} onChange={(event) => setFloodLevel(Number(event.target.value))} style={{ '--fill': `${floodLevel * 10}%` } as CSSProperties} />
+        <div className={styles.sliderLabels}><span>Dry</span><span>Modeled rise {(floodLevel * 1.7).toFixed(1)} m</span><span>Severe</span></div>
+      </section>
 
-          {/* Map Filter HUD Modes */}
-          <div style={{ marginTop: '14px', borderTop: '1px solid rgba(0, 229, 255, 0.1)', paddingTop: '12px' }}>
-            <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '8px' }}>
-              Map HUD Display Mode
-            </span>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
-              {(['nominal', 'radar', 'thermal'] as const).map((mode) => {
-                const isActive = mapFilterMode === mode;
-                let activeColor = '#00e5ff';
-                if (mode === 'radar') activeColor = '#00ff88';
-                if (mode === 'thermal') activeColor = '#ffea00';
-                
-                return (
-                  <button
-                    key={mode}
-                    onClick={() => setMapFilterMode(mode)}
-                    style={{
-                      background: isActive ? `rgba(${mode === 'nominal' ? '0,229,255' : mode === 'radar' ? '0,255,136' : '255,234,0'}, 0.1)` : 'rgba(255,255,255,0.02)',
-                      border: `1px solid ${isActive ? activeColor : 'rgba(255,255,255,0.1)'}`,
-                      color: isActive ? activeColor : 'rgba(160,210,240,0.7)',
-                      fontSize: '9.5px',
-                      padding: '6px 4px',
-                      borderRadius: '4px',
-                      fontFamily: 'var(--font-rajdhani)',
-                      fontWeight: '600',
-                      letterSpacing: '0.5px',
-                      textTransform: 'uppercase',
-                      cursor: 'none',
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    {mode === 'nominal' ? 'Nominal' : mode === 'radar' ? 'Radar' : 'Thermal'}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Choose origin</h3></div><span className={styles.sectionHint}>Click map or select</span></div>
+        <select className={styles.select} aria-label="Origin intersection" value={originNode} onChange={(event) => setOriginNode(Number(event.target.value))}>
+          {nodes.map((node) => {
+            const isFlooded = node.elevation <= floodLevel * 1.7;
+            return <option key={node.id} value={node.id} disabled={isFlooded}>{`Node ${node.id}: ${node.intersection_name}${isFlooded ? ', flooded' : ''}`}</option>;
+          })}
+        </select>
+        <div className={styles.searchRow}>
+          <input className={styles.searchInput} type="number" min="0" max="224" placeholder="Node number 0-224" value={searchNodeInput} onChange={(event) => setSearchNodeInput(event.target.value)} />
+          <button className={styles.smallButton} onClick={() => { const id = Number(searchNodeInput); if (Number.isInteger(id) && id >= 0 && id <= 224) setFlyToNodeId(id); }}>Locate</button>
+        </div>
+        <button className={styles.solveButton} onClick={() => void calculateRoute()} disabled={isLoading || !cityData}><span>{isLoading ? 'Recalculating corridor…' : 'Recalculate safe route'}</span><b>↗</b></button>
+      </section>
 
-          {/* Camera Glider Presets */}
-          <div style={{ marginTop: '14px', borderTop: '1px solid rgba(0, 229, 255, 0.1)', paddingTop: '12px' }}>
-            <span style={{ fontSize: '10px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '8px' }}>
-              Camera Glider Views
-            </span>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-              <button
-                onClick={() => setFlyToCoords({ lon: -95.395, lat: 29.765, elev: 1200, heading: 0, pitch: -45 })}
-                style={{
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid rgba(0,229,255,0.15)',
-                  color: '#00e5ff',
-                  fontSize: '9.5px',
-                  padding: '6px 8px',
-                  borderRadius: '4px',
-                  fontFamily: 'var(--font-rajdhani)',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px',
-                  textTransform: 'uppercase',
-                  cursor: 'none',
-                  textAlign: 'left',
-                  transition: 'all 0.2s',
-                }}
-              >
-                🌊 Bayou Gage
-              </button>
-              <button
-                onClick={() => setFlyToCoords({ lon: -95.3800, lat: 29.7700, elev: 4000, heading: 15, pitch: -52 })}
-                style={{
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid rgba(0,229,255,0.15)',
-                  color: '#00e5ff',
-                  fontSize: '9.5px',
-                  padding: '6px 8px',
-                  borderRadius: '4px',
-                  fontFamily: 'var(--font-rajdhani)',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px',
-                  textTransform: 'uppercase',
-                  cursor: 'none',
-                  textAlign: 'left',
-                  transition: 'all 0.2s',
-                }}
-              >
-                🏢 Grid Core
-              </button>
-              <button
-                onClick={() => setFlyToCoords({ lon: -95.3941, lat: 29.7615, elev: 900, heading: 280, pitch: -30 })}
-                style={{
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid rgba(0,229,255,0.15)',
-                  color: '#00e5ff',
-                  fontSize: '9.5px',
-                  padding: '6px 8px',
-                  borderRadius: '4px',
-                  fontFamily: 'var(--font-rajdhani)',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px',
-                  textTransform: 'uppercase',
-                  cursor: 'none',
-                  textAlign: 'left',
-                  transition: 'all 0.2s',
-                }}
-              >
-                ⚡ Substation 0
-              </button>
-              <button
-                onClick={() => setFlyToCoords({ lon: -95.3800, lat: 29.7100, elev: 8500, heading: 0, pitch: -65 })}
-                style={{
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid rgba(0,229,255,0.15)',
-                  color: '#00e5ff',
-                  fontSize: '9.5px',
-                  padding: '6px 8px',
-                  borderRadius: '4px',
-                  fontFamily: 'var(--font-rajdhani)',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px',
-                  textTransform: 'uppercase',
-                  cursor: 'none',
-                  textAlign: 'left',
-                  transition: 'all 0.2s',
-                }}
-              >
-                🛡️ Exits
-              </button>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ── Section: Substations ── */}
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>
-          <span className={styles.sectionIcon}>🔌</span> CenterPoint Substations
-        </h2>
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Utility interruptions</h3></div><span className={styles.sectionHint}>{failedSubstations.length} manual</span></div>
         <div className={styles.substationList}>
-          {substations.length === 0 ? (
-            <p className={styles.placeholder}>Load city data to see substations</p>
-          ) : (
-            substations.map((sub) => {
-              const isManualFailed = failedSubstations.includes(sub.id);
-              const isCascaded = cascadedSubstations.includes(sub.id);
-              const isFailed = isManualFailed || isCascaded;
-
-              const currentLoad = substationLoads[sub.id] ?? sub.base_load_mw;
-              const isOverloaded = overloadedSubstations.includes(sub.id);
-
-              const loadPercent = Math.min(100, Math.round((currentLoad / sub.capacity_mw) * 100));
-
-              let statusLabel = "ONLINE";
-              let statusColor = "#00e676";
-
-              if (isManualFailed) {
-                statusLabel = "OFFLINE";
-                statusColor = "#ff3d3d";
-              } else if (isCascaded) {
-                statusLabel = "CASCADE";
-                statusColor = "#ff3d3d";
-              } else if (isOverloaded) {
-                statusLabel = "OVERLOAD";
-                statusColor = "#ff9100";
-              }
-
-              const barColor = isFailed ? '#1a0d0d' : (isOverloaded ? '#ff9100' : (loadPercent > 80 ? '#ffea00' : '#00ff88'));
-
-              return (
-                <div
-                  key={sub.id}
-                  className={`${styles.substationRow} ${isFailed ? styles.substationFailed : ''}`}
-                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '6px' }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                    <div className={styles.substationInfo}>
-                      <div
-                        className={styles.substationDot}
-                        style={{ 
-                          background: statusColor, 
-                          boxShadow: `0 0 8px ${statusColor}`,
-                          animation: isOverloaded ? 'blink 0.6s infinite' : 'none'
-                        }}
-                      />
-                      <span className={styles.substationName}>{sub.name}</span>
-                    </div>
-                    <button
-                      className={`${styles.toggle} ${isFailed ? styles.toggleOff : styles.toggleOn}`}
-                      onClick={() => toggleSubstation(sub.id)}
-                      disabled={isCascaded}
-                      style={{ cursor: isCascaded ? 'not-allowed' : 'pointer' }}
-                    >
-                      {statusLabel}
-                    </button>
-                  </div>
-
-                  {/* Dynamic Load Indicator */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '2px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px', color: 'rgba(160,210,240,0.5)' }}>
-                      <span>Load: {isFailed ? '0' : currentLoad.toFixed(1)} MW / {sub.capacity_mw} MW</span>
-                      <span>{isFailed ? '0%' : `${loadPercent}%`}</span>
-                    </div>
-                    <div style={{ height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div 
-                        style={{ 
-                          height: '100%', 
-                          width: `${isFailed ? 0 : loadPercent}%`, 
-                          background: barColor,
-                          transition: 'width 0.5s ease, background 0.5s ease' 
-                        }} 
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
+          {substations.map((sub) => {
+            const manualFailed = failedSubstations.includes(sub.id);
+            const cascaded = cascadedSubstations.includes(sub.id);
+            const failed = manualFailed || cascaded;
+            const overloaded = overloadedSubstations.includes(sub.id);
+            const load = substationLoads[sub.id] ?? sub.base_load_mw;
+            const percentage = failed ? 0 : Math.min(100, Math.round((load / sub.capacity_mw) * 100));
+            const status = failed ? (cascaded ? 'CASCADE' : 'OFFLINE') : overloaded ? 'OVERLOAD' : 'ONLINE';
+            return <div className={styles.substationRow} key={sub.id}>
+              <div className={styles.substationTop}><span className={`${styles.statusDot} ${failed ? styles.statusFailed : overloaded ? styles.statusWarn : styles.statusGood}`} /><div className={styles.substationName}><strong>{sub.name.replace(' Substation', '')}</strong><span>{status}, {failed ? '0' : load.toFixed(0)} / {sub.capacity_mw} MW</span></div><button className={`${styles.statusButton} ${failed ? styles.statusButtonOff : ''}`} onClick={() => toggleSubstation(sub.id)} disabled={cascaded}>{manualFailed ? 'Restore' : cascaded ? 'Locked' : 'Fail'}</button></div>
+              <div className={styles.loadTrack}><i className={failed ? styles.loadFailed : overloaded ? styles.loadWarn : ''} style={{ width: `${percentage}%` }} /></div>
+            </div>;
+          })}
         </div>
       </section>
 
-      {/* ── Section: Route ── */}
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>
-          <span className={styles.sectionIcon}>🗺</span> Evacuation Route
-        </h2>
-        <div className={styles.routeSelectors}>
-          <div className={styles.selectGroup} style={{ width: '100%' }}>
-            <label htmlFor="origin-select" className={styles.selectLabel}>Origin Intersection</label>
-            <select
-              id="origin-select"
-              className={styles.nodeSelect}
-              value={originNode}
-              onChange={(e) => setOriginNode(parseInt(e.target.value))}
-            >
-              {nodes.map((node) => {
-                const isExit = [14, 120, 164, 210].includes(node.id);
-                const isFlooded = node.elevation <= floodLevel * 1.7;
-                const role = isExit ? ' [EXIT]' : (isFlooded ? ' [FLOODED]' : '');
-                return (
-                  <option key={node.id} value={node.id} disabled={isFlooded}>
-                    Node {node.id} - Row {node.row}, Col {node.col} ({node.elevation.toFixed(1)}m){role}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Map layers</h3></div><span className={styles.sectionHint}>Live canvas</span></div>
+        <div className={styles.toggleGrid}>
+          <label><input type="checkbox" checked={showBuildings} onChange={(event) => setShowBuildings(event.target.checked)} /><span>Block footprints</span></label>
+          <label><input type="checkbox" checked={showRoadNames} onChange={(event) => setShowRoadNames(event.target.checked)} /><span>Road labels</span></label>
+          <label><input type="checkbox" checked={showIntersections} onChange={(event) => setShowIntersections(event.target.checked)} /><span>Intersections</span></label>
+          <label><input type="checkbox" checked={showSubstations} onChange={(event) => setShowSubstations(event.target.checked)} /><span>Substations</span></label>
+          <label><input type="checkbox" checked={showPowerLines} onChange={(event) => setShowPowerLines(event.target.checked)} /><span>Utility links</span></label>
         </div>
-
-        {/* Node Search / Fly-To */}
-        <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-          <label htmlFor="search-node-input" className={styles.selectLabel}>Locate / Fly to Grid Node</label>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              id="search-node-input"
-              type="number"
-              min={0}
-              max={224}
-              placeholder="Enter Node ID (0-224)"
-              value={searchNodeInput}
-              onChange={(e) => setSearchNodeInput(e.target.value)}
-              className={styles.searchNodeInput}
-            />
-            <button
-              onClick={() => {
-                const id = parseInt(searchNodeInput, 10);
-                if (!isNaN(id) && id >= 0 && id <= 224) {
-                  setFlyToNodeId(id);
-                } else {
-                  alert('Please enter a valid Node ID between 0 and 224.');
-                }
-              }}
-              className={styles.flyToBtn}
-              title="Fly camera to node"
-            >
-              🚀 Fly
-            </button>
-          </div>
-        </div>
-
-        {/* Real-time calculated Target Exit Node */}
-        <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0, 229, 255, 0.04)', borderRadius: '6px', border: '1px solid rgba(0, 229, 255, 0.15)' }}>
-          <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px', display: 'block', marginBottom: '4px' }}>Safest Calculated Exit</span>
-          <span style={{ fontFamily: 'var(--font-rajdhani)', fontSize: '15px', fontWeight: '700', color: route?.success && route.dest_node !== -1 ? '#00ff88' : '#ff3d3d' }}>
-            {route?.success && route.dest_node !== -1 ? (EXIT_NAMES[route.dest_node] || `Node ${route.dest_node}`) : 'NO PASSABLE PATH'}
-          </span>
-        </div>
-
-        {/* Route Waypoints Detail */}
-        {route?.success && route.path.length > 0 && (
-          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '9px', color: 'rgba(160,210,240,0.6)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-              Waypoint Guidance Log
-            </span>
-            <div className={styles.waypointLogContainer}>
-              {route.path.map((nid, index) => {
-                const node = cityData?.nodes.find(n => n.id === nid);
-                const isFirst = index === 0;
-                const isLast = index === route.path.length - 1;
-                const elevation = node ? node.elevation.toFixed(1) : '0.0';
-                
-                const isUnderCompromisedWire = route.hazard_roads && Object.keys(route.hazard_roads).some(key => {
-                  const state = route.hazard_roads?.[key];
-                  if (state !== 'dead' && state !== 'overloaded') return false;
-                  const [u, v] = key.split('-').map(Number);
-                  return (u === nid || v === nid);
-                });
-                const isBlackout = route.blackout_nodes.includes(nid);
-                
-                let warning = '';
-                if (isUnderCompromisedWire) warning += '⚡';
-                if (isBlackout) warning += '🔌';
-                
-                let textColor = 'rgba(255, 255, 255, 0.85)';
-                if (isFirst) textColor = '#00e5ff';
-                else if (isLast) textColor = '#00ff88';
-                else if (isBlackout) textColor = '#ffea00';
-                
-                return (
-                  <div key={nid} className={styles.waypointLogRow} style={{ color: textColor }}>
-                    <span style={{ fontWeight: '600' }}>
-                      {isFirst ? 'START' : (isLast ? 'EXIT' : `#${index}`)}: Node {nid}
-                    </span>
-                    <span style={{ fontSize: '9.5px', color: 'rgba(160,210,240,0.6)' }}>
-                      ({elevation}m ASL){warning && <span title="Blackout/Power line Hazard area" style={{ color: '#ffea00', marginLeft: '4px' }}>{warning}</span>}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {isLoading && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 0', marginTop: '10px', color: '#00e5ff' }}>
-            <span className={styles.spinner} />
-            <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>SOLVING DIJKSTRA WEIGHTS...</span>
-          </div>
-        )}
-
-        {route && (
-          <button className={styles.clearBtn} onClick={clearRoute} style={{ marginTop: '10px', width: '100%' }}>
-            ✕ Clear Route
-          </button>
-        )}
+        <div className={styles.modeRow}><span>Map treatment</span><div>{(['nominal', 'radar', 'thermal'] as const).map((mode) => <button key={mode} className={mapFilterMode === mode ? styles.modeActive : ''} onClick={() => setMapFilterMode(mode)}>{mode}</button>)}</div></div>
+        <div className={styles.presetRow}><button onClick={() => setFlyToCoords({ lon: -95.3698, lat: 29.7604, elev: 4300, heading: 8, pitch: -62 })}>District overview</button><button onClick={() => setFlyToCoords({ lon: -95.375, lat: 29.755, elev: 1500, heading: 0, pitch: -70 })}>Street detail</button></div>
       </section>
 
-      {/* ── Section: Anomaly / ML Status ── */}
-      {route && (
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>
-            <span className={styles.sectionIcon}>🤖</span> ML Anomaly Scan
-          </h2>
-
-          {/* Risk badge */}
-          <div
-            className={styles.riskBadge}
-            style={{ borderColor: RISK_COLORS[route.risk_level], color: RISK_COLORS[route.risk_level] }}
-          >
-            {RISK_LABELS[route.risk_level]}
-          </div>
-
-          {/* Anomaly score bar */}
-          <div className={styles.scoreRow}>
-            <span className={styles.metaLabel}>Anomaly Score</span>
-            <span className={styles.scoreValue}>{(anonScore! * 100).toFixed(0)}%</span>
-          </div>
-          <div className={styles.scoreBar}>
-            <div
-              className={styles.scoreFill}
-              style={{
-                width: `${anonScore! * 100}%`,
-                background: RISK_COLORS[route.risk_level],
-              }}
-            />
-          </div>
-        </section>
-      )}
-
-      {/* ── Section: Route Stats ── */}
-      {route && (
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>
-            <span className={styles.sectionIcon}>📊</span> Route Statistics
-          </h2>
-          <div className={styles.statGrid}>
-            <div className={styles.statCard}>
-              <span className={styles.statNum}>{route.total_nodes}</span>
-              <span className={styles.statLbl}>Waypoints</span>
-            </div>
-            <div className={styles.statCard}>
-              <span className={styles.statNum} style={{ color: '#ff4400' }}>
-                {route.flooded_nodes.length}
-              </span>
-              <span className={styles.statLbl}>Flooded Nodes</span>
-            </div>
-            <div className={styles.statCard}>
-              <span className={styles.statNum} style={{ color: '#ffc107' }}>
-                {route.blackout_nodes.length}
-              </span>
-              <span className={styles.statLbl}>Blackout Nodes</span>
-            </div>
-            <div className={styles.statCard}>
-              <span className={styles.statNum} style={{ color: '#ff2222' }}>
-                {route.blocked_edges.length}
-              </span>
-              <span className={styles.statLbl}>Blocked Streets</span>
-            </div>
-          </div>
-
-          <div className={`${styles.routeStatusBanner} ${route.success ? styles.routeOk : styles.routeFail}`}>
-            {route.success ? '✓ SAFE ROUTE FOUND' : '✕ NO SAFE ROUTE'}
-          </div>
-          <p className={styles.routeMsg}>{route.message}</p>
-        </section>
-      )}
-
-      {/* ── Footer ── */}
-      <div className={styles.footer}>
-        <span>GridEvac AI v1.0 · Houston, TX</span>
-        <span>IsolationForest + NetworkX</span>
-      </div>
+      <section className={styles.routeSummary}>
+        <div className={styles.routeSummaryTop}><div><p className={styles.kicker}>Current recommendation</p><h3 style={{ color: riskColor }}>{route?.success ? 'PASSABLE CORRIDOR' : route ? 'NO PASSABLE ROUTE' : 'AWAITING ASSESSMENT'}</h3></div><span className={styles.riskMark} style={{ color: riskColor }}>{route ? riskLevel : '-'}</span></div>
+        <div className={styles.summaryGrid}><span><b>{route?.success ? `${route.eta_minutes.toFixed(1)} min` : '-'}</b><small>estimated time</small></span><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b><small>street distance</small></span><span><b>{floodedCount}</b><small>flooded nodes</small></span><span><b>{route?.blocked_edges.length ?? 0}</b><small>closures</small></span></div>
+        {route?.success && <div className={styles.stepList}>{route.route_steps.slice(0, 4).map((step, index) => <div className={styles.stepRow} key={`${step.from_node}-${step.to_node}`}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><small>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min</small></div></div>)}</div>}
+        {route?.success && <p className={styles.destination}>{EXIT_NAMES[route.dest_node] ?? `Exit node ${route.dest_node}`}. {route.message}</p>}
+        {route && <button className={styles.clearButton} onClick={clearRoute}>Clear route overlay</button>}
+      </section>
     </aside>
   );
 }

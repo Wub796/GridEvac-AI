@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import ControlPanel from '@/components/ControlPanel';
 import TutorialModal from '@/components/TutorialModal';
@@ -9,96 +9,204 @@ import Sparkline from '@/components/Sparkline';
 
 const CesiumViewer = dynamic(() => import('@/components/CesiumViewer'), {
   ssr: false,
-  loading: () => <div className="map-loading">Loading live geospatial operations map…</div>,
+  loading: () => <div className="map-loading">Preparing street network…</div>,
 });
 
-const zones = [
-  { name: 'Downtown', detail: 'Harris County · Zone 01', status: 'MONITOR', tone: 'cyan' },
-  { name: 'East Houston', detail: 'Harris County · Zone 04', status: 'READY', tone: 'green' },
-  { name: 'Buffalo Bayou', detail: 'Harris County · Zone 06', status: 'WATCH', tone: 'amber' },
+const responseZones = [
+  { code: 'DT', name: 'Downtown core', description: 'Civic buildings · high density', status: 'Monitor', tone: 'teal' },
+  { code: 'BW', name: 'Buffalo Bayou', description: 'Low-lying corridor · water watch', status: 'Watch', tone: 'amber' },
+  { code: 'EW', name: 'East / Fifth Ward', description: 'Arterial exits · response ready', status: 'Ready', tone: 'green' },
 ];
+
+function Reveal({ children, className = '' }: { children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const root = element.closest('.content-scroll');
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.unobserve(element);
+        }
+      },
+      { root, threshold: 0.12, rootMargin: '0px 0px -30px' },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return <div ref={ref} className={`scroll-reveal ${visible ? 'is-visible' : ''} ${className}`}>{children}</div>;
+}
+
+function formatDistance(meters: number) {
+  if (!meters) return '-';
+  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+}
+
+function formatClock(date: Date) {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 
 export default function HomePage() {
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const [now, setNow] = useState(() => new Date());
   const {
-    fetchCityData, triggerLiveTick, activeSection, setActiveSection,
-    route, backendOnline, gridFrequency, usgsGageHeight, surfaceTemp,
-    failedSubstations, overloadedSubstations, cascadedSubstations,
-    frequencyHistory, gageHistory, cityData,
+    fetchCityData,
+    triggerLiveTick,
+    activeSection,
+    setActiveSection,
+    route,
+    backendOnline,
+    gridFrequency,
+    usgsGageHeight,
+    surfaceTemp,
+    failedSubstations,
+    overloadedSubstations,
+    cascadedSubstations,
+    frequencyHistory,
+    gageHistory,
+    cityData,
+    originNode,
+    liveLogs,
+    isLoading,
   } = useSimulationStore();
 
   useEffect(() => {
-    fetchCityData();
-    const interval = window.setInterval(triggerLiveTick, 3000);
-    return () => window.clearInterval(interval);
+    void fetchCityData();
+    const telemetryTimer = window.setInterval(triggerLiveTick, 3000);
+    const clockTimer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => {
+      window.clearInterval(telemetryTimer);
+      window.clearInterval(clockTimer);
+    };
   }, [fetchCityData, triggerLiveTick]);
+
+  useEffect(() => {
+    const scrollRoot = document.querySelector('.content-scroll');
+    if (!scrollRoot) return;
+    const sections = Array.from(scrollRoot.querySelectorAll<HTMLElement>('[data-section]'));
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        const section = visible?.target.getAttribute('data-section') as 'briefing' | 'map' | 'audit' | null;
+        if (section) setActiveSection(section);
+      },
+      { root: scrollRoot, threshold: [0.2, 0.45, 0.7] },
+    );
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [setActiveSection]);
 
   const totalOutages = new Set([...failedSubstations, ...cascadedSubstations]).size;
   const risk = route?.risk_level ?? 'LOW';
   const riskLabel = risk === 'LOW' ? 'Operational' : risk === 'MEDIUM' ? 'Elevated' : risk === 'HIGH' ? 'High risk' : 'Critical';
+  const origin = cityData?.nodes.find((node) => node.id === originNode);
+  const destination = cityData?.nodes.find((node) => node.id === route?.dest_node);
+
   const scrollTo = (section: 'briefing' | 'map' | 'audit') => {
     setActiveSection(section);
-    document.querySelector(`[data-section="${section}"]`)?.scrollIntoView({ behavior: 'smooth' });
+    document.querySelector(`[data-section="${section}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   return (
     <main className="app-shell">
-      <div className="ambient-grid" aria-hidden="true" />
       <header className="topbar">
         <div className="brand-lockup">
-          <div className="brand-mark">GE</div>
-          <div><strong>GridEvac</strong><span>Emergency intelligence</span></div>
+          <div className="brand-mark"><span>G</span><i>↗</i></div>
+          <div>
+            <strong>GridEvac</strong>
+            <span>Regional response intelligence</span>
+          </div>
         </div>
-        <div className="topbar-center"><span className="live-dot" /> Houston regional operations · <b>08:42 CST</b></div>
+        <div className="topbar-center">
+          <span className="live-dot" /> Houston operations district <b>·</b> {formatClock(now)} CST
+        </div>
         <div className="topbar-actions">
-          <span className={`connection-pill ${backendOnline ? 'online' : ''}`}><i /> {backendOnline ? 'Live feeds connected' : 'Local fallback mode'}</span>
-          <button className="icon-button" onClick={() => setIsTutorialOpen(true)} aria-label="Open help">?</button>
+          <span className={`connection-pill ${backendOnline ? 'online' : ''}`}>
+            <i /> {backendOnline ? 'Live API connected' : 'Local solver active'}
+          </span>
+          <button className="icon-button" onClick={() => setIsTutorialOpen(true)} aria-label="Open operator guide">?</button>
         </div>
       </header>
 
       <div className="workspace">
-        <aside className="nav-rail">
-          <div className="rail-label">Workspace</div>
-          <button className={activeSection === 'briefing' ? 'rail-link active' : 'rail-link'} onClick={() => scrollTo('briefing')}><span>01</span> Briefing</button>
-          <button className={activeSection === 'map' ? 'rail-link active' : 'rail-link'} onClick={() => scrollTo('map')}><span>02</span> Live map</button>
-          <button className={activeSection === 'audit' ? 'rail-link active' : 'rail-link'} onClick={() => scrollTo('audit')}><span>03</span> Grid audit</button>
+        <aside className="nav-rail" aria-label="Workspace navigation">
+          <div className="rail-label">Command view</div>
+          <button className={`rail-link ${activeSection === 'briefing' ? 'active' : ''}`} onClick={() => scrollTo('briefing')}><span className="rail-initial">B</span><b>Briefing</b></button>
+          <button className={`rail-link ${activeSection === 'map' ? 'active' : ''}`} onClick={() => scrollTo('map')}><span className="rail-initial">M</span><b>Live map</b></button>
+          <button className={`rail-link ${activeSection === 'audit' ? 'active' : ''}`} onClick={() => scrollTo('audit')}><span className="rail-initial">A</span><b>Route audit</b></button>
           <div className="rail-spacer" />
-          <div className="rail-footer">SIM<br /><b>v1.0</b></div>
         </aside>
 
         <div className="content-scroll">
           <section className="overview-section" data-section="briefing">
-            <div className="section-heading">
-              <div><p className="eyebrow">Regional situation room / Houston, Texas</p><h1>Good morning, <em>operator.</em></h1><p className="lede">Monitor hazards, validate evacuation routes, and coordinate a safer response across the city grid.</p></div>
-              <div className="date-card"><span>THU</span><strong>24</strong><small>OCT 2024</small></div>
-            </div>
+            <Reveal className="section-heading">
+              <div>
+                <p className="eyebrow">Regional situation room / Houston, Texas</p>
+                <h1>Make the next move <em>safer.</em></h1>
+                <p className="lede">Model floodwater, utility failures, and street-level access in one operational view. Every route follows a named road corridor instead of cutting across city blocks.</p>
+              </div>
+              <div className="briefing-meta"><span>Operational day</span><strong>{now.toLocaleDateString([], { weekday: 'short' }).toUpperCase()}</strong><b>{now.toLocaleDateString([], { month: 'short', day: '2-digit' }).toUpperCase()}</b></div>
+            </Reveal>
 
-            <div className="alert-banner"><div className="alert-icon">!</div><div><strong>{riskLabel} conditions detected</strong><span>{route ? route.message : 'No active route assessment. Start a scenario to evaluate the network.'}</span></div><button onClick={() => scrollTo('map')}>Review map <b>↗</b></button></div>
+            <Reveal>
+              <div className={`alert-banner ${risk.toLowerCase()}`}>
+                <div className="alert-icon">{risk === 'LOW' ? '✓' : '!'}</div>
+                <div className="alert-copy"><strong>{riskLabel} conditions · {route ? 'assessment ready' : 'awaiting first assessment'}</strong><span>{route?.message ?? 'Load a scenario or choose an origin to calculate a passable street corridor.'}</span></div>
+                <button onClick={() => scrollTo('map')}>Open route planner <b>↗</b></button>
+              </div>
+            </Reveal>
 
             <div className="metric-grid">
-              <article className="metric-card"><div className="metric-top"><span>Grid frequency</span><span className="metric-status green">STABLE</span></div><strong>{gridFrequency.toFixed(2)}<small> Hz</small></strong><Sparkline data={frequencyHistory} width={180} height={36} stroke="#39d98a" /><footer>Target 60.00 Hz · live SCADA</footer></article>
-              <article className="metric-card"><div className="metric-top"><span>Bayou gage height</span><span className="metric-status amber">WATCH</span></div><strong>{usgsGageHeight.toFixed(2)}<small> ft</small></strong><Sparkline data={gageHistory} width={180} height={36} stroke="#f4b860" /><footer>USGS 08074000 · updated just now</footer></article>
-              <article className="metric-card"><div className="metric-top"><span>Substations offline</span><span className={`metric-status ${totalOutages ? 'red' : 'green'}`}>{totalOutages ? 'ACTION' : 'CLEAR'}</span></div><strong>{String(totalOutages).padStart(2, '0')}<small> nodes</small></strong><div className="mini-bars"><i style={{ height: `${Math.max(12, totalOutages * 20)}%` }} /><i style={{ height: `${Math.max(18, overloadedSubstations.length * 28)}%` }} /><i style={{ height: `${Math.max(22, cascadedSubstations.length * 35)}%` }} /><i style={{ height: '72%' }} /><i style={{ height: '55%' }} /></div><footer>{overloadedSubstations.length} overloaded · {cascadedSubstations.length} cascaded</footer></article>
-              <article className="metric-card"><div className="metric-top"><span>Surface temperature</span><span className="metric-status amber">HEAT INDEX</span></div><strong>{surfaceTemp.toFixed(1)}<small> °F</small></strong><div className="temperature-scale"><i /><span>82°</span><span>95°</span><span>105°</span></div><footer>Houston surface telemetry feed</footer></article>
+              <Reveal><article className="metric-card metric-card-route"><div className="metric-top"><span>Recommended ETA</span><span className="metric-status green">ROAD-AWARE</span></div><strong>{route?.success ? `${route.eta_minutes.toFixed(1)}` : '-'}<small>{route?.success ? ' min' : ' pending'}</small></strong><div className="metric-caption">{destination ? `To ${destination.intersection_name}` : 'Run a route assessment to begin'}</div></article></Reveal>
+              <Reveal><article className="metric-card"><div className="metric-top"><span>Street distance</span><span className="metric-status green">{route?.success ? 'VALIDATED' : 'READY'}</span></div><strong>{route?.success ? formatDistance(route.distance_m) : '-'}<small>{route?.success ? '' : ' route'}</small></strong><div className="metric-caption">Weighted by road class, hazards, and access</div></article></Reveal>
+              <Reveal><article className="metric-card"><div className="metric-top"><span>Grid frequency</span><span className={`metric-status ${gridFrequency < 59.7 ? 'red' : 'green'}`}>{gridFrequency < 59.7 ? 'DEGRADED' : 'STABLE'}</span></div><strong>{gridFrequency.toFixed(2)}<small> Hz</small></strong><Sparkline data={frequencyHistory} width={170} height={32} stroke={gridFrequency < 59.7 ? '#c9534c' : '#1c8a64'} /><div className="metric-caption">Live utility telemetry · target 60.00 Hz</div></article></Reveal>
+              <Reveal><article className="metric-card"><div className="metric-top"><span>Network impact</span><span className={`metric-status ${totalOutages ? 'amber' : 'green'}`}>{totalOutages ? 'WATCH' : 'CLEAR'}</span></div><strong>{String(totalOutages).padStart(2, '0')}<small> outages</small></strong><div className="impact-bar"><i style={{ width: `${Math.min(100, totalOutages * 16 + overloadedSubstations.length * 10)}%` }} /></div><div className="metric-caption">{overloadedSubstations.length} overloaded · {cascadedSubstations.length} cascaded</div></article></Reveal>
             </div>
 
             <div className="overview-columns">
-              <article className="panel-card zone-card"><div className="panel-heading"><div><p className="eyebrow">Coverage</p><h2>Response zones</h2></div><button className="text-button" onClick={() => scrollTo('map')}>View map ↗</button></div>{zones.map((zone) => <div className="zone-row" key={zone.name}><div className={`zone-avatar ${zone.tone}`}>{zone.name.slice(0, 2).toUpperCase()}</div><div className="zone-info"><strong>{zone.name}</strong><span>{zone.detail}</span></div><span className={`zone-status ${zone.tone}`}>{zone.status}</span><span className="row-arrow">›</span></div>)}</article>
-              <article className="panel-card readiness-card"><div className="panel-heading"><div><p className="eyebrow">System readiness</p><h2>Response posture</h2></div><span className="score">86<span>%</span></span></div><div className="readiness-track"><i style={{ width: '86%' }} /></div><div className="readiness-list"><span><i className="check">✓</i> Data feeds connected <b>4/4</b></span><span><i className="check">✓</i> Evacuation exits available <b>4</b></span><span><i className="warn">!</i> Grid anomalies detected <b>{route ? Math.round((route.anomaly_score ?? 0) * 100) : 0}%</b></span></div></article>
+              <Reveal className="panel-card zone-card"><div className="panel-heading"><div><h2>Response zones</h2></div><button className="text-button" onClick={() => scrollTo('map')}>Inspect map ↗</button></div>{responseZones.map((zone) => <div className="zone-row" key={zone.name}><div className={`zone-avatar ${zone.tone}`}>{zone.code}</div><div className="zone-info"><strong>{zone.name}</strong><span>{zone.description}</span></div><span className={`zone-status ${zone.tone}`}>{zone.status}</span><span className="row-arrow">›</span></div>)}</Reveal>
+              <Reveal className="panel-card readiness-card"><div className="panel-heading"><div><h2>Response posture</h2></div><span className="score">{route ? Math.max(0, 100 - Math.round((route.anomaly_score ?? 0) * 36)) : 84}<small>%</small></span></div><div className="readiness-track"><i style={{ width: `${route ? Math.max(0, 100 - Math.round((route.anomaly_score ?? 0) * 36)) : 84}%` }} /></div><div className="readiness-list"><span><i className="check">✓</i> Street graph loaded <b>{cityData ? `${cityData.nodes.length} nodes` : 'loading'}</b></span><span><i className="check">✓</i> Utility feeds available <b>{backendOnline ? '4 / 4' : 'local'}</b></span><span><i className={route?.success ? 'check' : 'warn'}>{route?.success ? '✓' : '!'}</i> Evacuation corridor <b>{route?.success ? 'validated' : 'not set'}</b></span></div></Reveal>
             </div>
           </section>
 
           <section className="map-section" data-section="map">
-            <div className="map-header"><div><p className="eyebrow">Live operations / geospatial view</p><h2>Houston network map</h2></div><div className="map-header-actions"><span className="map-coordinates">29.7604° N&nbsp;&nbsp; 95.3698° W</span><button className="outline-button" onClick={() => scrollTo('audit')}>Grid audit ↗</button></div></div>
-            <div className="map-frame"><CesiumViewer /><div className="map-vignette" /><div className="map-chip"><span className="live-dot" /> LIVE NETWORK VIEW <b>·</b> {cityData?.nodes.length ?? 0} intersections</div><div className="map-legend"><span><i className="legend-line route" /> Safe route</span><span><i className="legend-line flood" /> Flood zone</span><span><i className="legend-dot power" /> Substation</span></div><div className="map-help">Drag to explore&nbsp; · &nbsp;Scroll to zoom</div></div>
-            <div className="map-bottom-grid"><div className="map-stat"><span>Active route</span><strong>{route?.success ? 'Validated' : 'Awaiting input'}</strong><small>{route?.path.length ?? 0} waypoints</small></div><div className="map-stat"><span>Current risk</span><strong className={`risk-${risk.toLowerCase()}`}>{riskLabel}</strong><small>ML anomaly scan</small></div><div className="map-stat"><span>Next update</span><strong>00:03</strong><small>Automatic telemetry refresh</small></div></div>
-            <ControlPanel />
+            <Reveal className="map-header"><div><h2>Houston route planner</h2><p>Road centerlines, block footprints, utility risk, and modeled flood cells share one coordinate system.</p></div><div className="map-header-actions"><span className="map-coordinates">{CENTER_LAT_LABEL} · {CENTER_LON_LABEL}</span><button className="outline-button" onClick={() => scrollTo('audit')}>Review audit ↗</button></div></Reveal>
+
+            <Reveal className="map-console-reveal">
+              <div className="map-console">
+                <CesiumViewer />
+                <div className="map-overlay map-overlay-top"><span className="live-dot" /> STREET NETWORK <b>·</b> {cityData?.edges.length ?? 0} corridors, {cityData?.blocks.length ?? 0} blocks</div>
+                <div className="map-overlay map-overlay-instruction"><strong>Map interaction</strong><span>Click a dry intersection to set a new origin</span></div>
+                <div className="map-legend"><span><i className="legend-line route" /> Recommended route</span><span><i className="legend-line arterial" /> Arterial</span><span><i className="legend-line hazard" /> Hazard / closure</span><span><i className="legend-dot flood" /> Flood cell</span></div>
+                <div className="map-readout"><span>Scenario surface</span><strong>{usgsGageHeight.toFixed(2)} ft gage · {surfaceTemp.toFixed(1)}°F</strong><small>{isLoading ? 'Recalculating route weights…' : 'Telemetry refresh every 3 sec'}</small></div>
+                <ControlPanel />
+              </div>
+            </Reveal>
+
+            <Reveal className="map-bottom-grid"><div className="map-stat"><span>Origin</span><strong>{origin ? `Node ${origin.id}` : '-'}</strong><small>{origin?.intersection_name ?? 'Select a dry intersection'}</small></div><div className="map-stat"><span>Destination</span><strong>{destination ? `Node ${destination.id}` : 'Awaiting route'}</strong><small>{destination?.intersection_name ?? 'Safest exit is calculated'}</small></div><div className="map-stat"><span>Corridor state</span><strong className={`risk-${risk.toLowerCase()}`}>{route?.success ? 'Passable' : 'Unresolved'}</strong><small>{route?.route_steps.length ?? 0} named road segments</small></div><div className="map-stat"><span>Flood exposure</span><strong>{route?.flooded_nodes.length ?? 0} nodes</strong><small>Threshold responds to slider</small></div></Reveal>
           </section>
 
-          <section className="audit-section" data-section="audit"><div className="audit-intro"><p className="eyebrow">Decision support / model transparency</p><h2>Grid audit <em>&amp; controls</em></h2><p>Understand the signals behind each evacuation recommendation. Adjust a scenario in the control center to see the network respond in real time.</p><button className="primary-button" onClick={() => scrollTo('map')}>Open control center ↗</button></div><div className="audit-cards"><article className="audit-feature"><span className="feature-number">01</span><h3>IsolationForest</h3><p>Monitors nine telemetry dimensions to surface unusual combinations before they become incidents.</p><div className="feature-foot">MODEL HEALTH <b>98.4%</b></div></article><article className="audit-feature"><span className="feature-number">02</span><h3>Weighted routing</h3><p>NetworkX pathfinding avoids flooded roads, blackout zones, and overloaded transmission corridors.</p><div className="feature-foot">ROUTES TESTED <b>{route?.total_nodes ?? 0}</b></div></article><article className="audit-feature accent-card"><span className="feature-number">03</span><h3>Operator controls</h3><p>Test flood levels, substation failures, and heatwave conditions without affecting live infrastructure.</p><div className="feature-foot">SAFE SIMULATION <b>ENABLED</b></div></article></div></section>
+          <section className="audit-section" data-section="audit">
+            <Reveal className="audit-intro"><h2>Route audit</h2><p>See exactly which corridors the solver selected, how far the team must travel, and which signals changed the recommendation.</p><button className="primary-button" onClick={() => scrollTo('map')}>Adjust scenario ↗</button></Reveal>
+            <div className="audit-content">
+              <Reveal className="route-report"><div className="audit-card-heading"><div><h3>{route?.success ? `Exit via Node ${route.dest_node}` : 'No route assessed'}</h3></div><span className={`report-status ${route?.success ? 'good' : 'pending'}`}>{route?.success ? `${route.eta_minutes.toFixed(1)} min` : 'PENDING'}</span></div><div className="route-report-meta"><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b> street distance</span><span><b>{route?.route_steps.length ?? 0}</b> road segments</span><span><b>{route?.blocked_edges.length ?? 0}</b> closures modeled</span></div>{route?.route_steps.length ? <div className="route-steps">{route.route_steps.slice(0, 5).map((step, index) => <div className="route-step" key={`${step.from_node}-${step.to_node}-${index}`}><span className="step-index">{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><span>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min, {step.road_class}</span></div></div>)}</div> : <div className="empty-report">Use the route planner to generate named-road guidance and a transparent risk assessment.</div>}</Reveal>
+              <div className="audit-cards"><Reveal><article className="audit-feature"><h3>Road-aware by design</h3><p>Named arterials, collectors, and local streets carry measured lengths, lane counts, and speed assumptions for a credible ETA.</p><div className="feature-foot">CORRIDORS <b>{cityData?.edges.length ?? 0}</b></div></article></Reveal><Reveal><article className="audit-feature"><h3>Blocks stay blocks</h3><p>Inset procedural footprints leave a visible road shoulder. The route is clamped to centerlines instead of floating through extruded buildings.</p><div className="feature-foot">BLOCK FOOTPRINTS <b>{cityData?.blocks.length ?? 0}</b></div></article></Reveal><Reveal><article className="audit-feature accent-card"><h3>Model what changes</h3><p>Flood cells, substations, blackouts, and overhead utility hazards update the route without hiding the underlying decision.</p><div className="feature-foot">ANOMALY SCORE <b>{route ? `${Math.round(route.anomaly_score * 100)}%` : '-'}</b></div></article></Reveal></div>
+              <Reveal className="activity-card"><div className="audit-card-heading"><div><h3>Operator event stream</h3></div><span className="activity-live"><i /> streaming</span></div><div className="activity-list">{liveLogs.slice(0, 5).map((log, index) => <div key={`${log}-${index}`}><p>{log}</p></div>)}</div></Reveal>
+            </div>
+          </section>
         </div>
       </div>
       <TutorialModal isOpen={isTutorialOpen} onClose={() => setIsTutorialOpen(false)} />
     </main>
   );
 }
+
+const CENTER_LAT_LABEL = '29.7604° N';
+const CENTER_LON_LABEL = '95.3698° W';

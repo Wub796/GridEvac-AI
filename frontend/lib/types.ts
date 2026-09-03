@@ -1,9 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared TypeScript types for GridEvac AI (Houston, TX)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ── City Graph ────────────────────────────────────────────────────────────────
-
 export interface NodeData {
   id: number;
   lat: number;
@@ -11,12 +5,29 @@ export interface NodeData {
   elevation: number;
   row: number;
   col: number;
+  intersection_name: string;
+  district: string;
 }
 
 export interface EdgeData {
   source: number;
   target: number;
   weight: number;
+  distance_m: number;
+  road_name: string;
+  road_class: 'arterial' | 'collector' | 'local' | string;
+  lanes: number;
+  speed_limit_mph: number;
+}
+
+export interface BlockData {
+  id: string;
+  row: number;
+  col: number;
+  lat: number;
+  lon: number;
+  kind: 'office' | 'residential' | 'retail' | 'civic' | 'park' | string;
+  height_m: number;
 }
 
 export interface SubstationData {
@@ -40,6 +51,7 @@ export interface TransmissionLink {
 export interface CityData {
   nodes: NodeData[];
   edges: EdgeData[];
+  blocks: BlockData[];
   substations: SubstationData[];
   transmission_links: TransmissionLink[];
   center_lat: number;
@@ -47,8 +59,6 @@ export interface CityData {
   grid_rows: number;
   grid_cols: number;
 }
-
-// ── Route ─────────────────────────────────────────────────────────────────────
 
 export interface RouteCoord {
   lat: number;
@@ -58,11 +68,24 @@ export interface RouteCoord {
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
+export interface RouteStep {
+  instruction: string;
+  road_name: string;
+  road_class: string;
+  distance_m: number;
+  duration_s: number;
+  from_node: number;
+  to_node: number;
+}
+
 export interface RouteResponse {
   success: boolean;
   path: number[];
   path_coords: RouteCoord[];
   total_nodes: number;
+  distance_m: number;
+  eta_minutes: number;
+  route_steps: RouteStep[];
   flooded_nodes: number[];
   blackout_nodes: number[];
   blocked_edges: [number, number][];
@@ -78,10 +101,8 @@ export interface RouteResponse {
   transmission_line_states: Record<number, string>;
   usgs_gage_height: number;
   surface_temp: number;
-  hazard_roads?: Record<string, string>;
+  hazard_roads: Record<string, string>;
 }
-
-// ── Simulation ────────────────────────────────────────────────────────────────
 
 export interface SimulationParams {
   flood_level: number;

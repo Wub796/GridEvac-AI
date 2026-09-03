@@ -1,5 +1,5 @@
 """
-anomaly.py — Upgraded 9-D IsolationForest Anomaly Detection
+anomaly.py - Upgraded 9-D IsolationForest Anomaly Detection
 ------------------------------------------------------------
 Pre-trains a scikit-learn IsolationForest on 9-dimensional
 normal grid telemetry (loads, stability indexes, rates, threats,

@@ -10,7 +10,7 @@ const http = axios.create({
 });
 
 export const api = {
-  /** Full static city graph — nodes, edges, substations */
+  /** Full static city graph - nodes, edges, substations */
   getCityData: async (): Promise<CityData> => {
     const { data } = await http.get<CityData>('/api/city');
     return data;
