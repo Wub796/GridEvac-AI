@@ -1,4 +1,6 @@
 :root {
+  /* Native controls (checkboxes, selects, scrollbars) render dark on every OS. */
+  color-scheme: dark;
   /* Ethereal Glass ground: deepest green-black with luminous accent tiers */
   --ink: #ecf4ef;
   --muted: #8aa39a;
@@ -22,7 +24,35 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 100%; height: 100%; overflow: hidden; }
+/* Touch ergonomics: no accidental text selection or long-press callouts on
+   controls, and the map keeps its native pan/pinch gestures. */
+button, .icon-button, .rail-link, a, input[type='checkbox'], input[type='range'] { touch-action: manipulation; }
+.cesium-map-surface canvas { touch-action: none; }
 body { background: #050d0b; color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+
+/* ===== Cross-platform base (iOS Safari, Android Chrome, desktop, PWA) ===== */
+/* Kill the gray tap flash and highlight; controls show their own :active states. */
+html { -webkit-tap-highlight-color: transparent; }
+body, .content-scroll, .tutorial-overlay { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* iOS inertial scrolling + prevent pull-to-refresh from hijacking the scroll */
+.content-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
+/* Respect fixed browser chrome on iOS < 15.4 where dvh is unsupported. */
+@supports not (height: 100dvh) {
+  .app-shell, html, body { height: 100vh; }
+  .workspace { height: calc(100vh - 72px); }
+}
+/* Keep content clear of the notch, home indicator, and rounded corners.
+   Applied only on devices that report insets (face-ID iPhones, Android nav bars). */
+@supports (padding: env(safe-area-inset-top)) {
+  @media (orientation: portrait) {
+    .topbar { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); padding-top: env(safe-area-inset-top); height: calc(72px + env(safe-area-inset-top)); }
+    .workspace { height: calc(100dvh - 72px - env(safe-area-inset-top)); }
+  }
+  @media (orientation: landscape) {
+    .topbar { padding-left: max(32px, env(safe-area-inset-left)); padding-right: max(32px, env(safe-area-inset-right)); }
+  }
+  .tutorial-overlay { padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); }
+}
 /* Fixed mesh-gradient + film-grain atmosphere: pointer-events-none, never on scrolling content */
 body::before {
   content: '';
@@ -514,4 +544,56 @@ button:active { transform: translateY(1px); }
   .map-overlay-top { left: 9px; top: 9px; }
   .map-legend { left: 9px; right: 9px; bottom: 9px; }
   .map-bottom-grid { gap: 9px; }
+}
+
+/* ===== Touch + active-state layer (phones/tablets) ===== */
+/* Hover is unreliable on touch — every pressable control gets a tactile
+   :active response. Media queries keep :active noise off desktop mice. */
+@media (hover: none) {
+  button, .rail-link { -webkit-user-select: none; user-select: none; }
+  .rail-link:active { background: rgba(46, 201, 138, .16); color: #eafff5; transform: scale(.98); }
+  .icon-button { width: 44px; height: 44px; font-size: 16px; }
+  .icon-button:active { background: var(--green-soft); border-color: rgba(46, 201, 138, .55); color: var(--green); transform: scale(.94); }
+  .topbar-actions { gap: 12px; }
+}
+@media (hover: hover) {
+  .rail-link:active, .icon-button:active { transform: translateY(1px) scale(.98); }
+}
+
+/* ===== Short landscape canvases: phones rotated, keyboard chasing ===== */
+@media (orientation: landscape) and (max-height: 520px) {
+  .topbar { height: 52px; }
+  .workspace { height: calc(100dvh - 52px); }
+  .map-console { height: calc(100dvh - 150px); min-height: 300px; }
+}
+
+/* ===== Small phones (≤360px: iPhone SE class, small Androids) ===== */
+@media (max-width: 360px) {
+  .topbar { padding: 0 10px; }
+  .brand-mark { width: 28px; height: 28px; border-radius: 9px; font-size: 13px; }
+  .metric-grid { grid-template-columns: 1fr; }
+  .metric-card { min-height: 0; }
+  .map-bottom-grid { grid-template-columns: 1fr; }
+  .map-legend { display: none; }
+  .section-heading h1 { font-size: 23px; }
+}
+
+/* ===== Print / PDF export: the briefing drops to a clean document ===== */
+@media print {
+  .topbar, .nav-rail, .map-section, .audit-section, .tutorial-overlay, .scroll-progress { display: none !important; }
+  html, body, .app-shell, .workspace, .content-scroll { height: auto; overflow: visible; background: #fff; color: #111; }
+  body::before, body::after { display: none; }
+  .overview-section { min-height: 0; padding: 12mm; }
+  .metric-card, .panel-card { border-color: #ddd; box-shadow: none; background: #fff; break-inside: avoid; }
+  .alert-banner, .zone-row, .readiness-list span { color: #111; }
+}
+
+/* ===== Reduced transparency (iOS Increase Contrast, Windows) ===== */
+@media (prefers-reduced-transparency: reduce) {
+  .topbar { background: #0a1a16; backdrop-filter: none; }
+  .nav-rail { background: #0a1a16; }
+  .tutorial-overlay { background: rgba(4, 12, 9, .92); backdrop-filter: none; }
+  .tutorial-card { background: #0d211c; }
+  .metric-card, .panel-card { background: #0d211c; }
+  .map-legend, .map-overlay-top, .map-readout { backdrop-filter: none; background: rgba(8, 20, 17, .95); }
 }

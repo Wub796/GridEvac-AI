@@ -1,13 +1,15 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import json
+import time
 import urllib.request
+from typing import Dict
 import uvicorn
 
 from models import (
     CityResponse, NodeData, EdgeData, BlockData, ParkData, SubstationData, TransmissionLink,
     SimulationRequest, RouteResponse, RouteCoord, RouteStep, FloodZoneResponse,
-    CorridorComparisonResponse, CorridorInfo, IsochroneResponse, IsochroneRing,
+    CorridorComparisonResponse, CorridorInfo, IsochroneResponse, IsochroneRing, CorridorCapacity,
 )
 from city_graph import (
     _G, _NODES, _BLOCKS, PARKS, _SUBSTATIONS, TRANSMISSION_LINKS,
@@ -77,6 +79,26 @@ async def flood_zones(flood_level: float = Query(default=0.0, ge=0.0, le=10.0)):
     )
 
 
+_FEED_TTL_SECONDS = 60.0
+_FEED_CACHE: Dict[str, tuple] = {}  # name -> (monotonic_time, value)
+
+
+def _cached_feed(name: str, fetcher) -> float:
+    """Serve live external reads from a 60 s TTL cache.
+
+    Gage height and air temperature change on minute scales, not request
+    scales; caching removes up to two 3 s-blocking network calls from every
+    route request while keeping the feed honest.
+    """
+    now = time.monotonic()
+    entry = _FEED_CACHE.get(name)
+    if entry and now - entry[0] < _FEED_TTL_SECONDS:
+        return entry[1]
+    value = fetcher()
+    _FEED_CACHE[name] = (now, value)
+    return value
+
+
 def fetch_usgs_water_level() -> float:
     url = "https://waterservices.usgs.gov/nwis/iv/?format=json&sites=08074000&parameterCd=00065"
     try:
@@ -134,10 +156,10 @@ async def calculate_route(req: SimulationRequest):
     elif failed_total >= 3:
         cascade_probability = 0.25
 
-    usgs_gage = fetch_usgs_water_level()
+    usgs_gage = _cached_feed("usgs_gage", fetch_usgs_water_level)
     if usgs_gage == -999.0:
         usgs_gage = round(4.2 + req.flood_level * 2.8, 2)
-    weather_temp = fetch_houston_weather_temp()
+    weather_temp = _cached_feed("weather_temp", fetch_houston_weather_temp)
     if weather_temp == -999.0:
         weather_temp = 88.0
     surface_temp = round(weather_temp - req.flood_level * 0.95 - failed_total * 0.45, 2)
@@ -182,6 +204,7 @@ async def calculate_route(req: SimulationRequest):
         usgs_gage_height=usgs_gage,
         surface_temp=surface_temp,
         hazard_roads=hazard_roads,
+        corridor_capacity=CorridorCapacity(**result.get("corridor_capacity", {})),
     )
 
 

@@ -12,6 +12,7 @@ import type {
   RouteStep,
   SubstationData,
   TravelMode,
+  CorridorCapacity,
 } from '@/lib/types';
 
 const FLOOD_RISE_PER_LEVEL = 1.7;
@@ -55,6 +56,25 @@ async function loadBakedNetwork(): Promise<BakedNetwork> {
 type Section = 'briefing' | 'map' | 'audit';
 type MapFilterMode = 'nominal' | 'radar' | 'thermal';
 type ScenarioPreset = 'flood' | 'cascade' | 'heatwave' | 'clear';
+
+/** A saved operating picture: the full scenario knob state plus the route
+ * outcome at save time, so two snapshots can be diffed after the fact. */
+export interface ScenarioSnapshot {
+  id: string;
+  label: string;
+  savedAt: number;
+  originNode: number;
+  floodLevel: number;
+  failedSubstations: number[];
+  travelMode: TravelMode;
+  outcome: {
+    success: boolean;
+    eta_minutes: number;
+    distance_m: number;
+    dest_node: number;
+    risk_level: string;
+  };
+}
 
 /* Travel-mode profiles mirror backend/routing.py so offline results match the
  * API exactly: seconds = distance_m * 2.23694 / mph, adjusted per road class. */
@@ -107,6 +127,9 @@ type SimulationStore = {
   isochrone: IsochroneResponse | null;
   isochroneVisible: boolean;
 
+  snapshots: ScenarioSnapshot[];
+  activeSnapshotId: string | null;
+
   cityData: CityData | null;
   route: RouteResponse | null;
   isLoading: boolean;
@@ -117,6 +140,10 @@ type SimulationStore = {
   refreshCorridors: () => Promise<void>;
   setIsochroneVisible: (value: boolean) => void;
   refreshIsochrone: () => Promise<void>;
+  saveSnapshot: (label: string) => void;
+  applySnapshot: (id: string) => void;
+  deleteSnapshot: (id: string) => void;
+  setActiveSnapshotId: (id: string | null) => void;
   setFloodLevel: (value: number) => void;
   toggleSubstation: (id: number) => void;
   setOriginNode: (id: number) => void;
@@ -218,7 +245,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   gageHistory: Array(16).fill(4.5),
 
   showBuildings: true,
-  showPowerLines: true,
+  showPowerLines: false,
   showSubstations: true,
   // Intersections and road-name labels start off: with ~4,000 junctions and
   // ~90 labels the default view stays calm, and both are one toggle away.
@@ -237,6 +264,9 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   corridorComparison: null,
   isochrone: null,
   isochroneVisible: false,
+
+  snapshots: [],
+  activeSnapshotId: null,
 
   cityData: null,
   route: null,
@@ -298,6 +328,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   fetchCityData: async () => {
     set({ isLoading: true, error: null });
+    // Restore saved scenario snapshots before anything else so the UI shows
+    // them immediately.
+    try {
+      const stored = typeof window !== 'undefined' ? window.localStorage.getItem('gridevac-snapshots') : null;
+      if (stored) set({ snapshots: JSON.parse(stored) as ScenarioSnapshot[] });
+    } catch { /* ignore malformed storage */ }
     // Start pulling the baked network immediately: if the API path fails, the
     // 1.8 MB offline graph is already mid-flight instead of starting cold.
     const bakedPromise = loadBakedNetwork().catch(() => null);
@@ -379,7 +415,6 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   triggerLiveTick: () => {
     const { route, cityData, failedSubstations, cascadedSubstations, substationLoads, gridFrequency, usgsGageHeight, surfaceTemp } = get();
     if (!route || !cityData || Object.keys(substationLoads).length === 0) return;
-
     const nextLoads = { ...substationLoads };
     const nextOverloaded = get().overloadedSubstations.filter((id) => !failedSubstations.includes(id) && !cascadedSubstations.includes(id));
     Object.keys(nextLoads).forEach((key) => {
@@ -431,6 +466,53 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     set({ corridorComparison: offlineCompareCorridors(cityData, originNode, floodLevel, failedSubstations, travelMode) });
   },
   setIsochroneVisible: (value) => set({ isochroneVisible: value }),
+  saveSnapshot: (label) => {
+    const { originNode, floodLevel, failedSubstations, travelMode, route } = get();
+    const snapshot: ScenarioSnapshot = {
+      id: `snap-${Date.now()}-${Math.round(Math.random() * 1e4)}`,
+      label: label.trim() || `Scenario ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      savedAt: Date.now(),
+      originNode,
+      floodLevel,
+      failedSubstations: [...failedSubstations],
+      travelMode,
+      outcome: {
+        success: route?.success ?? false,
+        eta_minutes: route?.eta_minutes ?? 0,
+        distance_m: route?.distance_m ?? 0,
+        dest_node: route?.dest_node ?? -1,
+        risk_level: route?.risk_level ?? '-',
+      },
+    };
+    let next: ScenarioSnapshot[] = [snapshot];
+    try {
+      const stored = window.localStorage.getItem('gridevac-snapshots');
+      const prior: ScenarioSnapshot[] = stored ? JSON.parse(stored) : [];
+      next = [snapshot, ...prior].slice(0, 6);
+      window.localStorage.setItem('gridevac-snapshots', JSON.stringify(next));
+    } catch { /* private mode: keep session-only */ }
+    set({ snapshots: next, activeSnapshotId: snapshot.id });
+    get().addLog(`Scenario snapshot saved: ${snapshot.label}.`);
+  },
+  applySnapshot: (id) => {
+    const snapshot = get().snapshots.find((snap) => snap.id === id);
+    if (!snapshot) return;
+    set({
+      originNode: snapshot.originNode,
+      floodLevel: snapshot.floodLevel,
+      failedSubstations: [...snapshot.failedSubstations],
+      travelMode: snapshot.travelMode,
+      activeSnapshotId: id,
+    });
+    get().addLog(`Scenario restored: ${snapshot.label}.`);
+    queueRouteCalculation(get().calculateRoute);
+  },
+  deleteSnapshot: (id) => {
+    const next = get().snapshots.filter((snap) => snap.id !== id);
+    try { window.localStorage.setItem('gridevac-snapshots', JSON.stringify(next)); } catch { /* ignore */ }
+    set({ snapshots: next, activeSnapshotId: get().activeSnapshotId === id ? null : get().activeSnapshotId });
+  },
+  setActiveSnapshotId: (id) => set({ activeSnapshotId: id }),
   refreshIsochrone: async () => {
     const { cityData, floodLevel, failedSubstations, originNode, travelMode, isochroneVisible } = get();
     if (!cityData || !isochroneVisible) return;
@@ -667,6 +749,29 @@ function offlinePowerFlow(cityData: CityData, failedInputs: number[]) {
 
 type WeightedEdge = EdgeData & { routeWeight: number };
 
+/** Offline mirror of backend _corridor_capacity: throughput via lane geometry.
+ * Clearance time = district population share served by this origin, divided by
+ * the bottleneck throughput, expressed in minutes. */
+function corridorCapacity(pathEdges: WeightedEdge[], travelMode: TravelMode): CorridorCapacity {
+  if (!pathEdges.length) return { people_per_hour: 0, clearance_minutes: 0, limiting_road: '-' };
+  let bottleneckPph = Number.POSITIVE_INFINITY;
+  let bottleneckRoad = '-';
+  pathEdges.forEach((edge) => {
+    const lanes = Math.max(1, edge.lanes || 2);
+    const pph = edge.road_class === 'service' ? lanes * 300
+      : edge.road_class === 'collector' ? lanes * 1700 * 2.5
+      : lanes * 1900 * 2.475;
+    if (pph < bottleneckPph) { bottleneckPph = pph; bottleneckRoad = edge.road_name; }
+  });
+  // District population of the modeled area (~24,000 in downtown Houston) is
+  // apportioned across 6 typical origins served from this corridor.
+  const servedPeople = 24000 / 6;
+  const clearanceMinutes = travelMode === 'foot'
+    ? Number((servedPeople / 5000 * 60).toFixed(1))
+    : Number((servedPeople / bottleneckPph * 60).toFixed(1));
+  return { people_per_hour: Math.round(bottleneckPph), clearance_minutes: clearanceMinutes, limiting_road: bottleneckRoad };
+}
+
 function buildOfflineEdgeMap(
   cityData: CityData,
   flow: ReturnType<typeof offlinePowerFlow>,
@@ -696,24 +801,94 @@ function buildOfflineEdgeMap(
   return { edgeMap, deadEdges, overloadedEdges };
 }
 
+/**
+ * Binary min-heap for Dijkstra. The previous implementation rescanned every
+ * edge for every dequeued node (O(V·E) ≈ 23M ops on this network per solve);
+ * the heap restores the classic O(E log V) bound.
+ */
+class MinHeap {
+  private items: Array<{ id: number; cost: number }> = [];
+
+  get size() { return this.items.length; }
+
+  push(id: number, cost: number) {
+    const items = this.items;
+    items.push({ id, cost });
+    let i = items.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (items[parent].cost <= items[i].cost) break;
+      [items[parent], items[i]] = [items[i], items[parent]];
+      i = parent;
+    }
+  }
+
+  pop(): { id: number; cost: number } | undefined {
+    const items = this.items;
+    const top = items[0];
+    const last = items.pop();
+    if (items.length && last) {
+      items[0] = last;
+      let i = 0;
+      for (;;) {
+        const left = i * 2 + 1;
+        const right = left + 1;
+        let smallest = i;
+        if (left < items.length && items[left].cost < items[smallest].cost) smallest = left;
+        if (right < items.length && items[right].cost < items[smallest].cost) smallest = right;
+        if (smallest === i) break;
+        [items[smallest], items[i]] = [items[i], items[smallest]];
+        i = smallest;
+      }
+    }
+    return top;
+  }
+}
+
+/** Adjacency lists cached per edge-map instance — rebuilt only when the scenario changes. */
+const adjacencyCache = new WeakMap<Map<string, WeightedEdge>, Map<number, Array<{ to: number; weight: number }>>>();
+
+function adjacencyFromEdgeMap(edgeMap: Map<string, WeightedEdge>) {
+  let adjacency = adjacencyCache.get(edgeMap);
+  if (!adjacency) {
+    adjacency = new Map();
+    edgeMap.forEach((edge) => {
+      if (!Number.isFinite(edge.routeWeight)) return; // flooded pair: never traversable
+      const link = (from: number, to: number) => {
+        const list = adjacency!.get(from);
+        if (list) list.push({ to, weight: edge.routeWeight });
+        else adjacency!.set(from, [{ to, weight: edge.routeWeight }]);
+      };
+      link(edge.source, edge.target);
+      link(edge.target, edge.source);
+    });
+    adjacencyCache.set(edgeMap, adjacency);
+  }
+  return adjacency;
+}
+
 function offlineDijkstra(cityData: CityData, edgeMap: Map<string, WeightedEdge>, originNode: number) {
   const distances: Record<number, number> = {};
   const previous: Record<number, number | null> = {};
-  const remaining = new Set(cityData.nodes.map((node) => node.id));
   cityData.nodes.forEach((node) => { distances[node.id] = Number.POSITIVE_INFINITY; previous[node.id] = null; });
+  if (!(originNode in distances)) return { distances, previous };
+  const adjacency = adjacencyFromEdgeMap(edgeMap);
   distances[originNode] = 0;
-  while (remaining.size) {
-    let current: number | null = null;
-    remaining.forEach((node) => { if (current === null || distances[node] < distances[current]) current = node; });
-    if (current === null || distances[current] === Number.POSITIVE_INFINITY) break;
-    remaining.delete(current);
-    edgeMap.forEach((edge) => {
-      if (edge.source !== current && edge.target !== current) return;
-      const neighbor = edge.source === current ? edge.target : edge.source;
-      if (!remaining.has(neighbor) || !Number.isFinite(edge.routeWeight)) return;
-      const candidate = distances[current] + edge.routeWeight;
-      if (candidate < distances[neighbor]) { distances[neighbor] = candidate; previous[neighbor] = current; }
-    });
+  const heap = new MinHeap();
+  const settled = new Set<number>();
+  heap.push(originNode, 0);
+  while (heap.size) {
+    const current = heap.pop()!;
+    if (settled.has(current.id)) continue;
+    settled.add(current.id);
+    const neighbors = adjacency.get(current.id);
+    if (!neighbors) continue;
+    const base = distances[current.id];
+    for (const { to, weight } of neighbors) {
+      if (settled.has(to)) continue;
+      const candidate = base + weight;
+      if (candidate < distances[to]) { distances[to] = candidate; previous[to] = current.id; heap.push(to, candidate); }
+    }
   }
   return { distances, previous };
 }
@@ -791,6 +966,7 @@ function calculateOfflineRoute(cityData: CityData, floodLevel: number, failedSub
 
   const pathEdges = offlinePathEdges(path, edgeMap);
   const distance_m = Number(pathEdges.reduce((sum, edge) => sum + edge.distance_m, 0).toFixed(1));
+  const capacity = corridorCapacity(pathEdges, travelMode);
   const failedCount = failedSubstations.length + flow.cascaded_substations.length;
   const anomaly_score = Math.min(1, Number((0.04 + floodLevel * 0.05 + failedCount * 0.14 + flow.overloaded_substations.length * 0.08).toFixed(4)));
   const risk_level = anomaly_score >= 0.78 ? 'CRITICAL' : anomaly_score >= 0.55 ? 'HIGH' : anomaly_score >= 0.3 ? 'MEDIUM' : 'LOW';
@@ -809,6 +985,7 @@ function calculateOfflineRoute(cityData: CityData, floodLevel: number, failedSub
     distance_m,
     eta_minutes: Number((distances[destination] / 60).toFixed(1)),
     route_steps: buildRouteSteps(path, cityData, edgeMap),
+    corridor_capacity: capacity,
     flooded_nodes: Array.from(flooded),
     blackout_nodes: Array.from(flow.blackout_nodes),
     blocked_edges: cityData.edges.filter((edge) => flooded.has(edge.source) && flooded.has(edge.target)).map((edge) => [edge.source, edge.target]),
@@ -886,6 +1063,7 @@ function offlineCompareCorridors(cityData: CityData, origin: number, floodLevel:
         distance_m: Number(pathEdgeList.reduce((sum, edge) => sum + edge.distance_m, 0).toFixed(1)),
         hazard_count: hazardCount,
         path_length: path.length,
+        people_per_hour: corridorCapacity(pathEdgeList, mode).people_per_hour,
       });
     });
   }

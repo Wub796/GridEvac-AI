@@ -107,6 +107,7 @@ export interface RouteResponse {
   usgs_gage_height: number;
   surface_temp: number;
   hazard_roads: Record<string, string>;
+  corridor_capacity?: CorridorCapacity;
 }
 
 export interface SimulationParams {
@@ -125,6 +126,13 @@ export interface CorridorInfo {
   distance_m: number;
   hazard_count: number;
   path_length: number;
+  people_per_hour: number;
+}
+
+export interface CorridorCapacity {
+  people_per_hour: number;
+  clearance_minutes: number;
+  limiting_road: string;
 }
 
 export interface CorridorComparisonResponse {
