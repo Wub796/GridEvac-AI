@@ -1,22 +1,36 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared TypeScript types for GridEvac AI (Houston, TX)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ── City Graph ────────────────────────────────────────────────────────────────
-
 export interface NodeData {
   id: number;
+  osm?: number;
   lat: number;
   lon: number;
   elevation: number;
-  row: number;
-  col: number;
+  intersection_name: string;
+  district: string;
 }
 
 export interface EdgeData {
   source: number;
   target: number;
   weight: number;
+  distance_m: number;
+  road_name: string;
+  road_class: 'arterial' | 'collector' | 'local' | string;
+  lanes: number;
+  speed_limit_mph: number;
+  /** Intermediate street-curve coordinates between the two junctions. */
+  geometry?: [number, number][];
+}
+
+export interface BlockData {
+  id: string;
+  /** Real building footprint ring: [lat, lon] pairs. */
+  footprint: [number, number][];
+  height_m: number;
+}
+
+export interface ParkData {
+  id: string;
+  footprint: [number, number][];
 }
 
 export interface SubstationData {
@@ -40,15 +54,16 @@ export interface TransmissionLink {
 export interface CityData {
   nodes: NodeData[];
   edges: EdgeData[];
+  blocks: BlockData[];
+  parks: ParkData[];
   substations: SubstationData[];
   transmission_links: TransmissionLink[];
   center_lat: number;
   center_lon: number;
-  grid_rows: number;
-  grid_cols: number;
+  safe_exits: number[];
+  /** Quadrant label per exit node id ("North exit", ...). */
+  exit_names?: Record<string, string>;
 }
-
-// ── Route ─────────────────────────────────────────────────────────────────────
 
 export interface RouteCoord {
   lat: number;
@@ -58,11 +73,24 @@ export interface RouteCoord {
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
+export interface RouteStep {
+  instruction: string;
+  road_name: string;
+  road_class: string;
+  distance_m: number;
+  duration_s: number;
+  from_node: number;
+  to_node: number;
+}
+
 export interface RouteResponse {
   success: boolean;
   path: number[];
   path_coords: RouteCoord[];
   total_nodes: number;
+  distance_m: number;
+  eta_minutes: number;
+  route_steps: RouteStep[];
   flooded_nodes: number[];
   blackout_nodes: number[];
   blocked_edges: [number, number][];
@@ -78,13 +106,45 @@ export interface RouteResponse {
   transmission_line_states: Record<number, string>;
   usgs_gage_height: number;
   surface_temp: number;
-  hazard_roads?: Record<string, string>;
+  hazard_roads: Record<string, string>;
 }
-
-// ── Simulation ────────────────────────────────────────────────────────────────
 
 export interface SimulationParams {
   flood_level: number;
   failed_substations: number[];
   origin_node: number;
+  travel_mode?: TravelMode;
+}
+
+export type TravelMode = 'vehicle' | 'foot' | 'ems';
+
+export interface CorridorInfo {
+  exit_node: number;
+  exit_name: string;
+  eta_minutes: number;
+  distance_m: number;
+  hazard_count: number;
+  path_length: number;
+}
+
+export interface CorridorComparisonResponse {
+  origin: number;
+  travel_mode: TravelMode;
+  corridors: CorridorInfo[];
+  flooded_nodes: number[];
+  blackout_nodes: number[];
+}
+
+export interface IsochroneRing {
+  minutes: number;
+  node_count: number;
+  nodes: number[];
+}
+
+export interface IsochroneResponse {
+  origin: number;
+  travel_mode: TravelMode;
+  rings: IsochroneRing[];
+  flooded_nodes: number[];
+  blackout_nodes: number[];
 }

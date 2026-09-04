@@ -1,4 +1,4 @@
-# GridEvac AI — Task Tracker (Houston, TX)
+# GridEvac AI - Task Tracker (Houston, TX)
 
 ## Backend (Standalone)
 - [x] `backend/requirements.txt`
