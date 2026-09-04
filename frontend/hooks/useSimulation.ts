@@ -73,6 +73,7 @@ type SimulationStore = {
   showIntersections: boolean;
   showRoadNames: boolean;
   flyToNodeId: number | null;
+  flyToRoadKey: string | null;
   flyToCoords: { lon: number; lat: number; elev: number; heading?: number; pitch?: number } | null;
   mapFilterMode: MapFilterMode;
   activeSection: Section;
@@ -98,6 +99,7 @@ type SimulationStore = {
   setShowIntersections: (value: boolean) => void;
   setShowRoadNames: (value: boolean) => void;
   setFlyToNodeId: (id: number | null) => void;
+  setFlyToRoadKey: (key: string | null) => void;
   setFlyToCoords: (coords: { lon: number; lat: number; elev: number; heading?: number; pitch?: number } | null) => void;
   setMapFilterMode: (mode: MapFilterMode) => void;
   applyScenario: (preset: ScenarioPreset) => void;
@@ -185,9 +187,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   showBuildings: true,
   showPowerLines: true,
   showSubstations: true,
-  showIntersections: true,
-  showRoadNames: true,
+  // Intersections and road-name labels start off: with ~4,000 junctions and
+  // ~90 labels the default view stays calm, and both are one toggle away.
+  showIntersections: false,
+  showRoadNames: false,
   flyToNodeId: null,
+  flyToRoadKey: null,
   flyToCoords: null,
   mapFilterMode: 'nominal',
   activeSection: 'briefing',
@@ -338,6 +343,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setShowIntersections: (value) => set({ showIntersections: value }),
   setShowRoadNames: (value) => set({ showRoadNames: value }),
   setFlyToNodeId: (id) => set({ flyToNodeId: id }),
+  setFlyToRoadKey: (key) => set({ flyToRoadKey: key }),
   setFlyToCoords: (coords) => set({ flyToCoords: coords }),
   setMapFilterMode: (mode) => set({ mapFilterMode: mode }),
 

@@ -39,6 +39,8 @@ export default function CesiumViewer() {
   const substationEntitiesRef = useRef<Map<number, SubstationEntities>>(new Map());
   const transmissionEntitiesRef = useRef<any[]>([]);
   const floodEntitiesRef = useRef<any[]>([]);
+  const floodSettleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const searchHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blackoutEntitiesRef = useRef<any[]>([]);
   const routeEntitiesRef = useRef<any[]>([]);
   const staticRenderedRef = useRef(false);
@@ -58,6 +60,7 @@ export default function CesiumViewer() {
     originNode,
     flyToNodeId,
     setFlyToNodeId,
+    flyToRoadKey,
     flyToCoords,
     setFlyToCoords,
     mapFilterMode,
@@ -289,44 +292,52 @@ export default function CesiumViewer() {
     nodeEntitiesRef.current.forEach((entity) => { entity.show = showIntersections; });
     haloEntitiesRef.current.forEach((entity) => { entity.show = showIntersections; });
     roadLabelEntitiesRef.current.forEach((entity) => { entity.show = showRoadNames; });
-  }, [showPowerLines, showSubstations, showIntersections, showRoadNames, viewerReady]);
+  }, [showPowerLines, showSubstations, showIntersections, showRoadNames, viewerReady, cityData]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !cityData) return;
+    // Debounced: dragging the flood slider must not rebuild ~1,500 entities
+    // on every pixel of movement - only after the value settles.
+    const debounce = setTimeout(() => {
     clearEntities(viewer, floodEntitiesRef.current);
     floodEntitiesRef.current = [];
 
     const flooded = new Set(route?.flooded_nodes ?? cityData.nodes.filter((node) => node.elevation <= floodLevel * 1.7).map((node) => node.id));
     if (flooded.size === 0) return;
+    const nodesById = new Map(cityData.nodes.map((node) => [node.id, node]));
 
     const floodColor = Cesium.Color.fromCssColorString('#5bc0ea');
     const floodOutline = Cesium.Color.fromCssColorString('#5bc0ea');
     const animate = !prefersReducedMotion();
     const startedAt = performance.now();
     let index = 0;
+    const settleTimers: ReturnType<typeof setTimeout>[] = [];
     flooded.forEach((nodeId) => {
-      const node = cityData.nodes.find((item) => item.id === nodeId);
+      const node = nodesById.get(nodeId);
       if (!node) return;
       // Cells rise in with a small per-cell stagger so the water appears to
-      // spread rather than pop; after settling the properties are constant.
+      // spread rather than pop. Callbacks are capped: the first 400 cells
+      // animate, the rest start settled - a runaway callback list was one of
+      // the main frame drops in severe scenarios.
       const delay = Math.min(index * 6, 480);
       const duration = 620;
-      const growth = animate
+      const doAnimate = animate && index < 400;
+      const growth = doAnimate
         ? new Cesium.CallbackProperty(() => {
             const p = Math.min(1, Math.max(0, (performance.now() - startedAt - delay) / duration));
             const eased = 1 - (1 - p) ** 3;
             return 108 * (0.35 + 0.65 * eased);
           }, false)
         : 108;
-      const growthMinor = animate
+      const growthMinor = doAnimate
         ? new Cesium.CallbackProperty(() => {
             const p = Math.min(1, Math.max(0, (performance.now() - startedAt - delay) / duration));
             const eased = 1 - (1 - p) ** 3;
             return 82 * (0.35 + 0.65 * eased);
           }, false)
         : 82;
-      const alpha = animate
+      const alpha = doAnimate
         ? new Cesium.CallbackProperty(() => {
             const p = Math.min(1, Math.max(0, (performance.now() - startedAt - delay) / duration));
             return floodColor.withAlpha(0.2 * (0.25 + 0.75 * p));
@@ -347,8 +358,25 @@ export default function CesiumViewer() {
         },
       });
       floodEntitiesRef.current.push(entity);
+      if (doAnimate) {
+        // After the rise-in finishes, bake the final static values so Cesium
+        // stops re-evaluating properties for settled cells every frame.
+        settleTimers.push(setTimeout(() => {
+          if (viewer.isDestroyed() || !floodEntitiesRef.current.includes(entity)) return;
+          entity.ellipse.semiMajorAxis = new Cesium.ConstantProperty(108);
+          entity.ellipse.semiMinorAxis = new Cesium.ConstantProperty(82);
+          entity.ellipse.material = new Cesium.ColorMaterialProperty(floodColor.withAlpha(0.2));
+        }, delay + duration + 60));
+      }
       index += 1;
     });
+    floodSettleTimersRef.current = settleTimers;
+    }, 180);
+    return () => {
+      clearTimeout(debounce);
+      floodSettleTimersRef.current.forEach((timer) => clearTimeout(timer));
+      floodSettleTimersRef.current = [];
+    };
   }, [cityData, floodLevel, route, viewerReady]);
 
   useEffect(() => {
@@ -534,6 +562,38 @@ export default function CesiumViewer() {
     }).finally(() => setFlyToNodeId(null));
   }, [cityData, flyToNodeId, setFlyToNodeId, viewerReady]);
 
+  // Street-search landing: spotlight the matched corridor, fly to it, then
+  // hand the corridor back to its normal tier styling.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !flyToRoadKey || !cityData) return;
+    const { setFlyToRoadKey } = useSimulationStore.getState();
+    if (searchHighlightTimerRef.current) {
+      clearTimeout(searchHighlightTimerRef.current);
+      searchHighlightTimerRef.current = null;
+    }
+    const road = roadEntitiesRef.current.get(flyToRoadKey);
+    if (road) {
+      const { entity, edge } = road;
+      entity.polyline.show = new Cesium.ConstantProperty(true);
+      entity.polyline.width = new Cesium.ConstantProperty(Math.max(styleRoadWidth(edge.road_class), 12));
+      entity.polyline.material = new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString('#ff8c42').withAlpha(0.95));
+      const mid = entity.polyline.positions?.getValue(viewer.clock.currentTime);
+      if (mid && mid.length > 0) {
+        const carto = viewer.camera.positionCartographic;
+        viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(mid[Math.floor(mid.length / 2)], 420), {
+          duration: 1.2,
+          offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(carto.height > 2600 ? -88 : -80), 900),
+        });
+      }
+      searchHighlightTimerRef.current = setTimeout(() => {
+        if (viewer.isDestroyed()) return;
+        styleRoad(entity, edge, null);
+      }, 5200);
+    }
+    setFlyToRoadKey(null);
+  }, [flyToRoadKey, cityData, viewerReady]);
+
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || !flyToCoords) return;
@@ -673,6 +733,8 @@ function renderStaticCity(
   },
 ) {
   const EXIT_LABELS = exitLabelMap(cityData);
+  // Junction index: O(1) lookups instead of scanning all 4,000 nodes per edge.
+  const nodesById = new Map(cityData.nodes.map((node) => [node.id, node]));
   // Cartographic generalization: minor tiers vanish as the camera zooms out
   // so the map reads as a district overview instead of a wireframe mat.
   const TIERS = {
@@ -681,7 +743,9 @@ function renderStaticCity(
     collector: { near: 0, fade: 3000, base: 6.5, hidden: 2 },
     arterial: { near: 0, fade: 7000, base: 10, hidden: 3.5 },
   } as const;
-  viewer.scene.postRender.addEventListener(function tierRoads() {
+  // Re-tier only when the camera actually moves (percentageChanged), never per
+  // frame - the old per-frame pass touched 5,000 entities 60x per second.
+  const tierRoads = () => {
     if (viewer.isDestroyed()) return;
     const height = viewer.camera.positionCartographic.height;
     refs.roadEntitiesRef.current.forEach(({ entity, edge }: { entity: any; edge: EdgeData }) => {
@@ -695,7 +759,14 @@ function renderStaticCity(
         entity.polyline.width = new Cesium.ConstantProperty(Math.max(tier.hidden, Math.min(tier.base, width)));
       }
     });
-  });
+  };
+  const tierOnce = () => {
+    tierRoads();
+    viewer.scene.postRender.removeEventListener(tierOnce);
+  };
+  viewer.scene.postRender.addEventListener(tierOnce);
+  viewer.camera.percentageChanged = 0.02;
+  viewer.camera.changed.addEventListener(tierRoads);
   // Buildings and parks are real OpenStreetMap footprints extruded in place,
   // so they align exactly with the street corridors that surround them.
   const parkPolygons: ParkData[] = cityData.parks ?? [];
@@ -736,8 +807,8 @@ function renderStaticCity(
   });
 
   cityData.edges.forEach((edge) => {
-    const source = cityData.nodes.find((node) => node.id === edge.source);
-    const target = cityData.nodes.find((node) => node.id === edge.target);
+    const source = nodesById.get(edge.source);
+    const target = nodesById.get(edge.target);
     if (!source || !target) return;
     // Interleave the edge's baked street-curve coordinates so roads bend
     // exactly as they do on the ground.
@@ -781,29 +852,28 @@ function renderStaticCity(
     const isExit = Boolean(EXIT_LABELS[node.id]);
     // Only exits are persistent targets. Regular intersections appear as small
     // quiet dots at street level and vanish below ~2.6 km camera height, which
-    // is what makes "what can I click here" legible at district zoom.
+    // is what makes "what can I click here" legible at district zoom. Halos
+    // exist only for the four exits - one per exit, never per intersection.
     const pulse = isExit && !prefersReducedMotion();
     const beaconSize = pulse
       ? new Cesium.CallbackProperty(() => 9 + 1.6 * Math.sin(performance.now() / 420), false)
       : isExit ? 9 : 3;
-    const haloSize = pulse
-      ? new Cesium.CallbackProperty(() => 20 + 5 * Math.sin(performance.now() / 420), false)
-      : 20;
-    const haloAlpha = pulse
-      ? new Cesium.CallbackProperty(() => 0.16 + 0.09 * Math.sin(performance.now() / 420), false)
-      : 0.16;
-    const halo = viewer.entities.add({
-      id: `halo-${node.id}`,
-      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 4),
-      point: {
-        pixelSize: haloSize,
-        color: Cesium.Color.fromCssColorString(isExit ? '#2ec98a' : '#ff8c42').withAlpha(0.14),
-        outlineColor: Cesium.Color.TRANSPARENT,
-        outlineWidth: 0,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3200),
-      },
-    });
+    if (isExit) {
+      const haloSize = pulse
+        ? new Cesium.CallbackProperty(() => 20 + 5 * Math.sin(performance.now() / 420), false)
+        : 20;
+      viewer.entities.add({
+        id: `halo-${node.id}`,
+        position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 4),
+        point: {
+          pixelSize: haloSize,
+          color: Cesium.Color.fromCssColorString('#2ec98a').withAlpha(0.14),
+          outlineColor: Cesium.Color.TRANSPARENT,
+          outlineWidth: 0,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+    }
     const entity = viewer.entities.add({
       id: `node-${node.id}`,
       position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 5),
@@ -828,7 +898,6 @@ function renderStaticCity(
       } : undefined,
     });
     refs.nodeEntitiesRef.current.set(node.id, entity);
-    refs.haloEntitiesRef.current.set(node.id, halo);
   });
 
   cityData.substations.forEach((sub) => {

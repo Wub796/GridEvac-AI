@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import type { RiskLevel } from '@/lib/types';
 import styles from './ControlPanel.module.css';
@@ -21,8 +21,17 @@ function formatDistance(meters: number) {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
 }
 
+interface SearchHit {
+  key: string;
+  label: string;
+  sublabel: string;
+  kind: 'street' | 'intersection';
+  nodeId?: number;
+  roadKey?: string;
+}
+
 export default function ControlPanel() {
-  const [searchNodeInput, setSearchNodeInput] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [collapsed, setCollapsed] = useState(false);
   const [showTab, setShowTab] = useState(false);
   const collapseTimer = useRef<number | null>(null);
@@ -70,17 +79,89 @@ export default function ControlPanel() {
     showRoadNames,
     setShowRoadNames,
     setFlyToNodeId,
+    setFlyToRoadKey,
+    addLog,
     applyScenario,
     mapFilterMode,
     setMapFilterMode,
     setFlyToCoords,
   } = useSimulationStore();
 
-  const nodes = cityData?.nodes ?? [];
+  const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
   const substations = cityData?.substations ?? [];
   const riskLevel = route?.risk_level ?? 'LOW';
   const riskColor = RISK_COLORS[riskLevel];
   const floodedCount = route?.flooded_nodes.length ?? nodes.filter((node) => node.elevation <= floodLevel * 1.7).length;
+
+  // Street search: indexes road segments and junctions once per dataset, then
+  // answers prefix/substring queries client-side with zero latency.
+  const searchIndex = useMemo(() => {
+    const streets: SearchHit[] = [];
+    const seenRoads = new Map<string, SearchHit>();
+    const edges = cityData?.edges ?? [];
+    const nodeNames = new Map(nodes.map((node) => [node.id, node.intersection_name]));
+    edges.forEach((edge) => {
+      if (!edge.road_name || edge.road_name === 'Unnamed street') return;
+      const key = `${Math.min(edge.source, edge.target)}-${Math.max(edge.source, edge.target)}`;
+      const existing = seenRoads.get(key);
+      if (existing) return;
+      const sub = nodeNames.get(edge.source) ?? '?';
+      const dst = nodeNames.get(edge.target) ?? '?';
+      const hit: SearchHit = {
+        key,
+        label: edge.road_name,
+        sublabel: `${sub} → ${dst}`,
+        kind: 'street',
+        roadKey: key,
+      };
+      seenRoads.set(key, hit);
+      streets.push(hit);
+    });
+    const junctions: SearchHit[] = nodes.map((node) => ({
+      key: `node-${node.id}`,
+      label: node.intersection_name,
+      sublabel: `Intersection · node ${node.id}`,
+      kind: 'intersection' as const,
+      nodeId: node.id,
+    }));
+    return { streets, junctions };
+  }, [cityData, nodes]);
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onClickAway = (event: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(event.target as Node)) setSearchOpen(false);
+    };
+    document.addEventListener('mousedown', onClickAway);
+    return () => document.removeEventListener('mousedown', onClickAway);
+  }, [searchOpen]);
+
+  const query = searchInput.trim().toLowerCase();
+  const searchHits: SearchHit[] = useMemo(() => {
+    if (query.length < 2) return [];
+    const startsWith = (value: string) => value.toLowerCase().startsWith(query);
+    const includes = (value: string) => value.toLowerCase().includes(query);
+    const scored = [...searchIndex.streets, ...searchIndex.junctions]
+      .map((hit) => ({ hit, rank: startsWith(hit.label) ? 0 : includes(hit.label) ? 1 : 2 }))
+      .filter((entry) => entry.rank < 2)
+      .sort((a, b) => a.rank - b.rank || a.hit.label.localeCompare(b.hit.label));
+    return scored.slice(0, 7).map((entry) => entry.hit);
+  }, [query, searchIndex]);
+
+  const gotoSearchHit = (hit: SearchHit) => {
+    setSearchOpen(false);
+    if (hit.kind === 'street' && hit.roadKey) {
+      setFlyToRoadKey(hit.roadKey);
+      addLog(`Map focused on ${hit.label}.`);
+    } else if (hit.kind === 'intersection' && hit.nodeId !== undefined) {
+      setOriginNode(hit.nodeId);
+      setFlyToNodeId(hit.nodeId);
+      addLog(`Origin set to ${hit.label}.`);
+    }
+    setSearchInput('');
+  };
 
   return (
     <>
@@ -126,9 +207,22 @@ export default function ControlPanel() {
             return <option key={node.id} value={node.id} disabled={isFlooded}>{`Node ${node.id}: ${node.intersection_name}${isFlooded ? ', flooded' : ''}`}</option>;
           })}
         </select>
-        <div className={styles.searchRow}>
-          <input className={styles.searchInput} type="number" min="0" max={nodes.length > 0 ? nodes.length - 1 : 0} placeholder={`Node 0-${nodes.length > 0 ? nodes.length - 1 : 0}`} value={searchNodeInput} onChange={(event) => setSearchNodeInput(event.target.value)} aria-label="Node number to locate" />
-          <button className={styles.smallButton} onClick={() => { const id = Number(searchNodeInput); if (Number.isInteger(id) && id >= 0 && id < nodes.length && nodes.some((node) => node.id === id)) setFlyToNodeId(id); }}>Locate</button>
+        <div className={styles.searchRow} ref={searchBoxRef}>
+          <input className={styles.searchInput} type="text" placeholder="Search streets or intersections…" value={searchInput}
+            onChange={(event) => { setSearchInput(event.target.value); setSearchOpen(true); }}
+            onFocus={() => setSearchOpen(true)}
+            onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }}
+            aria-label="Search streets or intersections" role="combobox" aria-expanded={searchOpen && searchHits.length > 0} aria-controls="map-search-results" />
+          {searchOpen && searchHits.length > 0 && (
+            <div className={styles.searchResults} id="map-search-results" role="listbox">
+              {searchHits.map((hit) => (
+                <button key={`${hit.kind}-${hit.key}`} role="option" aria-selected={false} className={styles.searchResult} onClick={() => gotoSearchHit(hit)}>
+                  <span className={styles.searchResultKind}>{hit.kind === 'street' ? 'ST' : 'IX'}</span>
+                  <span className={styles.searchResultBody}><strong>{hit.label}</strong><small>{hit.sublabel}</small></span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <button className={styles.solveButton} onClick={() => void calculateRoute()} disabled={isLoading || !cityData}><span>{isLoading ? 'Recalculating corridor…' : 'Recalculate safe route'}</span><b>↗</b></button>
       </section>
