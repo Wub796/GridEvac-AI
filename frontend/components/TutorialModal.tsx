@@ -12,7 +12,7 @@ const STEPS = [
     title: 'Welcome to the operations desk',
     content: (
       <>
-        GridEvac AI is a <strong>street-aware emergency planning workspace</strong> for the Houston operations district. Use it to compare flood exposure, utility interruptions, and passable evacuation corridors before dispatching a response.
+        GridEvac AI is a <strong>street-aware emergency planning workspace</strong> built on the real downtown Houston street network from OpenStreetMap. Use it to compare flood exposure, utility interruptions, and passable evacuation corridors before dispatching a response.
       </>
     ),
   },
@@ -36,7 +36,7 @@ const STEPS = [
     title: 'Read the route on the ground',
     content: (
       <>
-        Routes follow named road centerlines and remain clamped to the street surface. The planner reports <strong>street distance, estimated travel time, road segments, and grouped driving instructions</strong> while inset building footprints keep blocks visibly separate from the corridor.
+        Routes follow real street centerlines and curves, clamped to the ground. The planner reports <strong>street distance, estimated travel time, road segments, and grouped driving instructions</strong> while actual OpenStreetMap building footprints keep blocks visibly separate from the corridor.
       </>
     ),
   },
@@ -44,7 +44,7 @@ const STEPS = [
     title: 'Inspect what changed',
     content: (
       <>
-        Toggle block footprints, road labels, intersections, substations, and utility links from the map layers section. The route audit shows closures, anomaly score, field notes, and the live operator event stream behind the recommendation.
+        Toggle building footprints, road labels, intersections, substations, and utility links from the map layers section. The route audit shows closures, anomaly score, field notes, and the live operator event stream behind the recommendation.
       </>
     ),
   },
@@ -60,12 +60,13 @@ export default function TutorialModal({ isOpen, onClose }: TutorialModalProps) {
 
   return (
     <div className="tutorial-overlay" onClick={onClose}>
-      <div className="tutorial-card" onClick={(event) => event.stopPropagation()}>
+      <div className="tutorial-card" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={step.title}>
         <div className="tutorial-header">
           <h2>{step.title}</h2>
           <span className="tutorial-step-indicator">{currentStep + 1} / {STEPS.length}</span>
         </div>
-        <div className="tutorial-body"><p>{step.content}</p></div>
+        <div className="tutorial-body" key={currentStep}><p>{step.content}</p></div>
+        <div className="tutorial-progress" aria-hidden="true"><i style={{ width: `${((currentStep + 1) / STEPS.length) * 100}%` }} /></div>
         <div className="tutorial-footer">
           <button className="tutorial-btn-skip" onClick={onClose}>Close guide</button>
           <div className="tutorial-nav-btns">

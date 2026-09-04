@@ -1,22 +1,21 @@
 from pydantic import BaseModel, Field
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 
 class SimulationRequest(BaseModel):
-    flood_level: float = Field(ge=0.0, le=10.0)
-    failed_substations: List[int] = Field(default=[])
-    origin_node: int = Field(ge=0, le=224)
+    flood_level: float = Field(ge=0.0, le=10.0, description="Flood level 0-10 scale")
+    failed_substations: List[int] = Field(default=[], description="IDs of failed substations")
+    origin_node: int = Field(ge=0, le=100000, description="Origin intersection node ID")
 
 
 class NodeData(BaseModel):
     id: int
+    osm: Optional[int] = None
     lat: float
     lon: float
     elevation: float
-    row: int
-    col: int
     intersection_name: str = ""
-    district: str = ""
+    district: str = "Houston operations district"
 
 
 class EdgeData(BaseModel):
@@ -28,16 +27,18 @@ class EdgeData(BaseModel):
     road_class: str = "local"
     lanes: int = 2
     speed_limit_mph: int = 25
+    geometry: List[List[float]] = []
 
 
 class BlockData(BaseModel):
     id: str
-    row: int
-    col: int
-    lat: float
-    lon: float
-    kind: str
-    height_m: float
+    footprint: List[List[float]]
+    height_m: float = 0.0
+
+
+class ParkData(BaseModel):
+    id: str
+    footprint: List[List[float]]
 
 
 class SubstationData(BaseModel):
@@ -62,12 +63,13 @@ class CityResponse(BaseModel):
     nodes: List[NodeData]
     edges: List[EdgeData]
     blocks: List[BlockData] = []
+    parks: List[ParkData] = []
     substations: List[SubstationData]
     transmission_links: List[TransmissionLink]
     center_lat: float
     center_lon: float
-    grid_rows: int
-    grid_cols: int
+    safe_exits: List[int] = []
+    exit_names: Dict[str, str] = {}
 
 
 class RouteCoord(BaseModel):

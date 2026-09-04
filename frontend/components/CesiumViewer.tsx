@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import type * as CesiumType from 'cesium';
 import { useSimulationStore } from '@/hooks/useSimulation';
-import type { CityData, EdgeData, NodeData, SubstationData } from '@/lib/types';
+import type { BlockData, CityData, EdgeData, NodeData, ParkData, SubstationData } from '@/lib/types';
 
 declare const Cesium: typeof CesiumType;
 
@@ -19,12 +19,9 @@ type FlyCoordinates = {
 };
 
 const CENTER = { lat: 29.7604, lon: -95.3698 };
-const SAFE_EXITS: Record<number, string> = {
-  7: 'South exit',
-  105: 'West exit',
-  119: 'East exit',
-  217: 'North exit',
-};
+// Fallback labels for pre-data renders; the live labels come from the baked
+// network's exit_names so they always match the current street graph.
+const SAFE_EXITS: Record<number, string> = {};
 const CESIUM_TOKEN = process.env.NEXT_PUBLIC_CESIUM_TOKEN ?? '';
 
 export default function CesiumViewer() {
@@ -115,8 +112,15 @@ export default function CesiumViewer() {
           Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
         }
 
+        // CARTO dark cartography: the light route corridor, hazard tints, and
+        // glass overlays are the loudest elements on the deep basemap.
         const viewer = new Cesium.Viewer(containerRef.current, {
-          baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' })),
+          baseLayer: new Cesium.ImageryLayer(new Cesium.UrlTemplateImageryProvider({
+            url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png',
+            subdomains: ['a', 'b', 'c', 'd'],
+            credit: '© OpenStreetMap contributors, © CARTO',
+            maximumLevel: 19,
+          })),
           terrainProvider: new Cesium.EllipsoidTerrainProvider(),
           animation: false,
           baseLayerPicker: false,
@@ -135,17 +139,19 @@ export default function CesiumViewer() {
 
         const baseLayer = viewer.imageryLayers.get(0);
         if (baseLayer) {
-          baseLayer.brightness = 0.82;
-          baseLayer.contrast = 1.04;
-          baseLayer.saturation = 0.3;
+          baseLayer.brightness = 1.04;
+          baseLayer.contrast = 1.05;
+          baseLayer.saturation = 1.08;
         }
         viewer.scene.globe.depthTestAgainstTerrain = false;
-        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#dbe5e1');
+        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050d0b');
+        // Near-nadir camera: operational situational awareness reads best close to
+        // top-down; the previous tilt hid streets behind building volumes.
         viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 4300),
+          destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 5200),
           orientation: {
-            heading: Cesium.Math.toRadians(8),
-            pitch: Cesium.Math.toRadians(-62),
+            heading: 0,
+            pitch: Cesium.Math.toRadians(-88),
             roll: 0,
           },
         });
@@ -227,6 +233,7 @@ export default function CesiumViewer() {
       transmissionEntitiesRef,
       buildingTilesRef,
     });
+    playIntroFlight(viewerRef.current);
   }, [cityData, viewerReady]);
 
   useEffect(() => {
@@ -256,24 +263,54 @@ export default function CesiumViewer() {
     const flooded = new Set(route?.flooded_nodes ?? cityData.nodes.filter((node) => node.elevation <= floodLevel * 1.7).map((node) => node.id));
     if (flooded.size === 0) return;
 
+    const floodColor = Cesium.Color.fromCssColorString('#5bc0ea');
+    const floodOutline = Cesium.Color.fromCssColorString('#5bc0ea');
+    const animate = !prefersReducedMotion();
+    const startedAt = performance.now();
+    let index = 0;
     flooded.forEach((nodeId) => {
       const node = cityData.nodes.find((item) => item.id === nodeId);
       if (!node) return;
+      // Cells rise in with a small per-cell stagger so the water appears to
+      // spread rather than pop; after settling the properties are constant.
+      const delay = Math.min(index * 6, 480);
+      const duration = 620;
+      const growth = animate
+        ? new Cesium.CallbackProperty(() => {
+            const p = Math.min(1, Math.max(0, (performance.now() - startedAt - delay) / duration));
+            const eased = 1 - (1 - p) ** 3;
+            return 108 * (0.35 + 0.65 * eased);
+          }, false)
+        : 108;
+      const growthMinor = animate
+        ? new Cesium.CallbackProperty(() => {
+            const p = Math.min(1, Math.max(0, (performance.now() - startedAt - delay) / duration));
+            const eased = 1 - (1 - p) ** 3;
+            return 82 * (0.35 + 0.65 * eased);
+          }, false)
+        : 82;
+      const alpha = animate
+        ? new Cesium.CallbackProperty(() => {
+            const p = Math.min(1, Math.max(0, (performance.now() - startedAt - delay) / duration));
+            return floodColor.withAlpha(0.2 * (0.25 + 0.75 * p));
+          }, false)
+        : floodColor.withAlpha(0.2);
       const entity = viewer.entities.add({
         id: `flood-node-${nodeId}`,
         position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 0),
         ellipse: {
-          semiMajorAxis: 108,
-          semiMinorAxis: 82,
+          semiMajorAxis: growth,
+          semiMinorAxis: growthMinor,
           height: 0,
           heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          material: Cesium.Color.fromCssColorString('#4c9fba').withAlpha(0.2),
+          material: new Cesium.ColorMaterialProperty(alpha),
           outline: true,
-          outlineColor: Cesium.Color.fromCssColorString('#438ca9').withAlpha(0.55),
+          outlineColor: floodOutline.withAlpha(0.55),
           outlineWidth: 1,
         },
       });
       floodEntitiesRef.current.push(entity);
+      index += 1;
     });
   }, [cityData, floodLevel, route, viewerReady]);
 
@@ -295,9 +332,9 @@ export default function CesiumViewer() {
           semiMinorAxis: Math.max(100, sub.radius * 48),
           height: 0,
           heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          material: Cesium.Color.fromCssColorString('#c85a4d').withAlpha(0.11),
+          material: Cesium.Color.fromCssColorString('#ff7a6e').withAlpha(0.1),
           outline: true,
-          outlineColor: Cesium.Color.fromCssColorString('#bb4d44').withAlpha(0.75),
+          outlineColor: Cesium.Color.fromCssColorString('#ff7a6e').withAlpha(0.5),
           outlineWidth: 2,
         },
       });
@@ -307,14 +344,14 @@ export default function CesiumViewer() {
         label: {
           text: 'POWER OUTAGE',
           font: '600 10px DM Mono, monospace',
-          fillColor: Cesium.Color.fromCssColorString('#a8403a'),
-          outlineColor: Cesium.Color.WHITE,
+          fillColor: Cesium.Color.fromCssColorString('#ffb3aa'),
+          outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
           outlineWidth: 3,
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           pixelOffset: new Cesium.Cartesian2(0, -16),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           showBackground: true,
-          backgroundColor: Cesium.Color.WHITE.withAlpha(0.86),
+          backgroundColor: Cesium.Color.fromCssColorString('#0b1a15').withAlpha(0.85),
           backgroundPadding: new Cesium.Cartesian2(6, 4),
         },
       });
@@ -347,48 +384,100 @@ export default function CesiumViewer() {
 
     if (!route.success || route.path_coords.length < 2) return;
     const positions = route.path_coords.flatMap((coord) => [coord.lon, coord.lat]);
-    const underlay = viewer.entities.add({
-      id: 'evacuation-route-underlay',
-      polyline: {
-        positions: Cesium.Cartesian3.fromDegreesArray(positions),
-        width: 16,
-        clampToGround: true,
-        material: Cesium.Color.fromCssColorString('#193a38').withAlpha(0.62),
-        depthFailMaterial: Cesium.Color.fromCssColorString('#193a38').withAlpha(0.42),
-      },
-    });
-    const routeLine = viewer.entities.add({
-      id: 'evacuation-route',
-      polyline: {
-        positions: Cesium.Cartesian3.fromDegreesArray(positions),
-        width: 8,
-        clampToGround: true,
-        material: new Cesium.PolylineGlowMaterialProperty({
-          glowPower: 0.18,
-          taperPower: 0.7,
-          color: Cesium.Color.fromCssColorString('#f0a94a'),
-        }),
-        depthFailMaterial: Cesium.Color.fromCssColorString('#f0a94a').withAlpha(0.8),
-      },
-    });
-    routeEntitiesRef.current.push(underlay, routeLine);
+    // Navigation-style casing: an opaque light casing separates the route from
+    // every road beneath it, then a solid saturated line sits on top.
+    const casingColor = Cesium.Color.fromCssColorString('#0b1a15').withAlpha(0.94);
+    const routeColor = Cesium.Color.fromCssColorString('#ff8c42');
+    // Draw-on reveal: while animating, the corridor is a cheap non-clamped
+    // polyline (position buffer updates only); on completion it swaps to the
+    // final clamped geometry so the resting state matches the static city.
+    const DRAW_MS = prefersReducedMotion() ? 0 : 1700;
+    const startedAt = performance.now();
+    let finished = false;
+    let frame = 0;
+    const markers: Array<{ entity: any; fraction: number }> = [];
+    let animatedUnderlay: any = null;
+    let animatedRoute: any = null;
+
+    const finalize = () => {
+      finished = true;
+      if (animatedUnderlay) viewer.entities.remove(animatedUnderlay);
+      if (animatedRoute) viewer.entities.remove(animatedRoute);
+      const underlay = viewer.entities.add({
+        id: 'evacuation-route-underlay',
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(positions),
+          width: 15,
+          clampToGround: true,
+          material: casingColor,
+        },
+      });
+      const routeLine = viewer.entities.add({
+        id: 'evacuation-route',
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(positions),
+          width: 9,
+          clampToGround: true,
+          material: routeColor,
+        },
+      });
+      routeEntitiesRef.current.push(underlay, routeLine);
+      markers.forEach(({ entity }) => { entity.show = true; });
+    };
+
+    if (DRAW_MS === 0) {
+      finalize();
+    } else {
+      const cartesians = Cesium.Cartesian3.fromDegreesArrayHeights(
+        route.path_coords.flatMap((coord) => [coord.lon, coord.lat, coord.elevation + 1.2]),
+      );
+      let revealed = cartesians.slice(0, 2);
+      const revealProperty = new Cesium.CallbackProperty(() => revealed, false);
+      animatedUnderlay = viewer.entities.add({
+        id: 'evacuation-route-underlay-anim',
+        polyline: { positions: revealProperty, width: 15, clampToGround: false, material: casingColor },
+      });
+      animatedRoute = viewer.entities.add({
+        id: 'evacuation-route-anim',
+        polyline: { positions: revealProperty, width: 9, clampToGround: false, material: routeColor },
+      });
+      routeEntitiesRef.current.push(animatedUnderlay, animatedRoute);
+      const step = () => {
+        if (finished || viewer.isDestroyed()) return;
+        const p = Math.min(1, (performance.now() - startedAt) / DRAW_MS);
+        const eased = 1 - (1 - p) ** 3;
+        revealed = cartesians.slice(0, Math.max(2, Math.ceil(eased * cartesians.length)));
+        markers.forEach(({ entity, fraction }) => { entity.show = eased >= fraction; });
+        if (p >= 1) {
+          finalize();
+          return;
+        }
+        frame = requestAnimationFrame(step);
+      };
+      frame = requestAnimationFrame(step);
+    }
 
     route.path_coords.forEach((coord, index) => {
-      if (index === 0 || index === route.path_coords.length - 1 || index % 3 === 0) {
-        const marker = viewer.entities.add({
-          id: `route-waypoint-${index}`,
-          position: Cesium.Cartesian3.fromDegrees(coord.lon, coord.lat, 7),
-          point: {
-            pixelSize: index === 0 || index === route.path_coords.length - 1 ? 10 : 5,
-            color: Cesium.Color.fromCssColorString(index === 0 ? '#1b8c68' : '#f0a94a'),
-            outlineColor: Cesium.Color.WHITE,
-            outlineWidth: 2,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-        });
-        routeEntitiesRef.current.push(marker);
-      }
+      const isEndpoint = index === 0 || index === route.path_coords.length - 1;
+      if (!isEndpoint && index % 3 !== 0) return;
+      const marker = viewer.entities.add({
+        id: `route-waypoint-${index}`,
+        position: Cesium.Cartesian3.fromDegrees(coord.lon, coord.lat, 7),
+        show: DRAW_MS === 0,
+        point: {
+          pixelSize: isEndpoint ? 10 : 5,
+          color: Cesium.Color.fromCssColorString(index === 0 ? '#2ec98a' : '#ff8c42'),
+          outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+          outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      markers.push({ entity: marker, fraction: index / Math.max(1, route.path_coords.length - 1) });
+      routeEntitiesRef.current.push(marker);
     });
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, [route, viewerReady]);
 
   useEffect(() => {
@@ -404,7 +493,7 @@ export default function CesiumViewer() {
     if (!entity) return;
     viewer.flyTo(entity, {
       duration: 1.15,
-      offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-63), 850),
+      offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-80), 950),
     }).finally(() => setFlyToNodeId(null));
   }, [cityData, flyToNodeId, setFlyToNodeId, viewerReady]);
 
@@ -429,18 +518,20 @@ export default function CesiumViewer() {
     if (!viewer) return;
     const layer = viewer.imageryLayers.get(0);
     if (!layer) return;
+    // Treatments adjust only the basemap layer, so vector overlays (route,
+    // hazards, labels) keep full legibility instead of being hue-rotated too.
     if (mapFilterMode === 'radar') {
-      layer.brightness = 0.56;
-      layer.contrast = 1.35;
-      layer.saturation = 0.05;
+      layer.brightness = 1.18;
+      layer.contrast = 1.14;
+      layer.saturation = 0;
     } else if (mapFilterMode === 'thermal') {
-      layer.brightness = 0.68;
-      layer.contrast = 1.16;
-      layer.saturation = 0.15;
+      layer.brightness = 0.86;
+      layer.contrast = 1.1;
+      layer.saturation = 1.4;
     } else {
-      layer.brightness = 0.82;
-      layer.contrast = 1.04;
-      layer.saturation = 0.3;
+      layer.brightness = 1.04;
+      layer.contrast = 1.05;
+      layer.saturation = 1.08;
     }
   }, [mapFilterMode, viewerReady]);
 
@@ -452,17 +543,51 @@ export default function CesiumViewer() {
       const failed = failedSubstations.includes(group.sub.id) || (route?.cascaded_substations ?? []).includes(group.sub.id);
       if (group.beacon?.point) {
         group.beacon.point.color = new Cesium.ConstantProperty(
-          failed ? Cesium.Color.fromCssColorString('#c85a4d') : load > group.sub.capacity_mw ? Cesium.Color.fromCssColorString('#d18b32') : Cesium.Color.fromCssColorString('#2b9b73'),
+          failed ? Cesium.Color.fromCssColorString('#ff7a6e') : load > group.sub.capacity_mw ? Cesium.Color.fromCssColorString('#e2a33c') : Cesium.Color.fromCssColorString('#2ec98a'),
         );
       }
     });
   }, [failedSubstations, route, substationLoads, viewerReady]);
 
-  return <div ref={containerRef} className={`cesium-map-surface filter-${mapFilterMode}`} aria-label="Interactive Houston street and utility map" />;
+  return <div ref={containerRef} className="cesium-map-surface" aria-label="Interactive Houston street and utility map" />;
 }
 
 function clearEntities(viewer: any, entities: any[]) {
   entities.forEach((entity) => viewer.entities.remove(entity));
+}
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Cinematic descent into the operational view on first data render. Camera-only, so it is cheap. */
+function playIntroFlight(viewer: any) {
+  if (!viewer || viewer.isDestroyed() || prefersReducedMotion()) return;
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 10400),
+    orientation: { heading: 0, pitch: Cesium.Math.toRadians(-64), roll: 0 },
+  });
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(CENTER.lon, CENTER.lat, 5200),
+    orientation: { heading: 0, pitch: Cesium.Math.toRadians(-88), roll: 0 },
+    duration: 3.1,
+    easingFunction: Cesium.EasingFunction.QUADRATIC_IN_OUT,
+  });
+}
+
+function styleRoadColor(roadClass: string) {
+  // Luminous asphalt tiers on the dark basemap: brighter as roads gain importance.
+  if (roadClass === 'arterial') return '#d9d2c7';
+  if (roadClass === 'collector') return '#b8b1a6';
+  if (roadClass === 'service') return '#5d594f';
+  return '#8b8578';
+}
+
+function styleRoadWidth(roadClass: string) {
+  if (roadClass === 'arterial') return 10;
+  if (roadClass === 'collector') return 6.5;
+  if (roadClass === 'service') return 2;
+  return 4;
 }
 
 function normalizeEdgeKey(key: string) {
@@ -470,44 +595,30 @@ function normalizeEdgeKey(key: string) {
   return Number.isFinite(a) && Number.isFinite(b) ? `${Math.min(a, b)}-${Math.max(a, b)}` : key;
 }
 
+function exitLabelMap(cityData: CityData): Record<number, string> {
+  const names: Record<number, string> = { ...SAFE_EXITS };
+  Object.entries(cityData.exit_names ?? {}).forEach(([id, name]) => {
+    const key = Number(id);
+    if (Number.isFinite(key)) names[key] = name;
+  });
+  return names;
+}
+
 function styleRoad(entity: any, edge: EdgeData, state: string | null) {
   if (!entity?.polyline) return;
-  let color = '#9aaea7';
-  let width = 3;
-  if (edge.road_class === 'arterial') {
-    color = '#607d7a';
-    width = 7;
-  } else if (edge.road_class === 'collector') {
-    color = '#819892';
-    width = 5;
-  }
+  // Asphalt hierarchy: darker + wider as roads get more important, so the
+  // network reads like a real street map instead of a uniform wireframe.
+  let color = styleRoadColor(edge.road_class);
+  let width = styleRoadWidth(edge.road_class);
   if (state === 'overloaded') {
-    color = '#d18b32';
-    width = 7;
+    color = '#e2a33c';
+    width = Math.max(width, 8);
   } else if (state === 'dead' || state === 'blocked') {
-    color = '#bd5148';
-    width = state === 'blocked' ? 8 : 6;
+    color = '#ff7a6e';
+    width = state === 'blocked' ? 10 : 7;
   }
-  entity.polyline.material = new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(color).withAlpha(0.9));
+  entity.polyline.material = new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(color).withAlpha(0.95));
   entity.polyline.width = new Cesium.ConstantProperty(width);
-}
-
-function getNode(cityData: CityData, row: number, col: number): NodeData | undefined {
-  return cityData.nodes.find((node) => node.row === row && node.col === col);
-}
-
-function blockFootprint(cityData: CityData, row: number, col: number) {
-  const corners = [getNode(cityData, row, col), getNode(cityData, row + 1, col), getNode(cityData, row + 1, col + 1), getNode(cityData, row, col + 1)].filter(Boolean) as NodeData[];
-  if (corners.length !== 4) return [];
-  const center = {
-    lat: corners.reduce((sum, node) => sum + node.lat, 0) / corners.length,
-    lon: corners.reduce((sum, node) => sum + node.lon, 0) / corners.length,
-  };
-  // The inset leaves a visible road shoulder on all four sides of every block.
-  return corners.map((corner) => ({
-    lat: corner.lat + (center.lat - corner.lat) * 0.16,
-    lon: corner.lon + (center.lon - corner.lon) * 0.16,
-  }));
 }
 
 function renderStaticCity(
@@ -523,81 +634,82 @@ function renderStaticCity(
     buildingTilesRef: MutableRefObject<any>;
   },
 ) {
-  // Blocks/buildings are rendered first and deliberately inset from their
-  // surrounding road centerlines. This is the visual guarantee that routes do
-  // not appear to cut through building footprints.
-  cityData.blocks.forEach((block) => {
-    const footprint = blockFootprint(cityData, block.row, block.col);
-    if (footprint.length !== 4) return;
-    const positions = Cesium.Cartesian3.fromDegreesArray(footprint.flatMap((point) => [point.lon, point.lat]));
-    const isPark = block.kind === 'park';
+  const EXIT_LABELS = exitLabelMap(cityData);
+  // Buildings and parks are real OpenStreetMap footprints extruded in place,
+  // so they align exactly with the street corridors that surround them.
+  const parkPolygons: ParkData[] = cityData.parks ?? [];
+  parkPolygons.forEach((park) => {
+    if (!park.footprint || park.footprint.length < 3) return;
+    const positions = Cesium.Cartesian3.fromDegreesArray(park.footprint.flatMap((point) => [point[1], point[0]]));
+    const parkEntity = viewer.entities.add({
+      id: park.id,
+      polygon: {
+        hierarchy: positions,
+        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+        material: Cesium.Color.fromCssColorString('#2ec98a').withAlpha(0.16),
+        outline: true,
+        outlineColor: Cesium.Color.fromCssColorString('#2ec98a').withAlpha(0.3),
+        outlineWidth: 1,
+      },
+    });
+    refs.buildingEntitiesRef.current.push(parkEntity);
+  });
+
+  cityData.blocks.forEach((block: BlockData) => {
+    if (!block.footprint || block.footprint.length < 3) return;
+    const positions = Cesium.Cartesian3.fromDegreesArray(block.footprint.flatMap((point) => [point[1], point[0]]));
     const building = viewer.entities.add({
       id: block.id,
       polygon: {
         hierarchy: positions,
-        height: 0,
         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        extrudedHeight: isPark ? undefined : block.height_m,
+        extrudedHeight: block.height_m,
         extrudedHeightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-        material: isPark
-          ? Cesium.Color.fromCssColorString('#8ebc9d').withAlpha(0.5)
-          : Cesium.Color.fromCssColorString(block.kind === 'office' ? '#829aa0' : block.kind === 'retail' ? '#aa9d86' : '#8d9e95').withAlpha(0.72),
+        material: Cesium.Color.fromCssColorString('#1a2a26').withAlpha(0.9),
         outline: true,
-        outlineColor: isPark ? Cesium.Color.fromCssColorString('#5f9b79') : Cesium.Color.fromCssColorString('#60736f').withAlpha(0.72),
+        outlineColor: Cesium.Color.fromCssColorString('#3d5c52').withAlpha(0.5),
         outlineWidth: 1,
       },
     });
     refs.buildingEntitiesRef.current.push(building);
-    if (isPark) {
-      const parkMarker = viewer.entities.add({
-        id: `${block.id}-label`,
-        position: Cesium.Cartesian3.fromDegrees(block.lon, block.lat, 3),
-        label: {
-          text: 'PARK',
-          font: '600 9px DM Mono, monospace',
-          fillColor: Cesium.Color.fromCssColorString('#467b60'),
-          outlineColor: Cesium.Color.WHITE,
-          outlineWidth: 3,
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2500),
-        },
-      });
-      refs.roadLabelEntitiesRef.current.push(parkMarker);
-    }
   });
 
   cityData.edges.forEach((edge) => {
     const source = cityData.nodes.find((node) => node.id === edge.source);
     const target = cityData.nodes.find((node) => node.id === edge.target);
     if (!source || !target) return;
+    // Interleave the edge's baked street-curve coordinates so roads bend
+    // exactly as they do on the ground.
+    const coords: number[] = [source.lon, source.lat];
+    (edge.geometry ?? []).forEach((point) => coords.push(point[1], point[0]));
+    coords.push(target.lon, target.lat);
     const road = viewer.entities.add({
       id: `road-${edge.source}-${edge.target}`,
       polyline: {
-        positions: Cesium.Cartesian3.fromDegreesArray([source.lon, source.lat, target.lon, target.lat]),
-        width: edge.road_class === 'arterial' ? 7 : edge.road_class === 'collector' ? 5 : 3,
+        positions: Cesium.Cartesian3.fromDegreesArray(coords),
+        width: styleRoadWidth(edge.road_class),
         clampToGround: true,
-        material: new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(edge.road_class === 'arterial' ? '#607d7a' : edge.road_class === 'collector' ? '#819892' : '#9aaea7').withAlpha(0.9)),
+        material: new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(styleRoadColor(edge.road_class)).withAlpha(0.95)),
       },
     });
     const key = normalizeEdgeKey(`${edge.source}-${edge.target}`);
     refs.roadEntitiesRef.current.set(key, { entity: road, edge });
 
-    const shouldLabel = edge.road_class === 'arterial' || (edge.road_class === 'collector' && (source.row + source.col) % 3 === 0);
+    const shouldLabel = edge.road_class === 'arterial' || (edge.road_class === 'collector' && edge.distance_m > 200 && edge.road_name !== 'Unnamed street');
     if (shouldLabel) {
       const label = viewer.entities.add({
         id: `road-label-${edge.source}-${edge.target}`,
         position: Cesium.Cartesian3.fromDegrees((source.lon + target.lon) / 2, (source.lat + target.lat) / 2, 2),
         label: {
           text: edge.road_name,
-          font: '600 9px DM Mono, monospace',
-          fillColor: Cesium.Color.fromCssColorString('#536e69'),
-          outlineColor: Cesium.Color.WHITE,
+          font: '600 10px DM Mono, monospace',
+          fillColor: Cesium.Color.fromCssColorString('#c8d6ce'),
+          outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
           outlineWidth: 3,
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           pixelOffset: new Cesium.Cartesian2(0, -6),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2100),
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2400),
         },
       });
       refs.roadLabelEntitiesRef.current.push(label);
@@ -605,24 +717,29 @@ function renderStaticCity(
   });
 
   cityData.nodes.forEach((node) => {
-    const isExit = Boolean(SAFE_EXITS[node.id]);
+    const isExit = Boolean(EXIT_LABELS[node.id]);
+    // Exit beacons breathe so evacuation targets stay findable in peripheral vision.
+    const pulse = isExit && !prefersReducedMotion();
+    const beaconSize = pulse
+      ? new Cesium.CallbackProperty(() => 9 + 1.6 * Math.sin(performance.now() / 420), false)
+      : isExit ? 9 : 3;
     const entity = viewer.entities.add({
       id: `node-${node.id}`,
       position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 5),
       point: {
-        pixelSize: isExit ? 8 : 4,
-        color: Cesium.Color.fromCssColorString(isExit ? '#2b9b73' : '#668d86'),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 1,
+        pixelSize: beaconSize,
+        color: Cesium.Color.fromCssColorString(isExit ? '#2ec98a' : '#5d6f66'),
+        outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+        outlineWidth: isExit ? 2 : 1,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         scaleByDistance: new Cesium.NearFarScalar(300, 1, 5000, 0.4),
+        distanceDisplayCondition: isExit ? undefined : new Cesium.DistanceDisplayCondition(0, 2600),
       },
       label: isExit ? {
-        text: SAFE_EXITS[node.id],
-        font: '700 10px DM Mono, monospace',
-        fillColor: Cesium.Color.fromCssColorString('#23785a'),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 3,
+        text: EXIT_LABELS[node.id],
+        font: '700 10px DM Mono, monospace',        fillColor: Cesium.Color.fromCssColorString('#7fe0b6'),
+          outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+          outlineWidth: 3,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
         pixelOffset: new Cesium.Cartesian2(0, -15),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
@@ -658,8 +775,11 @@ function renderStaticCity(
       id: `transmission-${link.id}`,
       polyline: {
         positions: Cesium.Cartesian3.fromDegreesArrayHeights(positions),
-        width: 2.5,
-        material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.12, color: Cesium.Color.fromCssColorString('#c18b3b').withAlpha(0.72) }),
+        width: 2,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: Cesium.Color.fromCssColorString('#e2c76e').withAlpha(0.4),
+          dashLength: 12,
+        }),
         clampToGround: false,
       },
     });
@@ -680,66 +800,48 @@ function renderStaticCity(
 }
 
 function renderSubstation(viewer: any, sub: SubstationData, node: NodeData): SubstationEntities {
-  const position = Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 5);
+  // Facilities render as flat ground pads with a status point, matching how
+  // infrastructure appears on operational maps rather than as toy buildings.
   const base = viewer.entities.add({
     id: `substation-base-${sub.id}`,
-    position,
+    position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 0),
     ellipse: {
-      semiMajorAxis: 32,
-      semiMinorAxis: 22,
-      height: 1,
-      material: Cesium.Color.fromCssColorString('#c18b3b').withAlpha(0.2),
+      semiMajorAxis: 34,
+      semiMinorAxis: 24,
+      height: 0,
+      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      material: Cesium.Color.fromCssColorString('#e2c76e').withAlpha(0.28),
       outline: true,
-      outlineColor: Cesium.Color.fromCssColorString('#b0782d').withAlpha(0.6),
+      outlineColor: Cesium.Color.fromCssColorString('#e2c76e').withAlpha(0.55),
       outlineWidth: 1,
-    },
-  });
-  const transformer = viewer.entities.add({
-    id: `substation-transformer-${sub.id}`,
-    position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 10),
-    box: {
-      dimensions: new Cesium.Cartesian3(22, 16, 10),
-      material: Cesium.Color.fromCssColorString('#b68135').withAlpha(0.78),
-      outline: true,
-      outlineColor: Cesium.Color.fromCssColorString('#7c5a2b'),
-      outlineWidth: 1,
-    },
-  });
-  const mast = viewer.entities.add({
-    id: `substation-mast-${sub.id}`,
-    position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 19),
-    cylinder: {
-      length: 18,
-      topRadius: 1.5,
-      bottomRadius: 2.8,
-      material: Cesium.Color.fromCssColorString('#8a6d3b').withAlpha(0.8),
     },
   });
   const beacon = viewer.entities.add({
     id: `substation-beacon-${sub.id}`,
-    position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 30),
+    position: Cesium.Cartesian3.fromDegrees(sub.lon, sub.lat, 6),
     point: {
-      pixelSize: 8,
-      color: Cesium.Color.fromCssColorString('#2b9b73'),
-      outlineColor: Cesium.Color.WHITE,
+      pixelSize: 9,
+      color: Cesium.Color.fromCssColorString('#e2c76e'),
+      outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
       outlineWidth: 2,
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
     },
     label: {
       text: sub.name,
-      font: '600 9px DM Mono, monospace',
-      fillColor: Cesium.Color.fromCssColorString('#765824'),
-      outlineColor: Cesium.Color.WHITE,
+      font: '600 10px DM Mono, monospace',
+      fillColor: Cesium.Color.fromCssColorString('#efe0ac'),
+      outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
       outlineWidth: 3,
       style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-      pixelOffset: new Cesium.Cartesian2(0, -15),
+      pixelOffset: new Cesium.Cartesian2(0, -16),
       disableDepthTestDistance: Number.POSITIVE_INFINITY,
       showBackground: true,
-      backgroundColor: Cesium.Color.WHITE.withAlpha(0.82),
-      backgroundPadding: new Cesium.Cartesian2(5, 3),
+      backgroundColor: Cesium.Color.fromCssColorString('#0b1a15').withAlpha(0.85),
+      backgroundPadding: new Cesium.Cartesian2(6, 4),
+      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3200),
     },
   });
-  return { entities: [base, transformer, mast, beacon], beacon, sub };
+  return { entities: [base, beacon], beacon, sub };
 }
 
 function updateEndpointMarkers(viewer: any, cityData: CityData, destination: number, routeSuccess: boolean) {
@@ -751,20 +853,25 @@ function updateEndpointMarkers(viewer: any, cityData: CityData, destination: num
   const origin = useSimulationStore.getState().originNode;
   const originNode = cityData.nodes.find((node) => node.id === origin);
   if (originNode) {
+    // The origin point gently scales so the eye lands on the response start.
+    const originPulse = prefersReducedMotion()
+      ? 13
+      : new Cesium.CallbackProperty(() => 13 + 1.8 * Math.sin(performance.now() / 380), false);
     viewer.entities.add({
       id: 'operator-origin',
       position: Cesium.Cartesian3.fromDegrees(originNode.lon, originNode.lat, 10),
-      point: { pixelSize: 13, color: Cesium.Color.fromCssColorString('#1b8c68'), outlineColor: Cesium.Color.WHITE, outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY },
-      label: { text: 'ORIGIN', font: '700 10px DM Mono, monospace', fillColor: Cesium.Color.fromCssColorString('#1b8c68'), outlineColor: Cesium.Color.WHITE, outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -22), disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      point: { pixelSize: originPulse, color: Cesium.Color.fromCssColorString('#2ec98a'), outlineColor: Cesium.Color.fromCssColorString('#0b1a15'), outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+      label: { text: 'ORIGIN', font: '700 10px DM Mono, monospace', fillColor: Cesium.Color.fromCssColorString('#7fe0b6'), outlineColor: Cesium.Color.fromCssColorString('#0b1a15'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -22), disableDepthTestDistance: Number.POSITIVE_INFINITY },
     });
   }
   if (!routeSuccess || destination < 0) return;
   const destinationNode = cityData.nodes.find((node) => node.id === destination);
   if (!destinationNode) return;
+  const EXIT_LABELS = exitLabelMap(cityData);
   viewer.entities.add({
     id: 'operator-destination',
     position: Cesium.Cartesian3.fromDegrees(destinationNode.lon, destinationNode.lat, 10),
-    point: { pixelSize: 13, color: Cesium.Color.fromCssColorString('#f0a94a'), outlineColor: Cesium.Color.WHITE, outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY },
-    label: { text: `${SAFE_EXITS[destination] ?? 'EXIT'} ${destination}`, font: '700 10px DM Mono, monospace', fillColor: Cesium.Color.fromCssColorString('#a46c23'), outlineColor: Cesium.Color.WHITE, outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -22), disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    point: { pixelSize: 13, color: Cesium.Color.fromCssColorString('#ff8c42'), outlineColor: Cesium.Color.fromCssColorString('#0b1a15'), outlineWidth: 3, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label: { text: `${EXIT_LABELS[destination] ?? 'EXIT'} ${destination}`, font: '700 10px DM Mono, monospace', fillColor: Cesium.Color.fromCssColorString('#ffc49b'), outlineColor: Cesium.Color.fromCssColorString('#0b1a15'), outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -22), disableDepthTestDistance: Number.POSITIVE_INFINITY },
   });
 }

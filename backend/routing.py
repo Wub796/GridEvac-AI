@@ -1,4 +1,4 @@
-"""Street-aware evacuation routing for the Houston operations district."""
+"""Street-aware evacuation routing over the real Houston network."""
 
 import math
 import random
@@ -6,47 +6,70 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
-from city_graph import _G, _NODES, _SUBSTATIONS, GRID_COLS, TRANSMISSION_LINKS
+from city_graph import (
+    _G,
+    _NODES,
+    _SUBSTATIONS,
+    SAFE_EXITS,
+    TRANSMISSION_LINKS,
+)
 
 FLOOD_BLOCK = 999_999.0
 PARTIAL_FLOOD_WEIGHT = 180.0
 BLACKOUT_MULT = 4.5
 FLOOD_RISE_PER_LEVEL = 1.7
-SAFE_EXITS: List[int] = [7, 105, 119, 217]
 
 
-def distance_to_segment(pr: float, pc: float, ar: float, ac: float, br: float, bc: float) -> float:
-    """Return the perpendicular distance from a grid point to a grid segment."""
-    length_sq = (br - ar) ** 2 + (bc - ac) ** 2
-    if length_sq == 0:
-        return math.hypot(pr - ar, pc - ac)
-    t = ((pr - ar) * (br - ar) + (pc - ac) * (bc - ac)) / length_sq
-    t = max(0.0, min(1.0, t))
-    closest_r = ar + t * (br - ar)
-    closest_c = ac + t * (bc - ac)
-    return math.hypot(pr - closest_r, pc - closest_c)
+def _bearing_from_coords(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> str:
+    """Compass direction of travel between two coordinates."""
+    d_lat = lat_b - lat_a
+    d_lon = (lon_b - lon_a) * math.cos(math.radians((lat_a + lat_b) / 2.0))
+    angle = math.degrees(math.atan2(d_lon, d_lat))  # 0 = north, 90 = east
+    compass = ["northbound", "northeastbound", "eastbound", "southeastbound",
+               "southbound", "southwestbound", "westbound", "northwestbound"]
+    index = int(((angle + 360.0) % 360.0 + 22.5) // 45.0) % 8
+    return compass[index]
 
 
-def _build_link_edges() -> Dict[int, List[Tuple[int, int]]]:
-    """Map overhead utility links to nearby street segments for hazard display."""
+def _link_street_edges() -> Dict[int, List[Tuple[int, int]]]:
+    """Map overhead utility links to the street segments they cross."""
     link_edges: Dict[int, List[Tuple[int, int]]] = {}
     for link in TRANSMISSION_LINKS:
-        sub_a = next(s for s in _SUBSTATIONS if s["id"] == link["from_sub"])
-        sub_b = next(s for s in _SUBSTATIONS if s["id"] == link["to_sub"])
+        sub_a = next((s for s in _SUBSTATIONS if s["id"] == link["from_sub"]), None)
+        sub_b = next((s for s in _SUBSTATIONS if s["id"] == link["to_sub"]), None)
+        if not sub_a or not sub_b:
+            link_edges[link["id"]] = []
+            continue
         node_a = _NODES[sub_a["node"]]
         node_b = _NODES[sub_b["node"]]
+
+        def distance_to_line(point: Dict) -> float:
+            lat0 = math.radians((node_a["lat"] + node_b["lat"]) / 2.0)
+            px = math.radians(point["lon"]) * math.cos(lat0) * 6_371_000.0
+            py = math.radians(point["lat"]) * 6_371_000.0
+            ax = math.radians(node_a["lon"]) * math.cos(lat0) * 6_371_000.0
+            ay = math.radians(node_a["lat"]) * 6_371_000.0
+            bx = math.radians(node_b["lon"]) * math.cos(lat0) * 6_371_000.0
+            by = math.radians(node_b["lat"]) * 6_371_000.0
+            length_sq = (bx - ax) ** 2 + (by - ay) ** 2
+            if length_sq == 0:
+                return math.hypot(px - ax, py - ay)
+            t = max(0.0, min(1.0, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / length_sq))
+            return math.hypot(px - (ax + t * (bx - ax)), py - (ay + t * (by - ay)))
+
         under_edges: List[Tuple[int, int]] = []
         for u, v in _G.edges():
-            nu, nv = _NODES[u], _NODES[v]
-            midpoint_r = (nu["row"] + nv["row"]) / 2.0
-            midpoint_c = (nu["col"] + nv["col"]) / 2.0
-            if distance_to_segment(midpoint_r, midpoint_c, node_a["row"], node_a["col"], node_b["row"], node_b["col"]) <= 0.72:
+            mid = {
+                "lat": (_NODES[u]["lat"] + _NODES[v]["lat"]) / 2.0,
+                "lon": (_NODES[u]["lon"] + _NODES[v]["lon"]) / 2.0,
+            }
+            if distance_to_line(mid) <= 90.0:
                 under_edges.append((u, v))
         link_edges[link["id"]] = under_edges
     return link_edges
 
 
-_LINK_EDGES = _build_link_edges()
+_LINK_EDGES = _link_street_edges()
 
 
 def get_flooded_nodes(flood_level: float) -> Set[int]:
@@ -75,8 +98,11 @@ def simulate_power_flow(failed_inputs: List[int]) -> Dict:
             weights = []
             for active_sub in active:
                 target = _NODES[active_sub["node"]]
-                distance = math.hypot(source["row"] - target["row"], source["col"] - target["col"])
-                weights.append(1.0 / (distance + 0.5))
+                distance = math.hypot(
+                    source["lat"] - target["lat"],
+                    (source["lon"] - target["lon"]) * math.cos(math.radians(source["lat"])),
+                )
+                weights.append(1.0 / (distance + 0.001))
             total_weight = sum(weights) or 1.0
             for active_sub, weight in zip(active, weights):
                 active_sub["current_load"] += (weight / total_weight) * failed_sub["base_load_mw"]
@@ -110,12 +136,16 @@ def simulate_power_flow(failed_inputs: List[int]) -> Dict:
         if sub["current_load"] > sub["capacity_mw"]:
             overloaded.append(sub_id)
             overload_ratio = (sub["current_load"] - sub["capacity_mw"]) / sub["capacity_mw"]
-            radius = sub["radius"] * (1.0 + 0.6 * overload_ratio)
+            # radius is in city blocks (~150 m each), matching the bake script.
+            radius_m = sub["radius"] * 150.0 * (1.0 + 0.6 * overload_ratio)
             center = _NODES[sub["node"]]
-            blackout_nodes.update(
-                node_id for node_id, data in _NODES.items()
-                if math.hypot(data["row"] - center["row"], data["col"] - center["col"]) <= radius
-            )
+            for node_id, data in _NODES.items():
+                distance = math.hypot(
+                    data["lat"] - center["lat"],
+                    (data["lon"] - center["lon"]) * math.cos(math.radians(center["lat"])),
+                )
+                if distance * 111_320.0 <= radius_m:
+                    blackout_nodes.add(node_id)
 
     ratio = total_load / total_capacity if total_capacity else 1.5
     base_frequency = 60.0 - (1.4 * max(0.0, ratio - 1.0) if ratio > 1.0 else 0.06 * len(failed_set | cascaded_set))
@@ -131,11 +161,14 @@ def simulate_power_flow(failed_inputs: List[int]) -> Dict:
             if sub["id"] not in overloaded:
                 continue
             center = _NODES[sub["node"]]
-            distance = math.hypot(node["row"] - center["row"], node["col"] - center["col"])
-            radius = sub["radius"] * 1.5
-            if distance <= radius:
+            distance = math.hypot(
+                node["lat"] - center["lat"],
+                (node["lon"] - center["lon"]) * math.cos(math.radians(center["lat"])),
+            )
+            radius_deg = sub["radius"] * 1.5 * 150.0 / 111_320.0
+            if distance <= radius_deg:
                 overload_ratio = (sub["current_load"] - sub["capacity_mw"]) / sub["capacity_mw"]
-                voltage -= max(0.0, 22.0 * overload_ratio * (1.0 - distance / radius))
+                voltage -= max(0.0, 22.0 * overload_ratio * (1.0 - distance / radius_deg))
         voltages[node_id] = round(max(40.0, min(100.0, voltage)), 1)
 
     line_states: Dict[int, str] = {}
@@ -160,14 +193,6 @@ def simulate_power_flow(failed_inputs: List[int]) -> Dict:
     }
 
 
-def _road_bearing(a: Dict, b: Dict) -> str:
-    d_row = b["row"] - a["row"]
-    d_col = b["col"] - a["col"]
-    if abs(d_col) > abs(d_row):
-        return "eastbound" if d_col > 0 else "westbound"
-    return "northbound" if d_row > 0 else "southbound"
-
-
 def _build_route_steps(path: List[int], graph: nx.Graph) -> List[Dict]:
     """Group consecutive same-road edges into usable operator instructions."""
     if len(path) < 2:
@@ -178,11 +203,12 @@ def _build_route_steps(path: List[int], graph: nx.Graph) -> List[Dict]:
 
     for from_node, to_node in zip(path, path[1:]):
         edge = graph.get_edge_data(from_node, to_node) or {}
-        road_name = edge.get("road_name", "Unnamed road")
-        bearing = _road_bearing(_NODES[from_node], _NODES[to_node])
+        road_name = edge.get("road_name", "Unnamed street")
+        node_a, node_b = _NODES[from_node], _NODES[to_node]
+        bearing = _bearing_from_coords(node_a["lat"], node_a["lon"], node_b["lat"], node_b["lon"])
         distance_m = float(edge.get("distance_m", 0.0))
         duration_s = float(edge.get("weight", 0.0))
-        if current and current["road_name"] == road_name and current["bearing"] == bearing:
+        if current and current["road_name"] == road_name:
             current["distance_m"] += distance_m
             current["duration_s"] += duration_s
             current["to_node"] = to_node
@@ -190,7 +216,7 @@ def _build_route_steps(path: List[int], graph: nx.Graph) -> List[Dict]:
             if current:
                 steps.append(current)
             current = {
-                "instruction": "Continue",
+                "instruction": f"Continue on {road_name}",
                 "road_name": road_name,
                 "road_class": edge.get("road_class", "local"),
                 "distance_m": distance_m,
@@ -199,10 +225,10 @@ def _build_route_steps(path: List[int], graph: nx.Graph) -> List[Dict]:
                 "to_node": to_node,
                 "bearing": bearing,
             }
-            if previous_bearing is not None:
-                current["instruction"] = f"Turn onto {road_name} and continue {bearing}"
-            else:
+            if previous_bearing is None:
                 current["instruction"] = f"Depart on {road_name} {bearing}"
+            else:
+                current["instruction"] = f"Turn onto {road_name} {bearing}"
         previous_bearing = bearing
     if current:
         steps.append(current)
@@ -290,24 +316,39 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
     if not best_path:
         return _failure("No passable route found. Floodwater and utility hazards have isolated this start point.", flooded, blackout, blocked_edges, flow)
 
-    path_coords = [
-        {
-            "lat": _NODES[node_id]["lat"],
-            "lon": _NODES[node_id]["lon"],
-            "elevation": round(_NODES[node_id]["elevation"] + 0.65, 2),
-        }
-        for node_id in best_path
-    ]
+    # Interleave each edge's curve geometry so the drawn route follows the
+    # street, and terminate at the destination junction itself.
+    curve_coords: List[Dict] = []
+    for from_node, to_node in zip(best_path, best_path[1:]):
+        edge = graph.get_edge_data(from_node, to_node) or {}
+        curve_coords.append({
+            "lat": _NODES[from_node]["lat"],
+            "lon": _NODES[from_node]["lon"],
+            "elevation": round(_NODES[from_node]["elevation"] + 0.65, 2),
+        })
+        for lat, lon in edge.get("geometry", []):
+            curve_coords.append({"lat": lat, "lon": lon, "elevation": round(_NODES[to_node]["elevation"] + 0.65, 2)})
+    curve_coords.append({
+        "lat": _NODES[best_path[-1]]["lat"],
+        "lon": _NODES[best_path[-1]]["lon"],
+        "elevation": round(_NODES[best_path[-1]]["elevation"] + 0.65, 2),
+    })
+
     route_steps = _build_route_steps(best_path, graph)
     distance_m = round(sum(float(graph.get_edge_data(u, v).get("distance_m", 0.0)) for u, v in zip(best_path, best_path[1:])), 1)
     eta_minutes = round(best_weight / 60.0, 1)
-    exit_names = {7: "South Gate", 105: "West Gate", 119: "East Gate", 217: "North Gate"}
-    exit_name = exit_names.get(best_exit, f"Exit Node {best_exit}")
+
+    exit_name = f"Exit Node {best_exit}"
+    for sub in _SUBSTATIONS:
+        pass  # exit names come from the network boundary, not substations
+    dest_intersection = _NODES[best_exit]["intersection_name"]
+    if dest_intersection and dest_intersection != "Intersection":
+        exit_name = dest_intersection
 
     return {
         "success": True,
         "path": best_path,
-        "path_coords": path_coords,
+        "path_coords": curve_coords,
         "total_nodes": len(best_path),
         "distance_m": distance_m,
         "eta_minutes": eta_minutes,

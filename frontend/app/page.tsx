@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import ControlPanel from '@/components/ControlPanel';
 import TutorialModal from '@/components/TutorialModal';
@@ -9,8 +9,18 @@ import Sparkline from '@/components/Sparkline';
 
 const CesiumViewer = dynamic(() => import('@/components/CesiumViewer'), {
   ssr: false,
-  loading: () => <div className="map-loading">Preparing street network…</div>,
+  loading: () => <MapBootSkeletonFallback />,
 });
+
+function MapBootSkeletonFallback() {
+  return (
+    <div className="map-loading">
+      <div className="boot-rings"><i /><i /><i /></div>
+      <span>PREPARING STREET NETWORK</span>
+      <div className="boot-bars"><i style={{ '--d': '0ms' } as CSSProperties} /><i style={{ '--d': '120ms' } as CSSProperties} /><i style={{ '--d': '240ms' } as CSSProperties} /><i style={{ '--d': '360ms' } as CSSProperties} /></div>
+    </div>
+  );
+}
 
 const responseZones = [
   { code: 'DT', name: 'Downtown core', description: 'Civic buildings · high density', status: 'Monitor', tone: 'teal' },
@@ -51,9 +61,54 @@ function formatClock(date: Date) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+/** Tween a number from its previous value to the new one; renders via a mask so the swap flips. */
+function TweenNumber({ value, decimals = 1, suffix = '' }: { value: number; decimals?: number; suffix?: string }) {
+  const [display, setDisplay] = useState(value);
+  const fromRef = useRef(value);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const from = fromRef.current;
+    const delta = value - from;
+    if (reduced || Math.abs(delta) < 10 ** -decimals / 2) {
+      fromRef.current = value;
+      setDisplay(value);
+      return;
+    }
+    const start = performance.now();
+    const duration = 480;
+    const step = (t: number) => {
+      const p = Math.min(1, (t - start) / duration);
+      const eased = 1 - (1 - p) ** 3;
+      const next = from + delta * eased;
+      setDisplay(next);
+      if (p < 1) {
+        rafRef.current = requestAnimationFrame(step);
+      } else {
+        fromRef.current = value;
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [value, decimals]);
+
+  return (
+    <span className="tween-mask">
+      <span key={display.toFixed(decimals)} className="tween-value">
+        {display.toFixed(decimals)}
+        {suffix}
+      </span>
+    </span>
+  );
+}
+
+
+
 export default function HomePage() {
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const progressRef = useRef<HTMLDivElement>(null);
   const {
     fetchCityData,
     triggerLiveTick,
@@ -84,6 +139,29 @@ export default function HomePage() {
       window.clearInterval(clockTimer);
     };
   }, [fetchCityData, triggerLiveTick]);
+
+  // Scroll progress hairline: rAF-driven transform, no re-renders per frame.
+  useEffect(() => {
+    const scrollRoot = document.querySelector('.content-scroll');
+    const bar = progressRef.current;
+    if (!scrollRoot || !bar) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const max = scrollRoot.scrollHeight - scrollRoot.clientHeight;
+      const ratio = max > 0 ? scrollRoot.scrollTop / max : 0;
+      bar.style.transform = `scaleX(${ratio.toFixed(4)})`;
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    scrollRoot.addEventListener('scroll', onScroll, { passive: true });
+    update();
+    return () => {
+      scrollRoot.removeEventListener('scroll', onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
 
   useEffect(() => {
     const scrollRoot = document.querySelector('.content-scroll');
@@ -117,6 +195,7 @@ export default function HomePage() {
   return (
     <main className="app-shell">
       <header className="topbar">
+        <div className="scroll-progress" ref={progressRef} aria-hidden="true" />
         <div className="brand-lockup">
           <div className="brand-mark"><span>G</span><i>↗</i></div>
           <div>
@@ -164,27 +243,27 @@ export default function HomePage() {
             </Reveal>
 
             <div className="metric-grid">
-              <Reveal><article className="metric-card metric-card-route"><div className="metric-top"><span>Recommended ETA</span><span className="metric-status green">ROAD-AWARE</span></div><strong>{route?.success ? `${route.eta_minutes.toFixed(1)}` : '-'}<small>{route?.success ? ' min' : ' pending'}</small></strong><div className="metric-caption">{destination ? `To ${destination.intersection_name}` : 'Run a route assessment to begin'}</div></article></Reveal>
+              <Reveal><article className="metric-card metric-card-route"><div className="metric-top"><span>Recommended ETA</span><span className="metric-status green">ROAD-AWARE</span></div><strong className="metric-figure">{route?.success ? <TweenNumber value={route.eta_minutes} decimals={1} /> : '-'}<small>{route?.success ? ' min' : ' pending'}</small></strong><div className="metric-caption">{destination ? `To ${destination.intersection_name}` : 'Run a route assessment to begin'}</div></article></Reveal>
               <Reveal><article className="metric-card"><div className="metric-top"><span>Street distance</span><span className="metric-status green">{route?.success ? 'VALIDATED' : 'READY'}</span></div><strong>{route?.success ? formatDistance(route.distance_m) : '-'}<small>{route?.success ? '' : ' route'}</small></strong><div className="metric-caption">Weighted by road class, hazards, and access</div></article></Reveal>
-              <Reveal><article className="metric-card"><div className="metric-top"><span>Grid frequency</span><span className={`metric-status ${gridFrequency < 59.7 ? 'red' : 'green'}`}>{gridFrequency < 59.7 ? 'DEGRADED' : 'STABLE'}</span></div><strong>{gridFrequency.toFixed(2)}<small> Hz</small></strong><Sparkline data={frequencyHistory} width={170} height={32} stroke={gridFrequency < 59.7 ? '#c9534c' : '#1c8a64'} /><div className="metric-caption">Live utility telemetry · target 60.00 Hz</div></article></Reveal>
+              <Reveal><article className="metric-card"><div className="metric-top"><span>Grid frequency</span><span className={`metric-status ${gridFrequency < 59.7 ? 'red' : 'green'}`}>{gridFrequency < 59.7 ? 'DEGRADED' : 'STABLE'}</span></div><strong className="metric-figure"><TweenNumber value={gridFrequency} decimals={2} /><small> Hz</small></strong><Sparkline data={frequencyHistory} width={170} height={32} stroke={gridFrequency < 59.7 ? '#a8453e' : '#157050'} /><div className="metric-caption">Live utility telemetry · target 60.00 Hz</div></article></Reveal>
               <Reveal><article className="metric-card"><div className="metric-top"><span>Network impact</span><span className={`metric-status ${totalOutages ? 'amber' : 'green'}`}>{totalOutages ? 'WATCH' : 'CLEAR'}</span></div><strong>{String(totalOutages).padStart(2, '0')}<small> outages</small></strong><div className="impact-bar"><i style={{ width: `${Math.min(100, totalOutages * 16 + overloadedSubstations.length * 10)}%` }} /></div><div className="metric-caption">{overloadedSubstations.length} overloaded · {cascadedSubstations.length} cascaded</div></article></Reveal>
             </div>
 
             <div className="overview-columns">
-              <Reveal className="panel-card zone-card"><div className="panel-heading"><div><h2>Response zones</h2></div><button className="text-button" onClick={() => scrollTo('map')}>Inspect map ↗</button></div>{responseZones.map((zone) => <div className="zone-row" key={zone.name}><div className={`zone-avatar ${zone.tone}`}>{zone.code}</div><div className="zone-info"><strong>{zone.name}</strong><span>{zone.description}</span></div><span className={`zone-status ${zone.tone}`}>{zone.status}</span><span className="row-arrow">›</span></div>)}</Reveal>
+              <Reveal className="panel-card zone-card"><div className="panel-heading"><div><h2>Response zones</h2></div><button className="text-button" onClick={() => scrollTo('map')}>Inspect map <b>↗</b></button></div><div className="zone-rows cascade">{responseZones.map((zone) => <div className="zone-row" key={zone.name}><div className={`zone-avatar ${zone.tone}`}>{zone.code}</div><div className="zone-info"><strong>{zone.name}</strong><span>{zone.description}</span></div><span className={`zone-status ${zone.tone}`}>{zone.status}</span><span className="row-arrow">›</span></div>)}</div></Reveal>
               <Reveal className="panel-card readiness-card"><div className="panel-heading"><div><h2>Response posture</h2></div><span className="score">{route ? Math.max(0, 100 - Math.round((route.anomaly_score ?? 0) * 36)) : 84}<small>%</small></span></div><div className="readiness-track"><i style={{ width: `${route ? Math.max(0, 100 - Math.round((route.anomaly_score ?? 0) * 36)) : 84}%` }} /></div><div className="readiness-list"><span><i className="check">✓</i> Street graph loaded <b>{cityData ? `${cityData.nodes.length} nodes` : 'loading'}</b></span><span><i className="check">✓</i> Utility feeds available <b>{backendOnline ? '4 / 4' : 'local'}</b></span><span><i className={route?.success ? 'check' : 'warn'}>{route?.success ? '✓' : '!'}</i> Evacuation corridor <b>{route?.success ? 'validated' : 'not set'}</b></span></div></Reveal>
             </div>
           </section>
 
           <section className="map-section" data-section="map">
-            <Reveal className="map-header"><div><h2>Houston route planner</h2><p>Road centerlines, block footprints, utility risk, and modeled flood cells share one coordinate system.</p></div><div className="map-header-actions"><span className="map-coordinates">{CENTER_LAT_LABEL} · {CENTER_LON_LABEL}</span><button className="outline-button" onClick={() => scrollTo('audit')}>Review audit ↗</button></div></Reveal>
+            <Reveal className="map-header"><div><h2>Houston route planner</h2><p>Road centerlines, block footprints, utility risk, and modeled flood cells share one coordinate system.</p></div><div className="map-header-actions"><span className="map-coordinates">{CENTER_LAT_LABEL} · {CENTER_LON_LABEL}</span><button className="outline-button" onClick={() => scrollTo('audit')}>Review audit <b>↗</b></button></div></Reveal>
 
             <Reveal className="map-console-reveal">
               <div className="map-console">
                 <CesiumViewer />
-                <div className="map-overlay map-overlay-top"><span className="live-dot" /> STREET NETWORK <b>·</b> {cityData?.edges.length ?? 0} corridors, {cityData?.blocks.length ?? 0} blocks</div>
+                <div className="map-overlay map-overlay-top"><span className="live-dot" /> STREET NETWORK <b>·</b> {cityData?.edges.length ?? 0} street segments, {cityData?.blocks.length ?? 0} buildings</div>
                 <div className="map-overlay map-overlay-instruction"><strong>Map interaction</strong><span>Click a dry intersection to set a new origin</span></div>
-                <div className="map-legend"><span><i className="legend-line route" /> Recommended route</span><span><i className="legend-line arterial" /> Arterial</span><span><i className="legend-line hazard" /> Hazard / closure</span><span><i className="legend-dot flood" /> Flood cell</span></div>
+                <div className="map-legend"><span><i className="legend-line route" /> Recommended route</span><span><i className="legend-line arterial" /> Arterial</span><span><i className="legend-line local" /> Street</span><span><i className="legend-line hazard" /> Hazard / closure</span><span><i className="legend-dot flood" /> Flood cell</span></div>
                 <div className="map-readout"><span>Scenario surface</span><strong>{usgsGageHeight.toFixed(2)} ft gage · {surfaceTemp.toFixed(1)}°F</strong><small>{isLoading ? 'Recalculating route weights…' : 'Telemetry refresh every 3 sec'}</small></div>
                 <ControlPanel />
               </div>
@@ -194,11 +273,11 @@ export default function HomePage() {
           </section>
 
           <section className="audit-section" data-section="audit">
-            <Reveal className="audit-intro"><h2>Route audit</h2><p>See exactly which corridors the solver selected, how far the team must travel, and which signals changed the recommendation.</p><button className="primary-button" onClick={() => scrollTo('map')}>Adjust scenario ↗</button></Reveal>
+            <Reveal className="audit-intro"><h2>Route audit</h2><p>See exactly which corridors the solver selected, how far the team must travel, and which signals changed the recommendation.</p><button className="primary-button" onClick={() => scrollTo('map')}>Adjust scenario <b>↗</b></button></Reveal>
             <div className="audit-content">
-              <Reveal className="route-report"><div className="audit-card-heading"><div><h3>{route?.success ? `Exit via Node ${route.dest_node}` : 'No route assessed'}</h3></div><span className={`report-status ${route?.success ? 'good' : 'pending'}`}>{route?.success ? `${route.eta_minutes.toFixed(1)} min` : 'PENDING'}</span></div><div className="route-report-meta"><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b> street distance</span><span><b>{route?.route_steps.length ?? 0}</b> road segments</span><span><b>{route?.blocked_edges.length ?? 0}</b> closures modeled</span></div>{route?.route_steps.length ? <div className="route-steps">{route.route_steps.slice(0, 5).map((step, index) => <div className="route-step" key={`${step.from_node}-${step.to_node}-${index}`}><span className="step-index">{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><span>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min, {step.road_class}</span></div></div>)}</div> : <div className="empty-report">Use the route planner to generate named-road guidance and a transparent risk assessment.</div>}</Reveal>
+              <Reveal className="route-report"><div className="audit-card-heading"><div><h3>{route?.success ? `Exit via Node ${route.dest_node}` : 'No route assessed'}</h3></div><span className={`report-status ${route?.success ? 'good' : 'pending'}`}>{route?.success ? `${route.eta_minutes.toFixed(1)} min` : 'PENDING'}</span></div><div className="route-report-meta"><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b> street distance</span><span><b>{route?.route_steps.length ?? 0}</b> road segments</span><span><b>{route?.blocked_edges.length ?? 0}</b> closures modeled</span></div>{route?.route_steps.length ? <div className="route-steps cascade">{route.route_steps.slice(0, 5).map((step, index) => <div className="route-step" key={`${step.from_node}-${step.to_node}-${index}`}><span className="step-index">{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><span>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min, {step.road_class}</span></div></div>)}</div> : <div className="empty-report">Use the route planner to generate named-road guidance and a transparent risk assessment.</div>}</Reveal>
               <div className="audit-cards"><Reveal><article className="audit-feature"><h3>Road-aware by design</h3><p>Named arterials, collectors, and local streets carry measured lengths, lane counts, and speed assumptions for a credible ETA.</p><div className="feature-foot">CORRIDORS <b>{cityData?.edges.length ?? 0}</b></div></article></Reveal><Reveal><article className="audit-feature"><h3>Blocks stay blocks</h3><p>Inset procedural footprints leave a visible road shoulder. The route is clamped to centerlines instead of floating through extruded buildings.</p><div className="feature-foot">BLOCK FOOTPRINTS <b>{cityData?.blocks.length ?? 0}</b></div></article></Reveal><Reveal><article className="audit-feature accent-card"><h3>Model what changes</h3><p>Flood cells, substations, blackouts, and overhead utility hazards update the route without hiding the underlying decision.</p><div className="feature-foot">ANOMALY SCORE <b>{route ? `${Math.round(route.anomaly_score * 100)}%` : '-'}</b></div></article></Reveal></div>
-              <Reveal className="activity-card"><div className="audit-card-heading"><div><h3>Operator event stream</h3></div><span className="activity-live"><i /> streaming</span></div><div className="activity-list">{liveLogs.slice(0, 5).map((log, index) => <div key={`${log}-${index}`}><p>{log}</p></div>)}</div></Reveal>
+              <Reveal className="activity-card"><div className="audit-card-heading"><div><h3>Operator event stream</h3></div><span className="activity-live"><i /> streaming</span></div><div className="activity-list">{liveLogs.slice(0, 5).map((log, index) => <div key={`${log}-${index}`}><i className="log-marker" /><p>{log}</p></div>)}</div></Reveal>
             </div>
           </section>
         </div>

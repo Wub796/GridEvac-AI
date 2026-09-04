@@ -1,10 +1,9 @@
 export interface NodeData {
   id: number;
+  osm?: number;
   lat: number;
   lon: number;
   elevation: number;
-  row: number;
-  col: number;
   intersection_name: string;
   district: string;
 }
@@ -18,16 +17,20 @@ export interface EdgeData {
   road_class: 'arterial' | 'collector' | 'local' | string;
   lanes: number;
   speed_limit_mph: number;
+  /** Intermediate street-curve coordinates between the two junctions. */
+  geometry?: [number, number][];
 }
 
 export interface BlockData {
   id: string;
-  row: number;
-  col: number;
-  lat: number;
-  lon: number;
-  kind: 'office' | 'residential' | 'retail' | 'civic' | 'park' | string;
+  /** Real building footprint ring: [lat, lon] pairs. */
+  footprint: [number, number][];
   height_m: number;
+}
+
+export interface ParkData {
+  id: string;
+  footprint: [number, number][];
 }
 
 export interface SubstationData {
@@ -52,12 +55,14 @@ export interface CityData {
   nodes: NodeData[];
   edges: EdgeData[];
   blocks: BlockData[];
+  parks: ParkData[];
   substations: SubstationData[];
   transmission_links: TransmissionLink[];
   center_lat: number;
   center_lon: number;
-  grid_rows: number;
-  grid_cols: number;
+  safe_exits: number[];
+  /** Quadrant label per exit node id ("North exit", ...). */
+  exit_names?: Record<string, string>;
 }
 
 export interface RouteCoord {

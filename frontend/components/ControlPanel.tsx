@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import type { RiskLevel } from '@/lib/types';
 import styles from './ControlPanel.module.css';
@@ -13,12 +13,8 @@ const RISK_COLORS: Record<RiskLevel, string> = {
   CRITICAL: '#a8453e',
 };
 
-const EXIT_NAMES: Record<number, string> = {
-  7: 'South exit',
-  105: 'West exit',
-  119: 'East exit',
-  217: 'North exit',
-};
+// Exit labels resolve from the loaded network's intersection names.
+const EXIT_NAMES: Record<number, string> = {};
 
 function formatDistance(meters: number) {
   if (!meters) return '-';
@@ -27,6 +23,24 @@ function formatDistance(meters: number) {
 
 export default function ControlPanel() {
   const [searchNodeInput, setSearchNodeInput] = useState('');
+  const [collapsed, setCollapsed] = useState(false);
+  const [showTab, setShowTab] = useState(false);
+  const collapseTimer = useRef<number | null>(null);
+
+  // The show tab fades in only after the panel has slid out, so the two
+  // elements never cross paths mid-animation.
+  useEffect(() => {
+    if (collapseTimer.current) window.clearTimeout(collapseTimer.current);
+    if (collapsed) {
+      collapseTimer.current = window.setTimeout(() => setShowTab(true), 260);
+    } else {
+      setShowTab(false);
+    }
+    return () => {
+      if (collapseTimer.current) window.clearTimeout(collapseTimer.current);
+    };
+  }, [collapsed]);
+
   const {
     floodLevel,
     setFloodLevel,
@@ -69,13 +83,20 @@ export default function ControlPanel() {
   const floodedCount = route?.flooded_nodes.length ?? nodes.filter((node) => node.elevation <= floodLevel * 1.7).length;
 
   return (
-    <aside className={styles.panel} aria-label="Route planning controls">
+    <>
+      <button className={`${styles.collapseTab} ${showTab ? styles.tabVisible : ''}`} onClick={() => setCollapsed(false)} aria-expanded={false} aria-hidden={!showTab} tabIndex={showTab ? 0 : -1}>
+        Scenario controls
+      </button>
+      <aside className={`${styles.panel} ${collapsed ? styles.panelHidden : ''}`} aria-label="Route planning controls" aria-hidden={collapsed}>
       <div className={styles.panelHeader}>
         <div>
           <p className={styles.kicker}>Route planning desk</p>
           <h2>Scenario controls</h2>
         </div>
-        <span className={`${styles.connection} ${backendOnline ? styles.connectionOnline : ''}`}><i />{backendOnline ? 'API live' : 'Local'}</span>
+        <div className={styles.headerRight}>
+          <span className={`${styles.connection} ${backendOnline ? styles.connectionOnline : ''}`}><i />{backendOnline ? 'API live' : 'Local'}</span>
+          <button className={styles.collapseButton} onClick={() => setCollapsed(true)} aria-label="Hide controls">&rsaquo;</button>
+        </div>
       </div>
 
       {error && <div className={styles.errorBanner}>{error}</div>}
@@ -106,8 +127,8 @@ export default function ControlPanel() {
           })}
         </select>
         <div className={styles.searchRow}>
-          <input className={styles.searchInput} type="number" min="0" max="224" placeholder="Node number 0-224" value={searchNodeInput} onChange={(event) => setSearchNodeInput(event.target.value)} />
-          <button className={styles.smallButton} onClick={() => { const id = Number(searchNodeInput); if (Number.isInteger(id) && id >= 0 && id <= 224) setFlyToNodeId(id); }}>Locate</button>
+          <input className={styles.searchInput} type="number" min="0" max={nodes.length > 0 ? nodes.length - 1 : 0} placeholder={`Node 0-${nodes.length > 0 ? nodes.length - 1 : 0}`} value={searchNodeInput} onChange={(event) => setSearchNodeInput(event.target.value)} aria-label="Node number to locate" />
+          <button className={styles.smallButton} onClick={() => { const id = Number(searchNodeInput); if (Number.isInteger(id) && id >= 0 && id < nodes.length && nodes.some((node) => node.id === id)) setFlyToNodeId(id); }}>Locate</button>
         </div>
         <button className={styles.solveButton} onClick={() => void calculateRoute()} disabled={isLoading || !cityData}><span>{isLoading ? 'Recalculating corridor…' : 'Recalculate safe route'}</span><b>↗</b></button>
       </section>
@@ -141,7 +162,7 @@ export default function ControlPanel() {
           <label><input type="checkbox" checked={showPowerLines} onChange={(event) => setShowPowerLines(event.target.checked)} /><span>Utility links</span></label>
         </div>
         <div className={styles.modeRow}><span>Map treatment</span><div>{(['nominal', 'radar', 'thermal'] as const).map((mode) => <button key={mode} className={mapFilterMode === mode ? styles.modeActive : ''} onClick={() => setMapFilterMode(mode)}>{mode}</button>)}</div></div>
-        <div className={styles.presetRow}><button onClick={() => setFlyToCoords({ lon: -95.3698, lat: 29.7604, elev: 4300, heading: 8, pitch: -62 })}>District overview</button><button onClick={() => setFlyToCoords({ lon: -95.375, lat: 29.755, elev: 1500, heading: 0, pitch: -70 })}>Street detail</button></div>
+        <div className={styles.presetRow}><button onClick={() => setFlyToCoords({ lon: -95.3698, lat: 29.7604, elev: 5200, heading: 0, pitch: -88 })}>District overview</button><button onClick={() => setFlyToCoords({ lon: -95.375, lat: 29.755, elev: 1500, heading: 0, pitch: -80 })}>Street detail</button></div>
       </section>
 
       <section className={styles.routeSummary}>
@@ -151,6 +172,7 @@ export default function ControlPanel() {
         {route?.success && <p className={styles.destination}>{EXIT_NAMES[route.dest_node] ?? `Exit node ${route.dest_node}`}. {route.message}</p>}
         {route && <button className={styles.clearButton} onClick={clearRoute}>Clear route overlay</button>}
       </section>
-    </aside>
+      </aside>
+    </>
   );
 }

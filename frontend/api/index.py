@@ -11,12 +11,12 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import (
-    CityResponse, NodeData, EdgeData, BlockData, SubstationData, TransmissionLink,
+    CityResponse, NodeData, EdgeData, BlockData, ParkData, SubstationData, TransmissionLink,
     SimulationRequest, RouteResponse, RouteCoord, RouteStep, FloodZoneResponse,
 )
 from city_graph import (
-    _G, _NODES, _BLOCKS, _SUBSTATIONS, TRANSMISSION_LINKS,
-    CENTER_LAT, CENTER_LON, GRID_ROWS, GRID_COLS,
+    _G, _NODES, _BLOCKS, PARKS, _SUBSTATIONS, TRANSMISSION_LINKS,
+    CENTER_LAT, CENTER_LON, SAFE_EXITS, EXIT_NAMES,
 )
 from routing import compute_route, get_flooded_nodes, FLOOD_RISE_PER_LEVEL, _LINK_EDGES
 from anomaly import detect_anomaly
@@ -38,8 +38,8 @@ async def health():
 @app.get("/api/city", response_model=CityResponse)
 async def get_city():
     nodes = [NodeData(**data) for data in _NODES.values()]
-    edges = [EdgeData(source=u, target=v, weight=float(data.get("weight", 1.0)), distance_m=float(data.get("distance_m", 0.0)), road_name=str(data.get("road_name", "")), road_class=str(data.get("road_class", "local")), lanes=int(data.get("lanes", 2)), speed_limit_mph=int(data.get("speed_limit_mph", 25))) for u, v, data in _G.edges(data=True)]
-    return CityResponse(nodes=nodes, edges=edges, blocks=[BlockData(**block) for block in _BLOCKS], substations=[SubstationData(**sub) for sub in _SUBSTATIONS], transmission_links=[TransmissionLink(**link) for link in TRANSMISSION_LINKS], center_lat=CENTER_LAT, center_lon=CENTER_LON, grid_rows=GRID_ROWS, grid_cols=GRID_COLS)
+    edges = [EdgeData(source=u, target=v, weight=float(data.get("weight", 1.0)), distance_m=float(data.get("distance_m", 0.0)), road_name=str(data.get("road_name", "")), road_class=str(data.get("road_class", "local")), lanes=int(data.get("lanes", 2)), speed_limit_mph=int(data.get("speed_limit_mph", 25)), geometry=[list(pair) for pair in data.get("geometry", [])]) for u, v, data in _G.edges(data=True)]
+    return CityResponse(nodes=nodes, edges=edges, blocks=[BlockData(**block) for block in _BLOCKS], parks=[ParkData(**park) for park in PARKS], substations=[SubstationData(**sub) for sub in _SUBSTATIONS], transmission_links=[TransmissionLink(**link) for link in TRANSMISSION_LINKS], center_lat=CENTER_LAT, center_lon=CENTER_LON, safe_exits=list(SAFE_EXITS), exit_names=dict(EXIT_NAMES))
 
 
 @app.get("/api/flood-zones", response_model=FloodZoneResponse)
