@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { CityData, RouteResponse, SimulationParams } from './types';
+import type { CityData, RouteResponse, SimulationParams, CorridorComparisonResponse, IsochroneResponse, TravelMode } from './types';
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 
@@ -22,6 +22,23 @@ export const api = {
       flood_level:        params.flood_level,
       failed_substations: params.failed_substations,
       origin_node:        params.origin_node,
+      travel_mode:        params.travel_mode ?? 'vehicle',
+    });
+    return data;
+  },
+
+  /** Rank every perimeter exit corridor from one origin */
+  compareCorridors: async (origin: number, floodLevel: number, failed: number[], mode: TravelMode): Promise<CorridorComparisonResponse> => {
+    const { data } = await http.get<CorridorComparisonResponse>('/api/compare-corridors', {
+      params: { origin, flood_level: floodLevel, failed_substations: failed.join(','), travel_mode: mode },
+    });
+    return data;
+  },
+
+  /** Street-network reachability rings from an origin */
+  isochrone: async (origin: number, floodLevel: number, failed: number[], mode: TravelMode, minutes: number[]): Promise<IsochroneResponse> => {
+    const { data } = await http.get<IsochroneResponse>('/api/isochrone', {
+      params: { origin, flood_level: floodLevel, failed_substations: failed.join(','), travel_mode: mode, minutes: minutes.join(',') },
     });
     return data;
   },

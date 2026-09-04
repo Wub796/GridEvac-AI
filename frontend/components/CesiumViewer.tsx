@@ -33,6 +33,10 @@ export default function CesiumViewer() {
   const roadEntitiesRef = useRef<Map<string, RoadEntity>>(new Map());
   const nodeEntitiesRef = useRef<Map<number, any>>(new Map());
   const haloEntitiesRef = useRef<Map<number, any>>(new Map());
+  // Invisible, always-pickable dots: click/hover targeting is decoupled from
+  // whether intersections are visually shown, so the map stays clickable at
+  // every zoom even with the dots hidden.
+  const pickNodeEntitiesRef = useRef<Map<number, any>>(new Map());
   const buildingEntitiesRef = useRef<any[]>([]);
   const buildingTilesRef = useRef<any>(null);
   const roadLabelEntitiesRef = useRef<any[]>([]);
@@ -42,6 +46,7 @@ export default function CesiumViewer() {
   const floodSettleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const searchHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blackoutEntitiesRef = useRef<any[]>([]);
+  const isochroneEntitiesRef = useRef<any[]>([]);
   const routeEntitiesRef = useRef<any[]>([]);
   const staticRenderedRef = useRef(false);
   const clickHandlerRef = useRef<any>(null);
@@ -61,6 +66,8 @@ export default function CesiumViewer() {
     flyToNodeId,
     setFlyToNodeId,
     flyToRoadKey,
+    isochrone,
+    isochroneVisible,
     flyToCoords,
     setFlyToCoords,
     mapFilterMode,
@@ -107,6 +114,7 @@ export default function CesiumViewer() {
     const nodeEntities = nodeEntitiesRef.current;
     const substationEntities = substationEntitiesRef.current;
     const haloEntities = haloEntitiesRef.current;
+    const pickNodeEntities = pickNodeEntitiesRef.current;
 
     const initialise = async () => {
       try {
@@ -137,7 +145,13 @@ export default function CesiumViewer() {
           selectionIndicator: false,
           timeline: false,
           navigationHelpButton: false,
-          requestRenderMode: false,
+          // On-demand rendering: with requestRenderMode the scene only draws
+          // when something changes (camera moves, entity edits, tiles load)
+          // instead of redrawing 60 times a second while idle. Continuous
+          // animations (marker pulses, flood rise-in) request their own frames
+          // via viewer.clock.shouldAnimate, pumped in the render loop below.
+          requestRenderMode: true,
+          maximumRenderTimeChange: Infinity,
           shadows: false,
         });
         viewerRef.current = viewer;
@@ -178,10 +192,16 @@ export default function CesiumViewer() {
           const current = useSimulationStore.getState();
           const exits = new Set(current.cityData?.safe_exits ?? []);
           const drills = viewer.scene.drillPick(movement.position, 8, 12, 12) ?? [];
+          // Entity ids are `node-<id>` for visible dots and `pick-node-<id>`
+          // for the invisible always-pickable dots.
+          const nodeIdFromEntityId = (id: any): number | null => {
+            if (typeof id !== 'string') return null;
+            const match = /^(?:pick-)?node-(\d+)$/.exec(id);
+            return match ? Number(match[1]) : null;
+          };
           const pickedNodes = drills
-            .map((item: any) => item?.id?.id ?? item?.id)
-            .filter((id: any): id is string => typeof id === 'string' && id.startsWith('node-'))
-            .map((id: string) => Number(id.replace('node-', '')));
+            .map((item: any) => nodeIdFromEntityId(item?.id?.id ?? item?.id))
+            .filter((id: any): id is number => id !== null);
           // Prefer a regular selectable intersection; exits are endpoints, not origins.
           const targetId = pickedNodes.find((id) => !exits.has(id)) ?? pickedNodes[0];
           if (targetId === undefined) return;
@@ -202,7 +222,8 @@ export default function CesiumViewer() {
         handler.setInputAction((movement: any) => {
           const picked = viewer.scene.pick(movement.position);
           const pickedId = picked?.id?.id ?? picked?.id;
-          const hit = typeof pickedId === 'string' && pickedId.startsWith('node-') ? Number(pickedId.replace('node-', '')) : null;
+          const match = typeof pickedId === 'string' ? /^(?:pick-)?node-(\d+)$/.exec(pickedId) : null;
+          const hit = match ? Number(match[1]) : null;
           if (hit === hoveredNodeId) return;
           if (hoveredNodeId !== null) {
             const previous = nodeEntities.get(hoveredNodeId);
@@ -218,6 +239,7 @@ export default function CesiumViewer() {
             }
           }
           viewer.canvas.style.cursor = hit !== null ? 'pointer' : 'default';
+          requestFrame(viewer);
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
         resizeObserver = new ResizeObserver(() => {
@@ -246,10 +268,12 @@ export default function CesiumViewer() {
       nodeEntities.clear();
       substationEntities.clear();
       haloEntities.clear();
+      pickNodeEntities.clear();
       buildingEntitiesRef.current = [];
       roadLabelEntitiesRef.current = [];
       transmissionEntitiesRef.current = [];
       floodEntitiesRef.current = [];
+      isochroneEntitiesRef.current = [];
       blackoutEntitiesRef.current = [];
       routeEntitiesRef.current = [];
       buildingTilesRef.current = null;
@@ -262,6 +286,8 @@ export default function CesiumViewer() {
   useEffect(() => {
     if (!viewerReady || !viewerRef.current || !cityData || staticRenderedRef.current) return;
     staticRenderedRef.current = true;
+    // Under requestRenderMode the first paint needs an explicit render after
+    // entity creation, even when the intro flight is skipped by reduced motion.
     renderStaticCity(viewerRef.current, cityData, {
       roadEntitiesRef,
       nodeEntitiesRef,
@@ -271,15 +297,27 @@ export default function CesiumViewer() {
       transmissionEntitiesRef,
       buildingTilesRef,
       haloEntitiesRef,
+      pickNodeEntitiesRef,
     });
     playIntroFlight(viewerRef.current);
+    requestFrame(viewerRef.current);
   }, [cityData, viewerReady]);
+
+  // Re-tier + redraw after route/scenario restyles the road entities, so
+  // styleRoad's full widths/visibility don't bypass the zoom generalization.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !viewerReady || viewer.isDestroyed()) return;
+    applyRoadTiers(roadEntitiesRef.current, viewer.camera.positionCartographic.height);
+    requestFrame(viewer);
+  }, [route, viewerReady]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
     buildingEntitiesRef.current.forEach((entity) => { entity.show = showBuildings; });
     if (buildingTilesRef.current) buildingTilesRef.current.show = showBuildings;
+    requestFrame(viewer);
   }, [showBuildings, viewerReady]);
 
   useEffect(() => {
@@ -292,6 +330,7 @@ export default function CesiumViewer() {
     nodeEntitiesRef.current.forEach((entity) => { entity.show = showIntersections; });
     haloEntitiesRef.current.forEach((entity) => { entity.show = showIntersections; });
     roadLabelEntitiesRef.current.forEach((entity) => { entity.show = showRoadNames; });
+    requestFrame(viewer);
   }, [showPowerLines, showSubstations, showIntersections, showRoadNames, viewerReady, cityData]);
 
   useEffect(() => {
@@ -376,6 +415,7 @@ export default function CesiumViewer() {
       clearTimeout(debounce);
       floodSettleTimersRef.current.forEach((timer) => clearTimeout(timer));
       floodSettleTimersRef.current = [];
+      if (viewerReady) requestFrame(viewer);
     };
   }, [cityData, floodLevel, route, viewerReady]);
 
@@ -422,7 +462,69 @@ export default function CesiumViewer() {
       });
       blackoutEntitiesRef.current.push(ellipse, label);
     });
+    requestFrame(viewer);
   }, [cityData, failedSubstations, route, viewerReady]);
+
+  // Reachability rings: translucent discs at each isochrone cutoff, drawn to
+  // scale from actual street-network travel times (not straight-line radius).
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    clearEntities(viewer, isochroneEntitiesRef.current);
+    isochroneEntitiesRef.current = [];
+    if (!cityData || !isochroneVisible || !isochrone) return;
+    const originNode = cityData.nodes.find((node) => node.id === isochrone.origin);
+    if (!originNode) return;
+    const ringColors = [
+      'rgba(91, 192, 234, 0.10)',
+      'rgba(91, 192, 234, 0.16)',
+      'rgba(91, 192, 234, 0.23)',
+      'rgba(91, 192, 234, 0.32)',
+    ];
+    // Measure the effective radius of each ring from the farthest member node
+    // so the disc reflects the street network's true anisotropic reach.
+    isochrone.rings.forEach((ring, index) => {
+      let maxMeters = 0;
+      ring.nodes.forEach((nodeId) => {
+        const node = cityData.nodes.find((item) => item.id === nodeId);
+        if (!node) return;
+        const dx = (node.lon - originNode.lon) * 111320 * Math.cos(originNode.lat * Math.PI / 180);
+        const dy = (node.lat - originNode.lat) * 111320;
+        maxMeters = Math.max(maxMeters, Math.hypot(dx, dy));
+      });
+      if (maxMeters <= 0) return;
+      const ringEntity = viewer.entities.add({
+        id: `isochrone-ring-${ring.minutes}`,
+        position: Cesium.Cartesian3.fromDegrees(originNode.lon, originNode.lat, 0),
+        ellipse: {
+          semiMajorAxis: Math.max(120, maxMeters),
+          semiMinorAxis: Math.max(120, maxMeters),
+          height: 0,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          material: Cesium.Color.fromCssColorString('#5bc0ea').withAlpha(0.1 + 0.08 * index),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString('#5bc0ea').withAlpha(0.45),
+          outlineWidth: 1,
+        },
+      });
+      const ringLabel = viewer.entities.add({
+        id: `isochrone-label-${ring.minutes}`,
+        position: Cesium.Cartesian3.fromDegrees(originNode.lon, originNode.lat, 14),
+        label: {
+          text: `${ring.minutes} min reach`,
+          font: '600 10px DM Mono, monospace',
+          fillColor: Cesium.Color.fromCssColorString('#bfe4f5'),
+          outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -14 - index * 2),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      isochroneEntitiesRef.current.push(ringEntity, ringLabel);
+    });
+    requestFrame(viewer);
+  }, [cityData, isochrone, isochroneVisible, viewerReady]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -540,8 +642,10 @@ export default function CesiumViewer() {
       markers.push({ entity: marker, fraction: index / Math.max(1, route.path_coords.length - 1) });
       routeEntitiesRef.current.push(marker);
     });
+    if (DRAW_MS === 0) requestFrame(viewer);
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      if (DRAW_MS > 0) requestFrame(viewer);
     };
   }, [route, viewerReady]);
 
@@ -549,6 +653,7 @@ export default function CesiumViewer() {
     const viewer = viewerRef.current;
     if (!viewer || !cityData) return;
     updateEndpointMarkers(viewer, cityData, route?.dest_node ?? -1, route?.success ?? false);
+    requestFrame(viewer);
   }, [cityData, originNode, route?.dest_node, route?.success, viewerReady]);
 
   useEffect(() => {
@@ -589,8 +694,10 @@ export default function CesiumViewer() {
       searchHighlightTimerRef.current = setTimeout(() => {
         if (viewer.isDestroyed()) return;
         styleRoad(entity, edge, null);
+        requestFrame(viewer);
       }, 5200);
     }
+    requestFrame(viewer);
     setFlyToRoadKey(null);
   }, [flyToRoadKey, cityData, viewerReady]);
 
@@ -657,6 +764,12 @@ function prefersReducedMotion() {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+/** Nudge the on-demand render loop (requestRenderMode) after entity edits. */
+function requestFrame(viewer: any) {
+  if (!viewer || viewer.isDestroyed() || typeof viewer.scene?.requestRender !== 'function') return;
+  viewer.scene.requestRender();
+}
+
 /** Cinematic descent into the operational view on first data render. Camera-only, so it is cheap. */
 function playIntroFlight(viewer: any) {
   if (!viewer || viewer.isDestroyed() || prefersReducedMotion()) return;
@@ -690,6 +803,31 @@ function styleRoadWidth(roadClass: string) {
 function normalizeEdgeKey(key: string) {
   const [a, b] = key.split('-').map(Number);
   return Number.isFinite(a) && Number.isFinite(b) ? `${Math.min(a, b)}-${Math.max(a, b)}` : key;
+}
+
+// Cartographic generalization: minor tiers vanish as the camera zooms out so
+// the map reads as a district overview instead of a wireframe mat.
+const ROAD_TIERS = {
+  service: { near: 0, fade: 1100, base: 2, hidden: 2 },
+  local: { near: 0, fade: 1800, base: 4, hidden: 1.5 },
+  collector: { near: 0, fade: 3000, base: 6.5, hidden: 2 },
+  arterial: { near: 0, fade: 7000, base: 10, hidden: 3.5 },
+} as const;
+
+/** Re-apply zoom-dependent road tiers across all road entities. Cheap enough
+ * to run after any restyle; the tierOnce path wires it to camera changes. */
+function applyRoadTiers(roadEntities: Map<string, RoadEntity>, height: number) {
+  roadEntities.forEach(({ entity, edge }: { entity: any; edge: EdgeData }) => {
+    if (!entity?.polyline) return;
+    const tier = ROAD_TIERS[(edge.road_class as keyof typeof ROAD_TIERS) ?? 'local'] ?? ROAD_TIERS.local;
+    if (height > tier.fade) {
+      entity.polyline.show = new Cesium.ConstantProperty(false);
+    } else {
+      const width = height <= tier.near ? tier.base : Math.max(tier.hidden, tier.base * (1 - (height - tier.near) / (tier.fade - tier.near)));
+      entity.polyline.show = new Cesium.ConstantProperty(true);
+      entity.polyline.width = new Cesium.ConstantProperty(Math.max(tier.hidden, Math.min(tier.base, width)));
+    }
+  });
 }
 
 function exitLabelMap(cityData: CityData): Record<number, string> {
@@ -730,35 +868,22 @@ function renderStaticCity(
     transmissionEntitiesRef: MutableRefObject<any[]>;
     buildingTilesRef: MutableRefObject<any>;
     haloEntitiesRef: MutableRefObject<Map<number, any>>;
+    pickNodeEntitiesRef: MutableRefObject<Map<number, any>>;
   },
 ) {
   const EXIT_LABELS = exitLabelMap(cityData);
   // Junction index: O(1) lookups instead of scanning all 4,000 nodes per edge.
   const nodesById = new Map(cityData.nodes.map((node) => [node.id, node]));
-  // Cartographic generalization: minor tiers vanish as the camera zooms out
-  // so the map reads as a district overview instead of a wireframe mat.
-  const TIERS = {
-    service: { near: 0, fade: 1100, base: 2, hidden: 2 },
-    local: { near: 0, fade: 1800, base: 4, hidden: 1.5 },
-    collector: { near: 0, fade: 3000, base: 6.5, hidden: 2 },
-    arterial: { near: 0, fade: 7000, base: 10, hidden: 3.5 },
-  } as const;
-  // Re-tier only when the camera actually moves (percentageChanged), never per
-  // frame - the old per-frame pass touched 5,000 entities 60x per second.
+  // Cap road-name labels per street (2 repeats max): the same name repeating
+  // across many blocks wastes entities and adds noise without aiding navigation.
+  const labelCounts = new Map<string, number>();
+  // Cartographic generalization runs only when the camera actually moves
+  // (percentageChanged), never per frame - the old per-frame pass touched
+  // 5,000 entities 60x per second.
   const tierRoads = () => {
     if (viewer.isDestroyed()) return;
-    const height = viewer.camera.positionCartographic.height;
-    refs.roadEntitiesRef.current.forEach(({ entity, edge }: { entity: any; edge: EdgeData }) => {
-      if (!entity?.polyline) return;
-      const tier = TIERS[(edge.road_class as keyof typeof TIERS) ?? 'local'] ?? TIERS.local;
-      if (height > tier.fade) {
-        entity.polyline.show = new Cesium.ConstantProperty(false);
-      } else {
-        const width = height <= tier.near ? tier.base : Math.max(tier.hidden, tier.base * (1 - (height - tier.near) / (tier.fade - tier.near)));
-        entity.polyline.show = new Cesium.ConstantProperty(true);
-        entity.polyline.width = new Cesium.ConstantProperty(Math.max(tier.hidden, Math.min(tier.base, width)));
-      }
-    });
+    applyRoadTiers(refs.roadEntitiesRef.current, viewer.camera.positionCartographic.height);
+    requestFrame(viewer);
   };
   const tierOnce = () => {
     tierRoads();
@@ -827,8 +952,9 @@ function renderStaticCity(
     const key = normalizeEdgeKey(`${edge.source}-${edge.target}`);
     refs.roadEntitiesRef.current.set(key, { entity: road, edge });
 
-    const shouldLabel = edge.road_class === 'arterial' || (edge.road_class === 'collector' && edge.distance_m > 200 && edge.road_name !== 'Unnamed street');
-    if (shouldLabel) {
+    const shouldLabel = (edge.road_class === 'arterial' || (edge.road_class === 'collector' && edge.distance_m > 200)) && edge.road_name !== 'Unnamed street';
+    if (shouldLabel && (labelCounts.get(edge.road_name) ?? 0) < 2) {
+      labelCounts.set(edge.road_name, (labelCounts.get(edge.road_name) ?? 0) + 1);
       const label = viewer.entities.add({
         id: `road-label-${edge.source}-${edge.target}`,
         position: Cesium.Cartesian3.fromDegrees((source.lon + target.lon) / 2, (source.lat + target.lat) / 2, 2),
@@ -850,10 +976,12 @@ function renderStaticCity(
 
   cityData.nodes.forEach((node) => {
     const isExit = Boolean(EXIT_LABELS[node.id]);
-    // Only exits are persistent targets. Regular intersections appear as small
-    // quiet dots at street level and vanish below ~2.6 km camera height, which
-    // is what makes "what can I click here" legible at district zoom. Halos
-    // exist only for the four exits - one per exit, never per intersection.
+    // Only exits are persistent visual targets. Regular intersections appear
+    // as small quiet dots at street level (DistanceDisplayCondition ~2.6 km).
+    // Clickability is decoupled from visibility: every node also gets an
+    // invisible always-pickable dot, because Cesium's drillPick ignores
+    // show:false entities, so hiding the visible dots would otherwise make
+    // the map unclickable at district zoom.
     const pulse = isExit && !prefersReducedMotion();
     const beaconSize = pulse
       ? new Cesium.CallbackProperty(() => 9 + 1.6 * Math.sin(performance.now() / 420), false)
@@ -898,6 +1026,20 @@ function renderStaticCity(
       } : undefined,
     });
     refs.nodeEntitiesRef.current.set(node.id, entity);
+    // Invisible always-pickable dot: keeps every intersection clickable even
+    // when its visible dot is hidden (drillPick ignores show:false entities).
+    const pickDot = viewer.entities.add({
+      id: `pick-node-${node.id}`,
+      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 5),
+      point: {
+        pixelSize: 8,
+        color: Cesium.Color.TRANSPARENT,
+        outlineColor: Cesium.Color.TRANSPARENT,
+        outlineWidth: 0,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+    refs.pickNodeEntitiesRef.current.set(node.id, pickDot);
   });
 
   cityData.substations.forEach((sub) => {

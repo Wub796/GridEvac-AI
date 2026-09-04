@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
 import ControlPanel from '@/components/ControlPanel';
 import TutorialModal from '@/components/TutorialModal';
@@ -128,6 +128,10 @@ export default function HomePage() {
     originNode,
     liveLogs,
     isLoading,
+    floodLevel,
+    travelMode,
+    corridorComparison,
+    addLog,
   } = useSimulationStore();
 
   useEffect(() => {
@@ -184,8 +188,52 @@ export default function HomePage() {
   const totalOutages = new Set([...failedSubstations, ...cascadedSubstations]).size;
   const risk = route?.risk_level ?? 'LOW';
   const riskLabel = risk === 'LOW' ? 'Operational' : risk === 'MEDIUM' ? 'Elevated' : risk === 'HIGH' ? 'High risk' : 'Critical';
-  const origin = cityData?.nodes.find((node) => node.id === originNode);
-  const destination = cityData?.nodes.find((node) => node.id === route?.dest_node);
+  const nodesById = useMemo(() => new Map((cityData?.nodes ?? []).map((node) => [node.id, node])), [cityData]);
+  const origin = nodesById.get(originNode);
+  const destination = route ? nodesById.get(route.dest_node) : undefined;
+
+  // Shareable scenario link: encodes the full operating picture in the URL so
+  // an operator can hand the exact scenario to another responder.
+  const shareScenario = () => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams({
+      origin: String(originNode),
+      flood: floodLevel.toFixed(1),
+      mode: travelMode,
+    });
+    if (failedSubstations.length) params.set('failed', failedSubstations.join(','));
+    const url = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    void navigator.clipboard?.writeText(url).then(
+      () => addLog('Scenario link copied to clipboard.'),
+      () => addLog(`Scenario link: ${url}`),
+    );
+  };
+
+  // Operator briefing: a plain-text export of the current assessment that
+  // drops straight into an incident log or radio transcript.
+  const exportBriefing = () => {
+    if (typeof window === 'undefined' || !route) return;
+    const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const lines = [
+      `GridEvac AI - OPERATOR BRIEFING - ${stamp} CST`,
+      `Origin: ${origin?.intersection_name ?? `Node ${originNode}`}`,
+      `Scenario: flood ${floodLevel.toFixed(1)}/10, ${failedSubstations.length} substation(s) offline, mode ${travelMode}`,
+      `Recommendation: ${route.success ? `evacuate via ${destination?.intersection_name ?? `Node ${route.dest_node}`}` : 'NO PASSABLE CORRIDOR'}`,
+      route.success ? `ETA ${route.eta_minutes.toFixed(1)} min over ${formatDistance(route.distance_m)} (${route.route_steps.length} road segments)` : `Reason: ${route.message}`,
+      `Risk: ${route.risk_level} (anomaly ${route.anomaly_score.toFixed(2)}), grid ${route.grid_frequency.toFixed(2)} Hz`,
+      `Flooded intersections: ${route.flooded_nodes.length}, blackout grid cells: ${route.blackout_nodes.length}`,
+      ...route.route_steps.slice(0, 6).map((step, i) => `  ${i + 1}. ${step.instruction} (${formatDistance(step.distance_m)})`),
+      corridorComparison?.corridors.length ? `Alternate exits: ${corridorComparison.corridors.slice(1, 4).map((c) => `${c.exit_name} ${c.eta_minutes.toFixed(1)} min`).join('; ') || 'none ranked'}` : '',
+    ].filter(Boolean);
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `gridevac-briefing-${Date.now()}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+    addLog('Operator briefing exported.');
+  };
 
   const scrollTo = (section: 'briefing' | 'map' | 'audit') => {
     setActiveSection(section);
@@ -210,6 +258,8 @@ export default function HomePage() {
           <span className={`connection-pill ${backendOnline ? 'online' : ''}`}>
             <i /> {backendOnline ? 'Live API connected' : 'Local solver active'}
           </span>
+          <button className="icon-button" onClick={shareScenario} aria-label="Copy shareable scenario link" title="Copy shareable scenario link">⇗</button>
+          <button className="icon-button" onClick={exportBriefing} aria-label="Export operator briefing" title="Export operator briefing (TXT)">⇩</button>
           <button className="icon-button" onClick={() => setIsTutorialOpen(true)} aria-label="Open operator guide">?</button>
         </div>
       </header>

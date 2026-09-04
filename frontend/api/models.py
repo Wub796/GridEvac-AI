@@ -6,6 +6,7 @@ class SimulationRequest(BaseModel):
     flood_level: float = Field(ge=0.0, le=10.0, description="Flood level 0-10 scale")
     failed_substations: List[int] = Field(default=[], description="IDs of failed substations")
     origin_node: int = Field(ge=0, le=100000, description="Origin intersection node ID")
+    travel_mode: str = Field(default="vehicle", description="vehicle | foot | ems")
 
 
 class NodeData(BaseModel):
@@ -112,6 +113,37 @@ class RouteResponse(BaseModel):
     usgs_gage_height: float
     surface_temp: float
     hazard_roads: Dict[str, str] = {}
+
+
+class CorridorInfo(BaseModel):
+    exit_node: int
+    exit_name: str
+    eta_minutes: float
+    distance_m: float
+    hazard_count: int = 0
+    path_length: int = 0
+
+
+class CorridorComparisonResponse(BaseModel):
+    origin: int
+    travel_mode: str
+    corridors: List[CorridorInfo]
+    flooded_nodes: List[int]
+    blackout_nodes: List[int]
+
+
+class IsochroneRing(BaseModel):
+    minutes: float
+    node_count: int
+    nodes: List[int]
+
+
+class IsochroneResponse(BaseModel):
+    origin: int
+    travel_mode: str
+    rings: List[IsochroneRing]
+    flooded_nodes: List[int]
+    blackout_nodes: List[int]
 
 
 class FloodZoneResponse(BaseModel):

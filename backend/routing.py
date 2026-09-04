@@ -19,6 +19,43 @@ PARTIAL_FLOOD_WEIGHT = 180.0
 BLACKOUT_MULT = 4.5
 FLOOD_RISE_PER_LEVEL = 1.7
 
+# Travel-mode profiles: seconds-per-edge are derived from each segment's real
+# speed limit, then adjusted by how the mode interacts with road classes and
+# hazards. Pedestrians are slower but far less deterred by blackouts; EMS runs
+# hot on arterials and hates alleys.
+TRAVEL_MODES: Dict[str, Dict] = {
+    "vehicle": {
+        "mph": lambda limit: min(70.0, float(limit)),
+        "road_class": {"arterial": 0.94, "collector": 1.0, "local": 1.0, "service": 1.35},
+        "flood_partial": 180.0,
+        "blackout_mult": 4.5,
+    },
+    "foot": {
+        "mph": lambda _limit: 3.1,
+        "road_class": {"arterial": 1.6, "collector": 1.2, "local": 1.0, "service": 1.0},
+        "flood_partial": 450.0,
+        "blackout_mult": 1.6,
+    },
+    "ems": {
+        "mph": lambda limit: min(65.0, float(limit) * 1.3),
+        "road_class": {"arterial": 0.8, "collector": 0.9, "local": 1.05, "service": 1.9},
+        "flood_partial": 240.0,
+        "blackout_mult": 2.0,
+    },
+}
+
+
+def _edge_seconds(data: Dict, mode_cfg: Dict) -> float:
+    """Mode-adjusted travel seconds for one street segment.
+
+    mph -> m/s conversion: 1 mph = 1609.34 m / 3600 s, so seconds =
+    distance_m * (3600 / 1609.34) / mph = distance_m * 2.23694 / mph.
+    """
+    mph = max(1.0, mode_cfg["mph"](data.get("speed_limit_mph", 25)))
+    seconds = float(data.get("distance_m", 0.0)) * 2.23694 / mph
+    seconds *= mode_cfg["road_class"].get(data.get("road_class", "local"), 1.0)
+    return seconds
+
 
 def _bearing_from_coords(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> str:
     """Compass direction of travel between two coordinates."""
@@ -256,7 +293,50 @@ def _failure(message: str, flooded: Set[int], blackout: Set[int], blocked_edges:
     }
 
 
-def compute_route(origin: int, flood_level: float, failed_substations: List[int]) -> Dict:
+def _hazard_edge_sets(flow: Dict) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, int]]]:
+    dead_edges: Set[Tuple[int, int]] = set()
+    overloaded_edges: Set[Tuple[int, int]] = set()
+    for link_id, state in flow["transmission_line_states"].items():
+        if state == "dead":
+            dead_edges.update(_LINK_EDGES.get(link_id, []))
+        elif state == "overloaded":
+            overloaded_edges.update(_LINK_EDGES.get(link_id, []))
+    return dead_edges, overloaded_edges
+
+
+def _build_weighted_graph(
+    flooded: Set[int],
+    blackout: Set[int],
+    dead_edges: Set[Tuple[int, int]],
+    overloaded_edges: Set[Tuple[int, int]],
+    mode_cfg: Dict,
+) -> Tuple[nx.Graph, List[List[int]]]:
+    """Copy the street graph with mode- and hazard-adjusted edge weights."""
+    graph = _G.copy()
+    blocked_edges: List[List[int]] = []
+    for u, v, data in list(graph.edges(data=True)):
+        u_flooded, v_flooded = u in flooded, v in flooded
+        if u_flooded and v_flooded:
+            blocked_edges.append([u, v])
+            graph.remove_edge(u, v)
+            continue
+
+        travel_seconds = _edge_seconds(data, mode_cfg)
+        if u_flooded or v_flooded:
+            travel_seconds += mode_cfg["flood_partial"]
+        if u in blackout or v in blackout:
+            travel_seconds *= mode_cfg["blackout_mult"]
+        edge_pair = (u, v)
+        reverse_pair = (v, u)
+        if edge_pair in dead_edges or reverse_pair in dead_edges:
+            travel_seconds += 240.0
+        elif edge_pair in overloaded_edges or reverse_pair in overloaded_edges:
+            travel_seconds += 90.0
+        data["weight"] = travel_seconds
+    return graph, blocked_edges
+
+
+def compute_route(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle") -> Dict:
     """Find the lowest-risk, lowest-time route to the best dry perimeter exit."""
     flooded = get_flooded_nodes(flood_level)
     flow = simulate_power_flow(failed_substations)
@@ -267,37 +347,9 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
     if origin in flooded:
         return _failure("Starting intersection is flooded. Select a dry origin on higher ground.", flooded, blackout, [], flow)
 
-    graph = _G.copy()
-    blocked_edges: List[List[int]] = []
-    dead_edges: Set[Tuple[int, int]] = set()
-    overloaded_edges: Set[Tuple[int, int]] = set()
-    for link_id, state in flow["transmission_line_states"].items():
-        if state == "dead":
-            dead_edges.update(_LINK_EDGES.get(link_id, []))
-        elif state == "overloaded":
-            overloaded_edges.update(_LINK_EDGES.get(link_id, []))
-
-    for u, v, data in list(graph.edges(data=True)):
-        u_flooded, v_flooded = u in flooded, v in flooded
-        if u_flooded and v_flooded:
-            blocked_edges.append([u, v])
-            graph.remove_edge(u, v)
-            continue
-
-        travel_seconds = float(data.get("base_weight", 60.0))
-        if u_flooded or v_flooded:
-            travel_seconds += PARTIAL_FLOOD_WEIGHT
-        if u in blackout or v in blackout:
-            travel_seconds *= BLACKOUT_MULT
-        edge_pair = (u, v)
-        reverse_pair = (v, u)
-        if edge_pair in dead_edges or reverse_pair in dead_edges:
-            travel_seconds += 240.0
-        elif edge_pair in overloaded_edges or reverse_pair in overloaded_edges:
-            travel_seconds += 90.0
-        if data.get("road_class") == "arterial":
-            travel_seconds *= 0.94
-        data["weight"] = travel_seconds
+    mode_cfg = TRAVEL_MODES.get(travel_mode, TRAVEL_MODES["vehicle"])
+    dead_edges, overloaded_edges = _hazard_edge_sets(flow)
+    graph, blocked_edges = _build_weighted_graph(flooded, blackout, dead_edges, overloaded_edges, mode_cfg)
 
     best_path: List[int] = []
     best_weight = float("inf")
@@ -339,8 +391,6 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
     eta_minutes = round(best_weight / 60.0, 1)
 
     exit_name = f"Exit Node {best_exit}"
-    for sub in _SUBSTATIONS:
-        pass  # exit names come from the network boundary, not substations
     dest_intersection = _NODES[best_exit]["intersection_name"]
     if dest_intersection and dest_intersection != "Intersection":
         exit_name = dest_intersection
@@ -360,3 +410,81 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
         "dest_node": best_exit,
         "power_flow": flow,
     }
+
+
+def compare_exit_corridors(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle") -> Dict:
+    """Solve one Dijkstra per dry perimeter exit and rank every corridor.
+
+    Operators rarely care about the single best exit; they want to know how
+    much worse the second-best is, and whether two corridors stay separated.
+    All exits share one hazard model, so comparison is apples-to-apples.
+    """
+    flooded = get_flooded_nodes(flood_level)
+    flow = simulate_power_flow(failed_substations)
+    blackout = flow["blackout_nodes"]
+    if origin not in _NODES:
+        return {"corridors": [], "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
+
+    mode_cfg = TRAVEL_MODES.get(travel_mode, TRAVEL_MODES["vehicle"])
+    dead_edges, overloaded_edges = _hazard_edge_sets(flow)
+    graph, _ = _build_weighted_graph(flooded, blackout, dead_edges, overloaded_edges, mode_cfg)
+
+    dry_exits = [e for e in SAFE_EXITS if e in _NODES and e not in flooded]
+    corridors: List[Dict] = []
+    if dry_exits and origin in graph:
+        # One Dijkstra from the origin prices every reachable junction; per-
+        # exit paths are then read off for ranking details. All exits share
+        # the same hazard-weighted graph, so the comparison is fair.
+        distances = nx.single_source_dijkstra_path_length(graph, origin, weight="weight")
+        for exit_node in dry_exits:
+            try:
+                cost = distances.get(exit_node)
+                if cost is None:
+                    continue
+                path = nx.shortest_path(graph, source=origin, target=exit_node, weight="weight")
+                distance_m = 0.0
+                for u, v in zip(path, path[1:]):
+                    distance_m += float(graph.get_edge_data(u, v).get("distance_m", 0.0))
+                corridors.append({
+                    "exit_node": exit_node,
+                    "exit_name": _NODES[exit_node]["intersection_name"] or f"Exit {exit_node}",
+                    "eta_minutes": round(cost / 60.0, 1),
+                    "distance_m": round(distance_m, 1),
+                    "hazard_count": sum(1 for u, v in zip(path, path[1:]) if (u, v) in dead_edges or (v, u) in dead_edges or u in blackout or v in blackout),
+                    "path_length": len(path),
+                })
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+    corridors.sort(key=lambda c: c["eta_minutes"])
+    return {"corridors": corridors, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
+
+
+def compute_isochrone(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle", minutes: List[float] = None) -> Dict:
+    """Street-network reachability rings: which junctions are reachable in N minutes.
+
+    Uses the same weighted graph as routing, so "5 minutes on foot" means the
+    same thing as a 5-minute foot route. This is the evacuation-planning
+    equivalent of a transit walk-shed, and the natural "who can get out" view.
+    """
+    minutes = minutes or [2, 4, 6, 8]
+    flooded = get_flooded_nodes(flood_level)
+    flow = simulate_power_flow(failed_substations)
+    blackout = flow["blackout_nodes"]
+    if origin not in _NODES:
+        return {"origin": origin, "rings": [], "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
+
+    mode_cfg = TRAVEL_MODES.get(travel_mode, TRAVEL_MODES["vehicle"])
+    dead_edges, overloaded_edges = _hazard_edge_sets(flow)
+    graph, _ = _build_weighted_graph(flooded, blackout, dead_edges, overloaded_edges, mode_cfg)
+
+    seconds_limit = [m * 60.0 for m in sorted(minutes)]
+    try:
+        distances = nx.single_source_dijkstra_path_length(graph, origin, cutoff=max(seconds_limit), weight="weight")
+    except (nx.NetworkXError, nx.NodeNotFound):
+        distances = {}
+
+    rings = []
+    for limit in seconds_limit:
+        nodes = [node_id for node_id, cost in distances.items() if cost <= limit]
+        rings.append({"minutes": round(limit / 60.0, 1), "node_count": len(nodes), "nodes": nodes})
+    return {"origin": origin, "rings": rings, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}

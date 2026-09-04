@@ -41,6 +41,30 @@ const STEPS = [
     ),
   },
   {
+    title: 'Switch travel modes',
+    content: (
+      <>
+        The <strong>Vehicle / On foot / EMS</strong> switch re-solves the corridor for different behavior: cars favor arterials, pedestrians take any street at walking pace, and EMS runs get priority routing. Distances stay the same - times change with the mode.
+      </>
+    ),
+  },
+  {
+    title: 'Compare every exit',
+    content: (
+      <>
+        The <strong>Exit corridors</strong> panel ranks all four perimeter exits by travel time for the current mode and scenario. Click a corridor to fly to that exit. <strong>Reachability rings</strong> show which intersections fall within a few minutes of the origin - the &ldquo;who can get out&rdquo; view.
+      </>
+    ),
+  },
+  {
+    title: 'Share and export',
+    content: (
+      <>
+        The <strong>⇗</strong> button copies a scenario link that opens the exact same operating picture for another responder. The <strong>⇩</strong> button exports a plain-text operator briefing with the route, steps, and alternates - ready for an incident log.
+      </>
+    ),
+  },
+  {
     title: 'Inspect what changed',
     content: (
       <>

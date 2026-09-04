@@ -78,6 +78,13 @@ export default function ControlPanel() {
     setShowIntersections,
     showRoadNames,
     setShowRoadNames,
+    travelMode,
+    setTravelMode,
+    corridorComparison,
+    isochrone,
+    isochroneVisible,
+    setIsochroneVisible,
+    refreshIsochrone,
     setFlyToNodeId,
     setFlyToRoadKey,
     addLog,
@@ -201,6 +208,13 @@ export default function ControlPanel() {
 
       <section className={styles.controlSection}>
         <div className={styles.sectionHeading}><div><h3>Choose origin</h3></div><span className={styles.sectionHint}>Click map or select</span></div>
+        <div className={styles.modeSegment} role="radiogroup" aria-label="Travel mode">
+          {([['vehicle', 'Vehicle', 'response vehicle'], ['foot', 'On foot', 'evacuation on foot'], ['ems', 'EMS', 'priority medical run']] as const).map(([mode, label, hint]) => (
+            <button key={mode} role="radio" aria-checked={travelMode === mode} title={hint}
+              className={`${styles.modeSegmentBtn} ${travelMode === mode ? styles.modeSegmentActive : ''}`}
+              onClick={() => setTravelMode(mode)}>{label}</button>
+          ))}
+        </div>
         <select className={styles.select} aria-label="Origin intersection" value={originNode} onChange={(event) => setOriginNode(Number(event.target.value))}>
           {nodes.map((node) => {
             const isFlooded = node.elevation <= floodLevel * 1.7;
@@ -265,6 +279,38 @@ export default function ControlPanel() {
         {route?.success && <div className={styles.stepList}>{route.route_steps.slice(0, 4).map((step, index) => <div className={styles.stepRow} key={`${step.from_node}-${step.to_node}`}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><small>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min</small></div></div>)}</div>}
         {route?.success && <p className={styles.destination}>{EXIT_NAMES[route.dest_node] ?? `Exit node ${route.dest_node}`}. {route.message}</p>}
         {route && <button className={styles.clearButton} onClick={clearRoute}>Clear route overlay</button>}
+      </section>
+
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Exit corridors</h3></div><span className={styles.sectionHint}>{corridorComparison?.corridors.length ?? 0} ranked</span></div>
+        <div className={styles.corridorList}>
+          {(corridorComparison?.corridors ?? []).map((corridor, index) => {
+            const isChosen = route?.success && route.dest_node === corridor.exit_node;
+            const isFastest = index === 0;
+            return <button key={corridor.exit_node}
+              className={`${styles.corridorRow} ${isChosen ? styles.corridorChosen : ''}`}
+              onClick={() => setFlyToNodeId(corridor.exit_node)}>
+              <span className={`${styles.corridorRank} ${isFastest ? styles.corridorRankBest : ''}`}>{String(index + 1).padStart(2, '0')}</span>
+              <span className={styles.corridorBody}><strong>{corridor.exit_name}</strong><small>{formatDistance(corridor.distance_m)} · {corridor.hazard_count} hazard segment{corridor.hazard_count === 1 ? '' : 's'}</small></span>
+              <span className={styles.corridorEta}>{corridor.eta_minutes.toFixed(1)}<small> min</small></span>
+            </button>;
+          })}
+          {!corridorComparison && <p className={styles.corridorEmpty}>Load a scenario to rank every perimeter exit.</p>}
+        </div>
+      </section>
+
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Reachability</h3></div><span className={styles.sectionHint}>{isochroneVisible ? 'on map' : 'hidden'}</span></div>
+        <div className={styles.isochroneRow}>
+          <button className={`${styles.isochroneToggle} ${isochroneVisible ? styles.isochroneOn : ''}`} onClick={() => { const next = !isochroneVisible; setIsochroneVisible(next); if (next) void refreshIsochrone(); }}>
+            {isochroneVisible ? 'Hide reachability rings' : 'Show reachability rings'}
+          </button>
+          {isochroneVisible && isochrone && (
+            <div className={styles.isochroneLegend}>
+              {isochrone.rings.map((ring, index) => <span key={ring.minutes}><i data-ring={index} />{ring.minutes} min · {ring.node_count}</span>)}
+            </div>
+          )}
+        </div>
       </section>
       </aside>
     </>

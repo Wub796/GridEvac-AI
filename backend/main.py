@@ -7,12 +7,13 @@ import uvicorn
 from models import (
     CityResponse, NodeData, EdgeData, BlockData, ParkData, SubstationData, TransmissionLink,
     SimulationRequest, RouteResponse, RouteCoord, RouteStep, FloodZoneResponse,
+    CorridorComparisonResponse, CorridorInfo, IsochroneResponse, IsochroneRing,
 )
 from city_graph import (
     _G, _NODES, _BLOCKS, PARKS, _SUBSTATIONS, TRANSMISSION_LINKS,
     CENTER_LAT, CENTER_LON, SAFE_EXITS, EXIT_NAMES,
 )
-from routing import compute_route, get_flooded_nodes, FLOOD_RISE_PER_LEVEL, _LINK_EDGES
+from routing import compute_route, get_flooded_nodes, FLOOD_RISE_PER_LEVEL, _LINK_EDGES, compare_exit_corridors, compute_isochrone
 from anomaly import detect_anomaly
 
 app = FastAPI(
@@ -111,6 +112,7 @@ async def calculate_route(req: SimulationRequest):
         origin=req.origin_node,
         flood_level=req.flood_level,
         failed_substations=req.failed_substations,
+        travel_mode=req.travel_mode,
     )
     flow = result["power_flow"]
 
@@ -180,6 +182,44 @@ async def calculate_route(req: SimulationRequest):
         usgs_gage_height=usgs_gage,
         surface_temp=surface_temp,
         hazard_roads=hazard_roads,
+    )
+
+
+@app.get("/api/compare-corridors", response_model=CorridorComparisonResponse)
+async def compare_corridors(
+    origin: int = Query(...),
+    flood_level: float = Query(default=0.0, ge=0.0, le=10.0),
+    failed_substations: str = Query(default=""),
+    travel_mode: str = Query(default="vehicle"),
+):
+    failed = [int(x) for x in failed_substations.split(",") if x.strip().lstrip("-").isdigit()]
+    result = compare_exit_corridors(origin, flood_level, failed, travel_mode)
+    return CorridorComparisonResponse(
+        origin=origin,
+        travel_mode=travel_mode,
+        corridors=[CorridorInfo(**c) for c in result["corridors"]],
+        flooded_nodes=result["flooded_nodes"],
+        blackout_nodes=result["blackout_nodes"],
+    )
+
+
+@app.get("/api/isochrone", response_model=IsochroneResponse)
+async def isochrone(
+    origin: int = Query(...),
+    flood_level: float = Query(default=0.0, ge=0.0, le=10.0),
+    failed_substations: str = Query(default=""),
+    travel_mode: str = Query(default="vehicle"),
+    minutes: str = Query(default="2,4,6,8"),
+):
+    failed = [int(x) for x in failed_substations.split(",") if x.strip().lstrip("-").isdigit()]
+    ring_minutes = [float(x) for x in minutes.split(",") if x.strip()]
+    result = compute_isochrone(origin, flood_level, failed, travel_mode, ring_minutes or [2, 4, 6, 8])
+    return IsochroneResponse(
+        origin=origin,
+        travel_mode=travel_mode,
+        rings=[IsochroneRing(**ring) for ring in result["rings"]],
+        flooded_nodes=result["flooded_nodes"],
+        blackout_nodes=result["blackout_nodes"],
     )
 
 

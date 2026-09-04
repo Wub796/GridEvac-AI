@@ -113,4 +113,38 @@ export interface SimulationParams {
   flood_level: number;
   failed_substations: number[];
   origin_node: number;
+  travel_mode?: TravelMode;
+}
+
+export type TravelMode = 'vehicle' | 'foot' | 'ems';
+
+export interface CorridorInfo {
+  exit_node: number;
+  exit_name: string;
+  eta_minutes: number;
+  distance_m: number;
+  hazard_count: number;
+  path_length: number;
+}
+
+export interface CorridorComparisonResponse {
+  origin: number;
+  travel_mode: TravelMode;
+  corridors: CorridorInfo[];
+  flooded_nodes: number[];
+  blackout_nodes: number[];
+}
+
+export interface IsochroneRing {
+  minutes: number;
+  node_count: number;
+  nodes: number[];
+}
+
+export interface IsochroneResponse {
+  origin: number;
+  travel_mode: TravelMode;
+  rings: IsochroneRing[];
+  flooded_nodes: number[];
+  blackout_nodes: number[];
 }

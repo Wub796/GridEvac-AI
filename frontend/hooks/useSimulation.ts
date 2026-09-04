@@ -3,11 +3,15 @@ import { api } from '@/lib/api';
 import type {
   BlockData,
   CityData,
+  CorridorComparisonResponse,
+  CorridorInfo,
   EdgeData,
+  IsochroneResponse,
   NodeData,
   RouteResponse,
   RouteStep,
   SubstationData,
+  TravelMode,
 } from '@/lib/types';
 
 const FLOOD_RISE_PER_LEVEL = 1.7;
@@ -37,7 +41,9 @@ let bakedNetwork: BakedNetwork | null = null;
 
 async function loadBakedNetwork(): Promise<BakedNetwork> {
   if (bakedNetwork) return bakedNetwork;
-  const response = await fetch('/data/houston_network.json');
+  // Cache-friendly: the baked graph only changes on deploy, so a 1-day TTL
+  // lets repeat visits resolve from disk cache instead of refetching 1.8 MB.
+  const response = await fetch('/data/houston_network.json', { cache: 'force-cache' });
   if (!response.ok) throw new Error('Baked street network unavailable');
   const parsed = (await response.json()) as BakedNetwork;
   bakedNetwork = parsed;
@@ -49,6 +55,24 @@ async function loadBakedNetwork(): Promise<BakedNetwork> {
 type Section = 'briefing' | 'map' | 'audit';
 type MapFilterMode = 'nominal' | 'radar' | 'thermal';
 type ScenarioPreset = 'flood' | 'cascade' | 'heatwave' | 'clear';
+
+/* Travel-mode profiles mirror backend/routing.py so offline results match the
+ * API exactly: seconds = distance_m * 2.23694 / mph, adjusted per road class. */
+const TRAVEL_MODES: Record<TravelMode, { mph: (limit: number) => number; roadClass: Record<string, number>; floodPartial: number; blackoutMult: number }> = {
+  vehicle: { mph: (limit) => Math.min(70, limit), roadClass: { arterial: 0.94, collector: 1, local: 1, service: 1.35 }, floodPartial: 180, blackoutMult: 4.5 },
+  foot: { mph: () => 3.1, roadClass: { arterial: 1.6, collector: 1.2, local: 1, service: 1 }, floodPartial: 450, blackoutMult: 1.6 },
+  ems: { mph: (limit) => Math.min(65, limit * 1.3), roadClass: { arterial: 0.8, collector: 0.9, local: 1.05, service: 1.9 }, floodPartial: 240, blackoutMult: 2 },
+};
+
+function travelModeConfig(mode: TravelMode) {
+  return TRAVEL_MODES[mode] ?? TRAVEL_MODES.vehicle;
+}
+
+const ISOCHRONE_MINUTES: Record<TravelMode, number[]> = {
+  vehicle: [3, 6, 9, 12],
+  foot: [5, 10, 15, 20],
+  ems: [2, 4, 6, 8],
+};
 
 type SimulationStore = {
   floodLevel: number;
@@ -78,12 +102,21 @@ type SimulationStore = {
   mapFilterMode: MapFilterMode;
   activeSection: Section;
 
+  travelMode: TravelMode;
+  corridorComparison: CorridorComparisonResponse | null;
+  isochrone: IsochroneResponse | null;
+  isochroneVisible: boolean;
+
   cityData: CityData | null;
   route: RouteResponse | null;
   isLoading: boolean;
   backendOnline: boolean;
   error: string | null;
 
+  setTravelMode: (mode: TravelMode) => void;
+  refreshCorridors: () => Promise<void>;
+  setIsochroneVisible: (value: boolean) => void;
+  refreshIsochrone: () => Promise<void>;
   setFloodLevel: (value: number) => void;
   toggleSubstation: (id: number) => void;
   setOriginNode: (id: number) => void;
@@ -189,13 +222,21 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   showSubstations: true,
   // Intersections and road-name labels start off: with ~4,000 junctions and
   // ~90 labels the default view stays calm, and both are one toggle away.
-  showIntersections: false,
+  // Street-level dots stay visible by default; a hidden-dots default made the
+  // map look inert. Clickability is independent of this toggle anyway (there
+  // is an invisible always-pickable dot layer), so this is purely cosmetic.
+  showIntersections: true,
   showRoadNames: false,
   flyToNodeId: null,
   flyToRoadKey: null,
   flyToCoords: null,
   mapFilterMode: 'nominal',
   activeSection: 'briefing',
+
+  travelMode: 'vehicle' as TravelMode,
+  corridorComparison: null,
+  isochrone: null,
+  isochroneVisible: false,
 
   cityData: null,
   route: null,
@@ -257,20 +298,48 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   fetchCityData: async () => {
     set({ isLoading: true, error: null });
+    // Start pulling the baked network immediately: if the API path fails, the
+    // 1.8 MB offline graph is already mid-flight instead of starting cold.
+    const bakedPromise = loadBakedNetwork().catch(() => null);
+    // Deep-link restore (?origin=&flood=&mode=&failed=) - a shared scenario
+    // link drops the recipient into the exact operating picture.
+    let shared: { origin?: number; flood?: number; mode?: TravelMode; failed?: number[] } = {};
+    if (typeof window !== 'undefined' && window.location.search) {
+      const params = new URLSearchParams(window.location.search);
+      shared = {
+        origin: params.get('origin') ? Number(params.get('origin')) : undefined,
+        flood: params.get('flood') ? Number(params.get('flood')) : undefined,
+        mode: (['vehicle', 'foot', 'ems'] as const).find((m) => m === params.get('mode')),
+        failed: params.get('failed') ? params.get('failed')!.split(',').map(Number).filter(Number.isInteger) : undefined,
+      };
+    }
     try {
       const cityData = normalizeCityData(await api.getCityData());
       const loads: Record<number, number> = {};
       cityData.substations.forEach((sub) => { loads[sub.id] = sub.base_load_mw; });
       SAFE_EXITS = cityData.safe_exits;
+      const sharedState: Partial<SimulationStore> = {};
+      if (shared.origin !== undefined && cityData.nodes.some((node) => node.id === shared.origin)) sharedState.originNode = shared.origin;
+      if (shared.flood !== undefined) sharedState.floodLevel = Math.max(0, Math.min(10, shared.flood));
+      if (shared.mode) sharedState.travelMode = shared.mode;
+      if (shared.failed) sharedState.failedSubstations = shared.failed;
+      if (Object.keys(sharedState).length) set(sharedState);
       set({ cityData, substationLoads: loads, isLoading: false, backendOnline: true });
       get().addLog(`Street database loaded: ${cityData.nodes.length} intersections, ${cityData.edges.length} street segments.`);
       await get().calculateRoute();
     } catch {
       try {
-        const network = await loadBakedNetwork();
+        const network = await bakedPromise;
+        if (!network) throw new Error('Baked street network unavailable');
         const cityData = buildOfflineCityData(network);
         const loads: Record<number, number> = {};
         cityData.substations.forEach((sub) => { loads[sub.id] = sub.base_load_mw; });
+        const sharedState: Partial<SimulationStore> = {};
+        if (shared.origin !== undefined && cityData.nodes.some((node) => node.id === shared.origin)) sharedState.originNode = shared.origin;
+        if (shared.flood !== undefined) sharedState.floodLevel = Math.max(0, Math.min(10, shared.flood));
+        if (shared.mode) sharedState.travelMode = shared.mode;
+        if (shared.failed) sharedState.failedSubstations = shared.failed;
+        if (Object.keys(sharedState).length) set(sharedState);
         set({ cityData, substationLoads: loads, isLoading: false, backendOnline: false, error: null });
         get().addLog('Offline mode: local OpenStreetMap street graph loaded; route solver remains available.');
         await get().calculateRoute();
@@ -282,14 +351,14 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   calculateRoute: async () => {
     const requestId = ++routeRequestSerial;
-    const { floodLevel, failedSubstations, originNode } = get();
+    const { floodLevel, failedSubstations, originNode, travelMode } = get();
     set({ isLoading: true, error: null });
     try {
-      const response = normalizeRoute(await api.calculateRoute({ flood_level: floodLevel, failed_substations: failedSubstations, origin_node: originNode }));
+      const response = normalizeRoute(await api.calculateRoute({ flood_level: floodLevel, failed_substations: failedSubstations, origin_node: originNode, travel_mode: travelMode }));
       if (requestId !== routeRequestSerial) return;
       setRouteTelemetry(set, response);
       set({ backendOnline: true, isLoading: false });
-      get().addLog(`Route solved: ${response.success ? `${formatDistance(response.distance_m)} to Node ${response.dest_node}` : 'no passable corridor'}.`);
+      get().addLog(`Route solved (${travelMode}): ${response.success ? `${formatDistance(response.distance_m)} to Node ${response.dest_node}` : 'no passable corridor'}.`);
     } catch {
       const cityData = get().cityData;
       if (requestId !== routeRequestSerial) return;
@@ -297,11 +366,14 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
         set({ isLoading: false, error: 'No street data is available for route calculation.' });
         return;
       }
-      const response = calculateOfflineRoute(cityData, floodLevel, failedSubstations, originNode);
+      const response = calculateOfflineRoute(cityData, floodLevel, failedSubstations, originNode, travelMode);
       setRouteTelemetry(set, response);
       set({ backendOnline: false, isLoading: false });
-      get().addLog(`Local route solver: ${response.success ? `${formatDistance(response.distance_m)} corridor found` : 'no passable corridor'}.`);
+      get().addLog(`Local route solver (${travelMode}): ${response.success ? `${formatDistance(response.distance_m)} corridor found` : 'no passable corridor'}.`);
     }
+    // Keep the comparison and reachability views in sync with the new state.
+    void get().refreshCorridors();
+    if (get().isochroneVisible) void get().refreshIsochrone();
   },
 
   triggerLiveTick: () => {
@@ -342,6 +414,34 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   setShowSubstations: (value) => set({ showSubstations: value }),
   setShowIntersections: (value) => set({ showIntersections: value }),
   setShowRoadNames: (value) => set({ showRoadNames: value }),
+  setTravelMode: (mode) => {
+    set({ travelMode: mode });
+    get().addLog(`Travel mode: ${mode === 'vehicle' ? 'response vehicle' : mode === 'foot' ? 'on-foot evacuation' : 'EMS priority run'}.`);
+    queueRouteCalculation(get().calculateRoute);
+  },
+  refreshCorridors: async () => {
+    const { cityData, floodLevel, failedSubstations, originNode, travelMode } = get();
+    if (!cityData) return;
+    if (get().backendOnline) {
+      try {
+        set({ corridorComparison: await api.compareCorridors(originNode, floodLevel, failedSubstations, travelMode) });
+        return;
+      } catch { /* fall through to local solver */ }
+    }
+    set({ corridorComparison: offlineCompareCorridors(cityData, originNode, floodLevel, failedSubstations, travelMode) });
+  },
+  setIsochroneVisible: (value) => set({ isochroneVisible: value }),
+  refreshIsochrone: async () => {
+    const { cityData, floodLevel, failedSubstations, originNode, travelMode, isochroneVisible } = get();
+    if (!cityData || !isochroneVisible) return;
+    if (get().backendOnline) {
+      try {
+        set({ isochrone: await api.isochrone(originNode, floodLevel, failedSubstations, travelMode, ISOCHRONE_MINUTES[travelMode]) });
+        return;
+      } catch { /* fall through to local solver */ }
+    }
+    set({ isochrone: offlineIsochrone(cityData, originNode, floodLevel, failedSubstations, travelMode, ISOCHRONE_MINUTES[travelMode]) });
+  },
   setFlyToNodeId: (id) => set({ flyToNodeId: id }),
   setFlyToRoadKey: (key) => set({ flyToRoadKey: key }),
   setFlyToCoords: (coords) => set({ flyToCoords: coords }),
@@ -567,6 +667,70 @@ function offlinePowerFlow(cityData: CityData, failedInputs: number[]) {
 
 type WeightedEdge = EdgeData & { routeWeight: number };
 
+function buildOfflineEdgeMap(
+  cityData: CityData,
+  flow: ReturnType<typeof offlinePowerFlow>,
+  flooded: Set<number>,
+  mode: ReturnType<typeof travelModeConfig>,
+) {
+  const hazards = transmissionLineEdges(cityData);
+  const deadEdges = new Set<string>();
+  const overloadedEdges = new Set<string>();
+  Object.entries(flow.transmission_line_states).forEach(([linkId, state]) => {
+    hazards[Number(linkId)]?.forEach(([u, v]) => (state === 'dead' ? deadEdges : overloadedEdges).add(`${u}-${v}`));
+  });
+  const edgeMap = new Map<string, WeightedEdge>();
+  cityData.edges.forEach((edge) => {
+    if (flooded.has(edge.source) && flooded.has(edge.target)) {
+      edgeMap.set(`${edge.source}-${edge.target}`, { ...edge, routeWeight: Number.POSITIVE_INFINITY });
+      return;
+    }
+    const mph = Math.max(1, mode.mph(edge.speed_limit_mph));
+    let routeWeight = edge.distance_m * 2.23694 / mph * (mode.roadClass[edge.road_class] ?? 1);
+    if (flooded.has(edge.source) || flooded.has(edge.target)) routeWeight += mode.floodPartial;
+    if (flow.blackout_nodes.has(edge.source) || flow.blackout_nodes.has(edge.target)) routeWeight *= mode.blackoutMult;
+    if (deadEdges.has(`${edge.source}-${edge.target}`) || deadEdges.has(`${edge.target}-${edge.source}`)) routeWeight += 240;
+    else if (overloadedEdges.has(`${edge.source}-${edge.target}`) || overloadedEdges.has(`${edge.target}-${edge.source}`)) routeWeight += 90;
+    edgeMap.set(`${edge.source}-${edge.target}`, { ...edge, routeWeight });
+  });
+  return { edgeMap, deadEdges, overloadedEdges };
+}
+
+function offlineDijkstra(cityData: CityData, edgeMap: Map<string, WeightedEdge>, originNode: number) {
+  const distances: Record<number, number> = {};
+  const previous: Record<number, number | null> = {};
+  const remaining = new Set(cityData.nodes.map((node) => node.id));
+  cityData.nodes.forEach((node) => { distances[node.id] = Number.POSITIVE_INFINITY; previous[node.id] = null; });
+  distances[originNode] = 0;
+  while (remaining.size) {
+    let current: number | null = null;
+    remaining.forEach((node) => { if (current === null || distances[node] < distances[current]) current = node; });
+    if (current === null || distances[current] === Number.POSITIVE_INFINITY) break;
+    remaining.delete(current);
+    edgeMap.forEach((edge) => {
+      if (edge.source !== current && edge.target !== current) return;
+      const neighbor = edge.source === current ? edge.target : edge.source;
+      if (!remaining.has(neighbor) || !Number.isFinite(edge.routeWeight)) return;
+      const candidate = distances[current] + edge.routeWeight;
+      if (candidate < distances[neighbor]) { distances[neighbor] = candidate; previous[neighbor] = current; }
+    });
+  }
+  return { distances, previous };
+}
+
+function offlinePathFrom(previous: Record<number, number | null>, destination: number): number[] {
+  const path: number[] = [];
+  let cursor: number | null = destination;
+  while (cursor !== null) { path.unshift(cursor); cursor = previous[cursor]; }
+  return path;
+}
+
+function offlinePathEdges(path: number[], edgeMap: Map<string, WeightedEdge>): WeightedEdge[] {
+  return path.slice(0, -1)
+    .map((from, index) => edgeMap.get(`${from}-${path[index + 1]}`) ?? edgeMap.get(`${path[index + 1]}-${from}`))
+    .filter((edge): edge is WeightedEdge => Boolean(edge));
+}
+
 function buildRouteSteps(path: number[], cityData: CityData, edgeMap: Map<string, WeightedEdge>): RouteStep[] {
   const steps: Array<RouteStep & { direction: string }> = [];
   path.slice(0, -1).forEach((from, index) => {
@@ -597,58 +761,20 @@ function buildRouteSteps(path: number[], cityData: CityData, edgeMap: Map<string
   return steps.map(({ direction: _direction, ...step }) => ({ ...step, distance_m: Number(step.distance_m.toFixed(1)), duration_s: Number(step.duration_s.toFixed(1)) }));
 }
 
-function calculateOfflineRoute(cityData: CityData, floodLevel: number, failedSubstations: number[], originNode: number): RouteResponse {
+function calculateOfflineRoute(cityData: CityData, floodLevel: number, failedSubstations: number[], originNode: number, travelMode: TravelMode = 'vehicle'): RouteResponse {
   const flow = offlinePowerFlow(cityData, failedSubstations);
   const flooded = new Set(cityData.nodes.filter((node) => node.elevation <= floodLevel * FLOOD_RISE_PER_LEVEL).map((node) => node.id));
   if (flooded.has(originNode)) return failureRoute(flow, flooded, 'Starting intersection is flooded. Select a dry origin on higher ground.');
-  const hazards = transmissionLineEdges(cityData);
-  const deadEdges = new Set<string>();
-  const overloadedEdges = new Set<string>();
-  Object.entries(flow.transmission_line_states).forEach(([linkId, state]) => {
-    hazards[Number(linkId)]?.forEach(([u, v]) => (state === 'dead' ? deadEdges : overloadedEdges).add(`${u}-${v}`));
-  });
-  const edgeMap = new Map<string, WeightedEdge>();
-  cityData.edges.forEach((edge) => {
-    if (flooded.has(edge.source) && flooded.has(edge.target)) {
-      edgeMap.set(`${edge.source}-${edge.target}`, { ...edge, routeWeight: Number.POSITIVE_INFINITY });
-      return;
-    }
-    let routeWeight = edge.weight;
-    if (flooded.has(edge.source) || flooded.has(edge.target)) routeWeight += 180;
-    if (flow.blackout_nodes.has(edge.source) || flow.blackout_nodes.has(edge.target)) routeWeight *= 4.5;
-    if (deadEdges.has(`${edge.source}-${edge.target}`) || deadEdges.has(`${edge.target}-${edge.source}`)) routeWeight += 240;
-    else if (overloadedEdges.has(`${edge.source}-${edge.target}`) || overloadedEdges.has(`${edge.target}-${edge.source}`)) routeWeight += 90;
-    if (edge.road_class === 'arterial') routeWeight *= 0.94;
-    else if (edge.road_class === 'service') routeWeight *= 1.35; // Alleys/frontage roads: real but discouraged.
-    edgeMap.set(`${edge.source}-${edge.target}`, { ...edge, routeWeight });
-  });
+  const mode = travelModeConfig(travelMode);
+  const { edgeMap, deadEdges, overloadedEdges } = buildOfflineEdgeMap(cityData, flow, flooded, mode);
 
-  const distances: Record<number, number> = {};
-  const previous: Record<number, number | null> = {};
-  const remaining = new Set(cityData.nodes.map((node) => node.id));
-  cityData.nodes.forEach((node) => { distances[node.id] = Number.POSITIVE_INFINITY; previous[node.id] = null; });
-  distances[originNode] = 0;
-  while (remaining.size) {
-    let current: number | null = null;
-    remaining.forEach((node) => { if (current === null || distances[node] < distances[current]) current = node; });
-    if (current === null || distances[current] === Number.POSITIVE_INFINITY) break;
-    remaining.delete(current);
-    edgeMap.forEach((edge) => {
-      if (edge.source !== current && edge.target !== current) return;
-      const neighbor = edge.source === current ? edge.target : edge.source;
-      if (!remaining.has(neighbor) || !Number.isFinite(edge.routeWeight)) return;
-      const candidate = distances[current] + edge.routeWeight;
-      if (candidate < distances[neighbor]) { distances[neighbor] = candidate; previous[neighbor] = current; }
-    });
-  }
+  const { distances, previous } = offlineDijkstra(cityData, edgeMap, originNode);
   let destination = -1;
   SAFE_EXITS.forEach((exit) => {
     if (cityData.nodes.some((node) => node.id === exit) && !flooded.has(exit) && distances[exit] < (destination < 0 ? Number.POSITIVE_INFINITY : distances[destination])) destination = exit;
   });
   if (destination < 0 || !Number.isFinite(distances[destination])) return failureRoute(flow, flooded, 'No passable street corridor found. Floodwater and utility hazards isolate this origin.');
-  const path: number[] = [];
-  let cursor: number | null = destination;
-  while (cursor !== null) { path.unshift(cursor); cursor = previous[cursor]; }
+  const path = offlinePathFrom(previous, destination);
 
   // Interleave street-curve geometry so the drawn route follows real roads.
   const pathCoords: Array<{ lat: number; lon: number; elevation: number }> = [];
@@ -663,9 +789,7 @@ function calculateOfflineRoute(cityData: CityData, floodLevel: number, failedSub
   const lastNode = cityData.nodes.find((item) => item.id === path[path.length - 1]);
   if (lastNode) pathCoords.push({ lat: lastNode.lat, lon: lastNode.lon, elevation: Number((lastNode.elevation + 0.65).toFixed(2)) });
 
-  const pathEdges = path.slice(0, -1)
-    .map((from, index) => edgeMap.get(`${from}-${path[index + 1]}`) ?? edgeMap.get(`${path[index + 1]}-${from}`))
-    .filter((edge): edge is WeightedEdge => Boolean(edge));
+  const pathEdges = offlinePathEdges(path, edgeMap);
   const distance_m = Number(pathEdges.reduce((sum, edge) => sum + edge.distance_m, 0).toFixed(1));
   const failedCount = failedSubstations.length + flow.cascaded_substations.length;
   const anomaly_score = Math.min(1, Number((0.04 + floodLevel * 0.05 + failedCount * 0.14 + flow.overloaded_substations.length * 0.08).toFixed(4)));
@@ -722,7 +846,7 @@ function failureRoute(flow: ReturnType<typeof offlinePowerFlow>, flooded: Set<nu
     message,
     dest_node: -1,
     substation_loads: flow.substation_loads,
-    overloaded_substations: flow.overloaded_substations,
+    overloaded_substations: flow.overloaded_substations, // keep shape
     cascaded_substations: flow.cascaded_substations,
     grid_frequency: flow.grid_frequency,
     voltage_readings: flow.voltage_readings,
@@ -731,4 +855,56 @@ function failureRoute(flow: ReturnType<typeof offlinePowerFlow>, flooded: Set<nu
     surface_temp: 88,
     hazard_roads: {},
   };
+}
+
+/* --------------------- offline corridor + isochrone --------------------- */
+
+function offlineCompareCorridors(cityData: CityData, origin: number, floodLevel: number, failed: number[], mode: TravelMode): CorridorComparisonResponse {
+  const flow = offlinePowerFlow(cityData, failed);
+  const flooded = new Set(cityData.nodes.filter((node) => node.elevation <= floodLevel * FLOOD_RISE_PER_LEVEL).map((node) => node.id));
+  const dryExits = SAFE_EXITS.filter((exit) => cityData.nodes.some((node) => node.id === exit) && !flooded.has(exit));
+  const { edgeMap, deadEdges } = buildOfflineEdgeMap(cityData, flow, flooded, travelModeConfig(mode));
+
+  const nodesById = new Map(cityData.nodes.map((node) => [node.id, node]));
+  const corridors: CorridorInfo[] = [];
+  if (dryExits.length && nodesById.has(origin)) {
+    const { distances, previous } = offlineDijkstra(cityData, edgeMap, origin);
+    dryExits.forEach((exit) => {
+      const cost = distances[exit];
+      if (cost === undefined || !Number.isFinite(cost)) return;
+      const path = offlinePathFrom(previous, exit);
+      const pathEdgeList = offlinePathEdges(path, edgeMap);
+      const hazardCount = pathEdgeList.filter((edge) =>
+        deadEdges.has(`${edge.source}-${edge.target}`)
+        || deadEdges.has(`${edge.target}-${edge.source}`)
+        || flow.blackout_nodes.has(edge.source)
+        || flow.blackout_nodes.has(edge.target)).length;
+      corridors.push({
+        exit_node: exit,
+        exit_name: nodesById.get(exit)?.intersection_name || `Exit ${exit}`,
+        eta_minutes: Number((cost / 60).toFixed(1)),
+        distance_m: Number(pathEdgeList.reduce((sum, edge) => sum + edge.distance_m, 0).toFixed(1)),
+        hazard_count: hazardCount,
+        path_length: path.length,
+      });
+    });
+  }
+  corridors.sort((a, b) => a.eta_minutes - b.eta_minutes);
+  return { origin, travel_mode: mode, corridors, flooded_nodes: Array.from(flooded), blackout_nodes: Array.from(flow.blackout_nodes) };
+}
+
+function offlineIsochrone(cityData: CityData, origin: number, floodLevel: number, failed: number[], mode: TravelMode, minutes: number[]): IsochroneResponse {
+  const flow = offlinePowerFlow(cityData, failed);
+  const flooded = new Set(cityData.nodes.filter((node) => node.elevation <= floodLevel * FLOOD_RISE_PER_LEVEL).map((node) => node.id));
+  const modeCfg = travelModeConfig(mode);
+  const { edgeMap } = buildOfflineEdgeMap(cityData, flow, flooded, modeCfg);
+  const { distances } = offlineDijkstra(cityData, edgeMap, origin);
+  const limits = (minutes.length ? minutes : ISOCHRONE_MINUTES[mode]).slice().sort((a, b) => a - b).map((m) => m * 60);
+  const rings = limits.map((limit) => {
+    const nodes = Object.entries(distances)
+      .filter(([, cost]) => cost <= limit)
+      .map(([id]) => Number(id));
+    return { minutes: Number((limit / 60).toFixed(1)), node_count: nodes.length, nodes };
+  });
+  return { origin, travel_mode: mode, rings, flooded_nodes: Array.from(flooded), blackout_nodes: Array.from(flow.blackout_nodes) };
 }
