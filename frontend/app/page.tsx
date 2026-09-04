@@ -127,6 +127,31 @@ function TelemetryReadout() {
 
 export default function HomePage() {
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  // First visit: the operator guide opens automatically once per browser.
+  // State starts closed so server HTML matches the first client render, then
+  // the effect opens it after mount (hydration-safe). Closing - by finishing,
+  // skipping, or tapping the backdrop - records the visit so it never
+  // interrupts a returning operator; the ? button reopens it anytime.
+  useEffect(() => {
+    let seen = true;
+    try {
+      seen = window.localStorage.getItem('gridevac-tutorial-seen') === '1';
+    } catch {
+      seen = true;
+    }
+    if (!seen) {
+      const timer = window.setTimeout(() => setIsTutorialOpen(true), 500);
+      return () => window.clearTimeout(timer);
+    }
+  }, []);
+  const closeTutorial = () => {
+    setIsTutorialOpen(false);
+    try {
+      window.localStorage.setItem('gridevac-tutorial-seen', '1');
+    } catch {
+      /* private mode: the guide simply reopens next visit */
+    }
+  };
   // Rendered once; the wall clock lives in <TopbarClock /> so its 1 Hz tick
   // does not re-render the page tree.
   const [briefingDay] = useState(() => new Date());
@@ -358,7 +383,7 @@ export default function HomePage() {
           </section>
         </div>
       </div>
-      <TutorialModal isOpen={isTutorialOpen} onClose={() => setIsTutorialOpen(false)} />
+      <TutorialModal isOpen={isTutorialOpen} onClose={closeTutorial} />
     </main>
   );
 }

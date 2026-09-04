@@ -633,16 +633,21 @@ export default function CesiumViewer() {
     let animatedUnderlay: any = null;
     let animatedRoute: any = null;
 
+    const routeWidths = makeRouteWidthProps(viewer);
     const finalize = () => {
       finished = true;
       if (animatedUnderlay) viewer.entities.remove(animatedUnderlay);
       if (animatedRoute) viewer.entities.remove(animatedRoute);
+      // Ground-clamped polylines order by zIndex; without it, close-zoom
+      // streets (up to 10px arterials) can draw OVER the 9px corridor and
+      // visually swallow it. Casing sits at 1, corridor at 2, roads at 0.
       const underlay = viewer.entities.add({
         id: 'evacuation-route-underlay',
         polyline: {
           positions: Cesium.Cartesian3.fromDegreesArray(positions),
-          width: 15,
+          width: new Cesium.CallbackProperty(routeWidths.casing, false),
           clampToGround: true,
+          zIndex: 1,
           material: casingColor,
         },
       });
@@ -650,13 +655,18 @@ export default function CesiumViewer() {
         id: 'evacuation-route',
         polyline: {
           positions: Cesium.Cartesian3.fromDegreesArray(positions),
-          width: 9,
+          width: new Cesium.CallbackProperty(routeWidths.core, false),
           clampToGround: true,
+          zIndex: 2,
           material: routeColor,
         },
       });
       routeEntitiesRef.current.push(underlay, routeLine);
       markers.forEach(({ entity }) => { entity.show = true; });
+      // The animated entities were swapped for static ones after the last
+      // animation frame - without an explicit pump the swap never paints
+      // under requestRenderMode and the route appears to vanish.
+      requestFrame(viewer);
     };
 
     if (DRAW_MS === 0) {
@@ -682,6 +692,7 @@ export default function CesiumViewer() {
         const eased = 1 - (1 - p) ** 3;
         revealed = cartesians.slice(0, Math.max(2, Math.ceil(eased * cartesians.length)));
         markers.forEach(({ entity, fraction }) => { entity.show = eased >= fraction; });
+        requestFrame(viewer);
         if (p >= 1) {
           finalize();
           return;
@@ -836,6 +847,20 @@ function prefersReducedMotion() {
 function requestFrame(viewer: any) {
   if (!viewer || viewer.isDestroyed() || typeof viewer.scene?.requestRender !== 'function') return;
   viewer.scene.requestRender();
+}
+
+// Route corridor width scales with camera distance so it stays wider than the
+// widest road tier (10px arterial at street level) at every zoom: 9px at
+// district overview, ~17px at street level. Evaluated per rendered frame,
+// which is free under requestRenderMode - frames only happen on change.
+function makeRouteWidthProps(viewer: any) {
+  const core = () => {
+    if (!viewer || viewer.isDestroyed()) return 9;
+    const height = viewer.camera.positionCartographic.height;
+    const t = Math.min(1, Math.max(0, (3000 - height) / 2600));
+    return 9 + 8 * t;
+  };
+  return { core, casing: () => core() + 8 };
 }
 
 /** Cinematic descent into the operational view on first data render. Camera-only, so it is cheap. */
