@@ -89,6 +89,12 @@ class RouteStep(BaseModel):
     to_node: int
 
 
+class CorridorCapacity(BaseModel):
+    people_per_hour: int = 0
+    clearance_minutes: float = 0.0
+    limiting_road: str = "-"
+
+
 class RouteResponse(BaseModel):
     success: bool
     path: List[int]
@@ -113,6 +119,7 @@ class RouteResponse(BaseModel):
     usgs_gage_height: float
     surface_temp: float
     hazard_roads: Dict[str, str] = {}
+    corridor_capacity: CorridorCapacity = CorridorCapacity()
 
 
 class CorridorInfo(BaseModel):
@@ -122,6 +129,7 @@ class CorridorInfo(BaseModel):
     distance_m: float
     hazard_count: int = 0
     path_length: int = 0
+    people_per_hour: int = 0
 
 
 class CorridorComparisonResponse(BaseModel):

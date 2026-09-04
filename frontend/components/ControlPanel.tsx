@@ -32,16 +32,23 @@ interface SearchHit {
 
 export default function ControlPanel() {
   const [searchInput, setSearchInput] = useState('');
-  const [collapsed, setCollapsed] = useState(false);
+  const [snapshotLabel, setSnapshotLabel] = useState('');
+  // Phones and tablets start collapsed: the floating panel covers most of a
+  // phone's map, and the map is the point on a small screen.
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches,
+  );
   const [showTab, setShowTab] = useState(false);
   const collapseTimer = useRef<number | null>(null);
 
   // The show tab fades in only after the panel has slid out, so the two
-  // elements never cross paths mid-animation.
+  // elements never cross paths mid-animation. Touch skips the delay: 260 ms
+  // of dead time after every toggle reads as lag on a phone.
   useEffect(() => {
     if (collapseTimer.current) window.clearTimeout(collapseTimer.current);
     if (collapsed) {
-      collapseTimer.current = window.setTimeout(() => setShowTab(true), 260);
+      const coarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+      collapseTimer.current = window.setTimeout(() => setShowTab(true), coarse ? 60 : 260);
     } else {
       setShowTab(false);
     }
@@ -50,55 +57,62 @@ export default function ControlPanel() {
     };
   }, [collapsed]);
 
-  const {
-    floodLevel,
-    setFloodLevel,
-    failedSubstations,
-    toggleSubstation,
-    originNode,
-    setOriginNode,
-    cityData,
-    route,
-    isLoading,
-    backendOnline,
-    error,
-    fetchCityData,
-    calculateRoute,
-    clearRoute,
-    substationLoads,
-    overloadedSubstations,
-    cascadedSubstations,
-    showBuildings,
-    setShowBuildings,
-    showPowerLines,
-    setShowPowerLines,
-    showSubstations,
-    setShowSubstations,
-    showIntersections,
-    setShowIntersections,
-    showRoadNames,
-    setShowRoadNames,
-    travelMode,
-    setTravelMode,
-    corridorComparison,
-    isochrone,
-    isochroneVisible,
-    setIsochroneVisible,
-    refreshIsochrone,
-    setFlyToNodeId,
-    setFlyToRoadKey,
-    addLog,
-    applyScenario,
-    mapFilterMode,
-    setMapFilterMode,
-    setFlyToCoords,
-  } = useSimulationStore();
+  // Per-field selector subscriptions: the panel re-renders only when a field
+  // it actually displays changes, not on unrelated store activity. Actions
+  // are identity-stable in zustand, so those subscriptions never invalidate.
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const setFloodLevel = useSimulationStore((state) => state.setFloodLevel);
+  const failedSubstations = useSimulationStore((state) => state.failedSubstations);
+  const toggleSubstation = useSimulationStore((state) => state.toggleSubstation);
+  const originNode = useSimulationStore((state) => state.originNode);
+  const setOriginNode = useSimulationStore((state) => state.setOriginNode);
+  const cityData = useSimulationStore((state) => state.cityData);
+  const route = useSimulationStore((state) => state.route);
+  const isLoading = useSimulationStore((state) => state.isLoading);
+  const backendOnline = useSimulationStore((state) => state.backendOnline);
+  const error = useSimulationStore((state) => state.error);
+  const fetchCityData = useSimulationStore((state) => state.fetchCityData);
+  const calculateRoute = useSimulationStore((state) => state.calculateRoute);
+  const clearRoute = useSimulationStore((state) => state.clearRoute);
+  const substationLoads = useSimulationStore((state) => state.substationLoads);
+  const overloadedSubstations = useSimulationStore((state) => state.overloadedSubstations);
+  const cascadedSubstations = useSimulationStore((state) => state.cascadedSubstations);
+  const showBuildings = useSimulationStore((state) => state.showBuildings);
+  const setShowBuildings = useSimulationStore((state) => state.setShowBuildings);
+  const showPowerLines = useSimulationStore((state) => state.showPowerLines);
+  const setShowPowerLines = useSimulationStore((state) => state.setShowPowerLines);
+  const showSubstations = useSimulationStore((state) => state.showSubstations);
+  const setShowSubstations = useSimulationStore((state) => state.setShowSubstations);
+  const showIntersections = useSimulationStore((state) => state.showIntersections);
+  const setShowIntersections = useSimulationStore((state) => state.setShowIntersections);
+  const showRoadNames = useSimulationStore((state) => state.showRoadNames);
+  const setShowRoadNames = useSimulationStore((state) => state.setShowRoadNames);
+  const travelMode = useSimulationStore((state) => state.travelMode);
+  const setTravelMode = useSimulationStore((state) => state.setTravelMode);
+  const corridorComparison = useSimulationStore((state) => state.corridorComparison);
+  const isochrone = useSimulationStore((state) => state.isochrone);
+  const isochroneVisible = useSimulationStore((state) => state.isochroneVisible);
+  const setIsochroneVisible = useSimulationStore((state) => state.setIsochroneVisible);
+  const refreshIsochrone = useSimulationStore((state) => state.refreshIsochrone);
+  const snapshots = useSimulationStore((state) => state.snapshots);
+  const activeSnapshotId = useSimulationStore((state) => state.activeSnapshotId);
+  const saveSnapshot = useSimulationStore((state) => state.saveSnapshot);
+  const applySnapshot = useSimulationStore((state) => state.applySnapshot);
+  const deleteSnapshot = useSimulationStore((state) => state.deleteSnapshot);
+  const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
+  const setFlyToRoadKey = useSimulationStore((state) => state.setFlyToRoadKey);
+  const addLog = useSimulationStore((state) => state.addLog);
+  const applyScenario = useSimulationStore((state) => state.applyScenario);
+  const mapFilterMode = useSimulationStore((state) => state.mapFilterMode);
+  const setMapFilterMode = useSimulationStore((state) => state.setMapFilterMode);
+  const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
 
   const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
   const substations = cityData?.substations ?? [];
   const riskLevel = route?.risk_level ?? 'LOW';
   const riskColor = RISK_COLORS[riskLevel];
   const floodedCount = route?.flooded_nodes.length ?? nodes.filter((node) => node.elevation <= floodLevel * 1.7).length;
+  const activeSnapshot = snapshots.find((snap) => snap.id === activeSnapshotId) ?? null;
 
   // Street search: indexes road segments and junctions once per dataset, then
   // answers prefix/substring queries client-side with zero latency.
@@ -276,6 +290,13 @@ export default function ControlPanel() {
       <section className={styles.routeSummary}>
         <div className={styles.routeSummaryTop}><div><p className={styles.kicker}>Current recommendation</p><h3 style={{ color: riskColor }}>{route?.success ? 'PASSABLE CORRIDOR' : route ? 'NO PASSABLE ROUTE' : 'AWAITING ASSESSMENT'}</h3></div><span className={styles.riskMark} style={{ color: riskColor }}>{route ? riskLevel : '-'}</span></div>
         <div className={styles.summaryGrid}><span><b>{route?.success ? `${route.eta_minutes.toFixed(1)} min` : '-'}</b><small>estimated time</small></span><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b><small>street distance</small></span><span><b>{floodedCount}</b><small>flooded nodes</small></span><span><b>{route?.blocked_edges.length ?? 0}</b><small>closures</small></span></div>
+        {route?.corridor_capacity && route.corridor_capacity.people_per_hour > 0 && (
+          <div className={styles.capacityStrip}>
+            <span><b>{route.corridor_capacity.people_per_hour.toLocaleString()}</b><small>people/hour</small></span>
+            <span><b>~{route.corridor_capacity.clearance_minutes.toFixed(0)}</b><small>min clearance</small></span>
+            <span><b className={styles.capacityRoad}>{route.corridor_capacity.limiting_road}</b><small>bottleneck</small></span>
+          </div>
+        )}
         {route?.success && <div className={styles.stepList}>{route.route_steps.slice(0, 4).map((step, index) => <div className={styles.stepRow} key={`${step.from_node}-${step.to_node}`}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><small>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min</small></div></div>)}</div>}
         {route?.success && <p className={styles.destination}>{EXIT_NAMES[route.dest_node] ?? `Exit node ${route.dest_node}`}. {route.message}</p>}
         {route && <button className={styles.clearButton} onClick={clearRoute}>Clear route overlay</button>}
@@ -291,7 +312,7 @@ export default function ControlPanel() {
               className={`${styles.corridorRow} ${isChosen ? styles.corridorChosen : ''}`}
               onClick={() => setFlyToNodeId(corridor.exit_node)}>
               <span className={`${styles.corridorRank} ${isFastest ? styles.corridorRankBest : ''}`}>{String(index + 1).padStart(2, '0')}</span>
-              <span className={styles.corridorBody}><strong>{corridor.exit_name}</strong><small>{formatDistance(corridor.distance_m)} · {corridor.hazard_count} hazard segment{corridor.hazard_count === 1 ? '' : 's'}</small></span>
+              <span className={styles.corridorBody}><strong>{corridor.exit_name}</strong><small>{formatDistance(corridor.distance_m)} · {corridor.hazard_count} hazard{corridor.hazard_count === 1 ? '' : 's'} · {corridor.people_per_hour.toLocaleString()} ppl/hr</small></span>
               <span className={styles.corridorEta}>{corridor.eta_minutes.toFixed(1)}<small> min</small></span>
             </button>;
           })}
@@ -311,6 +332,38 @@ export default function ControlPanel() {
             </div>
           )}
         </div>
+      </section>
+
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Scenario snapshots</h3></div><span className={styles.sectionHint}>{snapshots.length} saved</span></div>
+        <div className={styles.snapshotRow}>
+          <input className={styles.snapshotInput} type="text" maxLength={28} placeholder="Name this scenario…" value={snapshotLabel} onChange={(event) => setSnapshotLabel(event.target.value)} aria-label="Snapshot name" />
+          <button className={styles.smallButton} onClick={() => { saveSnapshot(snapshotLabel); setSnapshotLabel(''); }}>Save</button>
+        </div>
+        {snapshots.length > 0 && (
+          <div className={styles.snapshotList}>
+            {snapshots.map((snap) => {
+              const isA = activeSnapshotId === snap.id;
+              return <div key={snap.id} className={`${styles.snapshotItem} ${isA ? styles.snapshotActive : ''}`}>
+                <div className={styles.snapshotInfo}><strong>{snap.label}</strong><small>{snap.travelMode} · flood {snap.floodLevel.toFixed(1)} · {snap.outcome.success ? `${snap.outcome.eta_minutes.toFixed(1)} min` : 'no route'}</small></div>
+                <div className={styles.snapshotActions}>
+                  <button className={styles.snapshotBtn} onClick={() => applySnapshot(snap.id)}>Restore</button>
+                  <button className={`${styles.snapshotBtn} ${styles.snapshotDelete}`} onClick={() => deleteSnapshot(snap.id)} aria-label={`Delete ${snap.label}`}>✕</button>
+                </div>
+              </div>;
+            })}
+          </div>
+        )}
+        {activeSnapshot && activeSnapshotId !== null && route && (
+          <div className={styles.snapshotDiff}>
+            <p className={styles.snapshotDiffTitle}>vs saved snapshot</p>
+            <div className={styles.snapshotDiffGrid}>
+              <span><b className={route.success && route.eta_minutes <= activeSnapshot.outcome.eta_minutes ? styles.diffBetter : styles.diffWorse}>{route.success ? `${route.eta_minutes.toFixed(1)}m` : 'fail'}</b><small>now</small></span>
+              <span><b>{activeSnapshot.outcome.success ? `${activeSnapshot.outcome.eta_minutes.toFixed(1)}m` : 'fail'}</b><small>saved</small></span>
+              <span><b className={route.success === activeSnapshot.outcome.success && route.risk_level === activeSnapshot.outcome.risk_level ? styles.diffBetter : styles.diffWorse}>{route.risk_level}</b><small>risk shift</small></span>
+            </div>
+          </div>
+        )}
       </section>
       </aside>
     </>

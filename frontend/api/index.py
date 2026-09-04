@@ -7,7 +7,7 @@ import uvicorn
 from models import (
     CityResponse, NodeData, EdgeData, BlockData, ParkData, SubstationData, TransmissionLink,
     SimulationRequest, RouteResponse, RouteCoord, RouteStep, FloodZoneResponse,
-    CorridorComparisonResponse, CorridorInfo, IsochroneResponse, IsochroneRing,
+    CorridorComparisonResponse, CorridorInfo, IsochroneResponse, IsochroneRing, CorridorCapacity,
 )
 from city_graph import (
     _G, _NODES, _BLOCKS, PARKS, _SUBSTATIONS, TRANSMISSION_LINKS,
@@ -182,6 +182,7 @@ async def calculate_route(req: SimulationRequest):
         usgs_gage_height=usgs_gage,
         surface_temp=surface_temp,
         hazard_roads=hazard_roads,
+        corridor_capacity=CorridorCapacity(**result.get("corridor_capacity", {})),
     )
 
 

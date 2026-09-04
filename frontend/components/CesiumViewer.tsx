@@ -50,28 +50,34 @@ export default function CesiumViewer() {
   const routeEntitiesRef = useRef<any[]>([]);
   const staticRenderedRef = useRef(false);
   const clickHandlerRef = useRef<any>(null);
+  const touchHandlersRef = useRef<any>(null);
 
-  const {
-    cityData,
-    route,
-    floodLevel,
-    failedSubstations,
-    substationLoads,
-    showBuildings,
-    showPowerLines,
-    showSubstations,
-    showIntersections,
-    showRoadNames,
-    originNode,
-    flyToNodeId,
-    setFlyToNodeId,
-    flyToRoadKey,
-    isochrone,
-    isochroneVisible,
-    flyToCoords,
-    setFlyToCoords,
-    mapFilterMode,
-  } = useSimulationStore();
+  // Selector subscriptions: each field is read individually so identity-
+  // stable references (actions, primitive flags) never invalidate this
+  // component, and high-churn telemetry only re-renders what needs it.
+  const cityData = useSimulationStore((state) => state.cityData);
+  const route = useSimulationStore((state) => state.route);
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const failedSubstations = useSimulationStore((state) => state.failedSubstations);
+  // Loads tick every 3 s; only re-render when a value actually crosses a
+  // threshold-relevant boundary (2 decimal steps match the tick precision).
+  // The effect reads current loads from the store without subscribing to it.
+  const substationLoadSignature = useSimulationStore((state) =>
+    Object.values(state.substationLoads).map((load) => Math.round(load * 50) / 50).join(','));
+  const showBuildings = useSimulationStore((state) => state.showBuildings);
+  const showPowerLines = useSimulationStore((state) => state.showPowerLines);
+  const showSubstations = useSimulationStore((state) => state.showSubstations);
+  const showIntersections = useSimulationStore((state) => state.showIntersections);
+  const showRoadNames = useSimulationStore((state) => state.showRoadNames);
+  const originNode = useSimulationStore((state) => state.originNode);
+  const flyToNodeId = useSimulationStore((state) => state.flyToNodeId);
+  const flyToRoadKey = useSimulationStore((state) => state.flyToRoadKey);
+  const isochrone = useSimulationStore((state) => state.isochrone);
+  const isochroneVisible = useSimulationStore((state) => state.isochroneVisible);
+  const flyToCoords = useSimulationStore((state) => state.flyToCoords);
+  const mapFilterMode = useSimulationStore((state) => state.mapFilterMode);
+  const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
+  const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
 
   const loadCesiumScript = useCallback((): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -156,6 +162,17 @@ export default function CesiumViewer() {
         });
         viewerRef.current = viewer;
 
+        // Platform-adaptive render budget. Coarse-pointer devices (phones,
+        // tablets) cap the frame ceiling at 30 fps — with requestRenderMode
+        // this only bounds gesture frames — and very high-density screens
+        // (3x) render at CSS resolution instead of native; the dark basemap
+        // hides the difference while saving ~4x fragment work. Desktops keep
+        // full resolution for crisp road lines.
+        if (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches) {
+          viewer.targetFrameRate = 30;
+          if ((window.devicePixelRatio || 1) > 2) viewer.useBrowserRecommendedResolution = false;
+        }
+
         const baseLayer = viewer.imageryLayers.get(0);
         if (baseLayer) {
           baseLayer.brightness = 1.04;
@@ -186,12 +203,14 @@ export default function CesiumViewer() {
 
         const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
         clickHandlerRef.current = handler;
-        // Pick through overlapping geometry in a forgiving 12px window so a
-        // click near a junction lands on the intersection, not the road under it.
+        // Pick window: 12px for mouse precision; 40px on touch, where taps
+        // land within ~a finger-width of the target. drillPick resolves
+        // overlapping geometry either way.
+        const pickWindow = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches ? 40 : 12;
         handler.setInputAction((movement: any) => {
           const current = useSimulationStore.getState();
           const exits = new Set(current.cityData?.safe_exits ?? []);
-          const drills = viewer.scene.drillPick(movement.position, 8, 12, 12) ?? [];
+          const drills = viewer.scene.drillPick(movement.position, 8, pickWindow, pickWindow) ?? [];
           // Entity ids are `node-<id>` for visible dots and `pick-node-<id>`
           // for the invisible always-pickable dots.
           const nodeIdFromEntityId = (id: any): number | null => {
@@ -215,31 +234,75 @@ export default function CesiumViewer() {
           current.addLog(`Map selection: ${node.intersection_name} set as route origin.`);
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-        // Hover affordance: pointer cursor plus a highlight tint on the
-        // intersection under the cursor, so clickable targets announce themselves.
+        // Touch note: Cesium synthesizes LEFT_CLICK from finger taps, so the
+        // single handler above serves mice and touch alike; only the pick
+        // window differs (40px vs 12px).
+
+        // Hover affordance: pointer cursor, highlight tint, and a floating
+        // street-name pin under the cursor so targets announce themselves.
+        // MOUSE_MOVE fires continuously; the pick runs at most per animation
+        // frame, and color mutations are skipped when nothing changed.
+        const hoverPin = viewer.entities.add({
+          id: 'hover-pin',
+          position: new Cesium.ConstantPositionProperty(Cesium.Cartesian3.fromDegrees(0, 0, 12)),
+          point: { pixelSize: 1, color: Cesium.Color.TRANSPARENT },
+          label: {
+            text: '',
+            font: '700 12px Plus Jakarta Sans, sans-serif',
+            fillColor: Cesium.Color.fromCssColorString('#eafff5'),
+            outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+            outlineWidth: 4,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#0b1a15').withAlpha(0.88),
+            backgroundPadding: new Cesium.Cartesian2(8, 5),
+            pixelOffset: new Cesium.Cartesian2(0, -22),
+            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+            show: false,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
         let hoveredNodeId: number | null = null;
         let hoveredRestore: any = null;
+        let hoverQueued = false;
+        let lastMove: any = null;
         handler.setInputAction((movement: any) => {
-          const picked = viewer.scene.pick(movement.position);
-          const pickedId = picked?.id?.id ?? picked?.id;
-          const match = typeof pickedId === 'string' ? /^(?:pick-)?node-(\d+)$/.exec(pickedId) : null;
-          const hit = match ? Number(match[1]) : null;
-          if (hit === hoveredNodeId) return;
-          if (hoveredNodeId !== null) {
-            const previous = nodeEntities.get(hoveredNodeId);
-            if (previous?.point?.color && hoveredRestore) previous.point.color = hoveredRestore;
-          }
-          hoveredNodeId = hit;
-          hoveredRestore = null;
-          if (hit !== null) {
-            const entity = nodeEntities.get(hit);
-            if (entity?.point) {
-              hoveredRestore = entity.point.color;
-              entity.point.color = new Cesium.ConstantProperty(Cesium.Color.fromCssColorString('#a5f3d0'));
+          lastMove = movement;
+          if (hoverQueued) return;
+          hoverQueued = true;
+          requestAnimationFrame(() => {
+            hoverQueued = false;
+            if (viewer.isDestroyed() || !lastMove) return;
+            const picked = viewer.scene.pick(lastMove.position);
+            const pickedId = picked?.id?.id ?? picked?.id;
+            const match = typeof pickedId === 'string' ? /^(?:pick-)?node-(\d+)$/.exec(pickedId) : null;
+            const hit = match ? Number(match[1]) : null;
+            if (hit === hoveredNodeId) return;
+            if (hoveredNodeId !== null) {
+              const previous = nodeEntities.get(hoveredNodeId);
+              if (previous?.point?.color && hoveredRestore) previous.point.color = hoveredRestore;
             }
-          }
-          viewer.canvas.style.cursor = hit !== null ? 'pointer' : 'default';
-          requestFrame(viewer);
+            hoveredNodeId = hit;
+            hoveredRestore = null;
+            if (hit !== null) {
+              const entity = nodeEntities.get(hit);
+              if (entity?.point) {
+                hoveredRestore = entity.point.color;
+                entity.point.color = new Cesium.ConstantProperty(Cesium.Color.fromCssColorString('#a5f3d0'));
+              }
+              const node = (useSimulationStore.getState().cityData?.nodes ?? []).find((item) => item.id === hit);
+              if (node) {
+                const nodeIsExit = new Set(useSimulationStore.getState().cityData?.safe_exits ?? []).has(hit);
+                hoverPin.position = new Cesium.ConstantPositionProperty(Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 12));
+                hoverPin.label!.text = new Cesium.ConstantProperty(`${node.intersection_name}${nodeIsExit ? ' · EXIT' : ''}`);
+                hoverPin.label!.show = new Cesium.ConstantProperty(true);
+              }
+            } else {
+              hoverPin.label!.show = new Cesium.ConstantProperty(false);
+            }
+            viewer.canvas.style.cursor = hit !== null ? 'pointer' : 'default';
+            requestFrame(viewer);
+          });
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
         resizeObserver = new ResizeObserver(() => {
@@ -262,6 +325,10 @@ export default function CesiumViewer() {
         clickHandlerRef.current.destroy();
       }
       clickHandlerRef.current = null;
+      if (touchHandlersRef.current && !touchHandlersRef.current.isDestroyed()) {
+        touchHandlersRef.current.destroy();
+      }
+      touchHandlersRef.current = null;
       if (viewerRef.current && !viewerRef.current.isDestroyed()) viewerRef.current.destroy();
       viewerRef.current = null;
       roadEntities.clear();
@@ -742,8 +809,9 @@ export default function CesiumViewer() {
   // Keep substation beacons visually tied to live load without turning utility
   // structures into giant floating towers.
   useEffect(() => {
+    const currentLoads = useSimulationStore.getState().substationLoads;
     substationEntitiesRef.current.forEach((group) => {
-      const load = substationLoads[group.sub.id] ?? group.sub.base_load_mw;
+      const load = currentLoads[group.sub.id] ?? group.sub.base_load_mw;
       const failed = failedSubstations.includes(group.sub.id) || (route?.cascaded_substations ?? []).includes(group.sub.id);
       if (group.beacon?.point) {
         group.beacon.point.color = new Cesium.ConstantProperty(
@@ -751,7 +819,7 @@ export default function CesiumViewer() {
         );
       }
     });
-  }, [failedSubstations, route, substationLoads, viewerReady]);
+  }, [failedSubstations, route, substationLoadSignature, viewerReady]);
 
   return <div ref={containerRef} className="cesium-map-surface" aria-label="Interactive Houston street and utility map" />;
 }
@@ -976,20 +1044,19 @@ function renderStaticCity(
 
   cityData.nodes.forEach((node) => {
     const isExit = Boolean(EXIT_LABELS[node.id]);
-    // Only exits are persistent visual targets. Regular intersections appear
-    // as small quiet dots at street level (DistanceDisplayCondition ~2.6 km).
-    // Clickability is decoupled from visibility: every node also gets an
-    // invisible always-pickable dot, because Cesium's drillPick ignores
-    // show:false entities, so hiding the visible dots would otherwise make
-    // the map unclickable at district zoom.
+    // Regular intersections render as clearly visible 5px dots at street
+    // level (fade past ~2.6 km). Clickability is decoupled from visibility:
+    // every node also gets an invisible always-pickable dot, because
+    // Cesium's drillPick ignores show:false entities, so hiding the visible
+    // dots would otherwise make the map unclickable at district zoom.
     const pulse = isExit && !prefersReducedMotion();
     const beaconSize = pulse
-      ? new Cesium.CallbackProperty(() => 9 + 1.6 * Math.sin(performance.now() / 420), false)
-      : isExit ? 9 : 3;
+      ? new Cesium.CallbackProperty(() => 14 + 2.4 * Math.sin(performance.now() / 420), false)
+      : isExit ? 14 : 5;
     if (isExit) {
       const haloSize = pulse
-        ? new Cesium.CallbackProperty(() => 20 + 5 * Math.sin(performance.now() / 420), false)
-        : 20;
+        ? new Cesium.CallbackProperty(() => 30 + 6 * Math.sin(performance.now() / 420), false)
+        : 30;
       viewer.entities.add({
         id: `halo-${node.id}`,
         position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 4),
@@ -1012,7 +1079,7 @@ function renderStaticCity(
         outlineWidth: isExit ? 2 : 1,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         distanceDisplayCondition: isExit ? undefined : new Cesium.DistanceDisplayCondition(0, 2600),
-        scaleByDistance: isExit ? undefined : new Cesium.NearFarScalar(600, 1, 2600, 0.55),
+        scaleByDistance: isExit ? undefined : new Cesium.NearFarScalar(600, 1, 2600, 0.7),
       },
       label: isExit ? {
         text: EXIT_LABELS[node.id],

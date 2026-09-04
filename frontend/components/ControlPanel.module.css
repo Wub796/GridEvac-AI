@@ -381,6 +381,83 @@
 .corridorEta small { color: var(--muted); font-size: 9px; font-weight: 500; }
 .corridorEmpty { color: var(--muted); font-size: 10px; line-height: 1.5; }
 
+/* Clearance capacity strip */
+.capacityStrip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.capacityStrip span {
+  padding: 8px;
+  border: 1px solid rgba(46, 201, 138, .18);
+  border-radius: 10px;
+  background: rgba(46, 201, 138, .05);
+}
+.capacityStrip b { display: block; overflow: hidden; color: #d3e3da; font-size: 13px; letter-spacing: -.3px; text-overflow: ellipsis; white-space: nowrap; }
+.capacityStrip small { display: block; margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .4px; }
+.capacityRoad { color: #7fd4b8 !important; font-size: 11px !important; }
+
+/* Scenario snapshots */
+.snapshotRow { display: flex; gap: 7px; }
+.snapshotInput {
+  flex: 1;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 10px;
+  background: rgba(8, 20, 17, .55);
+  color: var(--ink);
+  outline: none;
+  font-size: 10px;
+}
+.snapshotInput:focus { border-color: rgba(46, 201, 138, .55); box-shadow: 0 0 0 3px rgba(46, 201, 138, .14); }
+.snapshotList { display: grid; gap: 6px; margin-top: 10px; }
+.snapshotItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .03);
+  transition: border-color .3s, background .3s;
+}
+.snapshotItem:hover { border-color: rgba(46, 201, 138, .3); }
+.snapshotActive { border-color: rgba(255, 140, 66, .45); background: rgba(255, 140, 66, .07); }
+.snapshotInfo { min-width: 0; }
+.snapshotInfo strong { display: block; overflow: hidden; color: #d3e3da; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.snapshotInfo small { display: block; margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .3px; }
+.snapshotActions { display: flex; flex: 0 0 auto; gap: 5px; }
+.snapshotBtn {
+  padding: 5px 9px;
+  border: 1px solid rgba(46, 201, 138, .3);
+  border-radius: 999px;
+  background: rgba(46, 201, 138, .1);
+  color: #7fd4b8;
+  font-size: 9px;
+  font-weight: 800;
+  transition: background .25s, transform .25s var(--ease-spring);
+}
+.snapshotBtn:hover { background: rgba(46, 201, 138, .22); transform: translateY(-1px); }
+.snapshotDelete { border-color: rgba(255, 122, 110, .3); background: rgba(255, 122, 110, .08); color: #ffb3aa; padding: 5px 8px; }
+.snapshotDelete:hover { background: rgba(255, 122, 110, .18); }
+.snapshotDiff {
+  margin-top: 11px;
+  padding: 10px;
+  border: 1px dashed rgba(255, 140, 66, .4);
+  border-radius: 11px;
+  background: rgba(255, 140, 66, .05);
+}
+.snapshotDiffTitle { margin-bottom: 7px; color: #ffc49b; font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .5px; }
+.snapshotDiffGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.snapshotDiffGrid span { text-align: center; }
+.snapshotDiffGrid b { display: block; color: #d3e3da; font-size: 12px; }
+.snapshotDiffGrid small { display: block; margin-top: 2px; color: var(--muted); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+.diffBetter { color: #2ec98a !important; }
+.diffWorse { color: #ff7a6e !important; }
+
 /* Reachability toggle + ring legend */
 .isochroneRow { display: grid; gap: 9px; }
 .isochroneToggle {
@@ -413,4 +490,29 @@
   .panelHeader { padding: 13px 14px 11px; }
   .controlSection { padding: 13px 14px; }
   .routeSummary { padding: 14px; }
+}
+
+/* ===== Touch platform layer (phones/tablets) ===== */
+@media (hover: none) {
+  /* 44px minimum hit targets (Apple HIG / Android accessibility). */
+  .solveButton { min-height: 48px; }
+  .statusButton, .smallButton, .clearButton, .scenarioButton, .modeRow button, .presetRow button { min-height: 44px; }
+  .toggleGrid label { min-height: 44px; display: flex; align-items: center; }
+  .toggleGrid input[type='checkbox'] { width: 20px; height: 20px; flex: 0 0 auto; }
+  .searchResult { min-height: 48px; }
+  .collapseButton { min-width: 44px; min-height: 44px; }
+  /* Tactile press states replace hover-only feedback on touch. */
+  .scenarioButton:active { border-color: rgba(46, 201, 138, .5); background: var(--green-soft); transform: scale(.98); }
+  .solveButton:active:not(:disabled) { transform: scale(.98); box-shadow: 0 8px 18px -10px rgba(46, 201, 138, .6); }
+  .substationRow:active { border-color: rgba(46, 201, 138, .3); background: rgba(255, 255, 255, .05); }
+  .modeRow button:active, .presetRow button:active, .smallButton:active, .statusButton:active { transform: scale(.96); }
+  /* The floating panel over the map: drag from its header, not the page. */
+  .panel { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  /* Filled form controls need dark-keyboard-friendly text + background. */
+  .select, .searchInput { font-size: 12px; }
+}
+/* Landscape phones: the bottom-sheet panel must not swallow the map. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .panel { max-height: 72%; width: min(320px, 60vw); left: auto; top: 10px; bottom: 10px; }
+  .collapseTab { left: auto; top: 10px; bottom: auto; }
 }

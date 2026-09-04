@@ -105,9 +105,31 @@ function TweenNumber({ value, decimals = 1, suffix = '' }: { value: number; deci
 
 
 
+/** Self-ticking clock: the 1 Hz update re-renders only this span, not the page tree. */
+function TopbarClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <>{formatClock(now)} CST</>;
+}
+
+/** Gage/temperature readout: isolates 3 s telemetry churn to this one element. */
+function TelemetryReadout() {
+  const usgsGageHeight = useSimulationStore((state) => state.usgsGageHeight);
+  const surfaceTemp = useSimulationStore((state) => state.surfaceTemp);
+  const isLoading = useSimulationStore((state) => state.isLoading);
+  return (
+    <div className="map-readout"><span>Scenario surface</span><strong>{usgsGageHeight.toFixed(2)} ft gage · {surfaceTemp.toFixed(1)}°F</strong><small>{isLoading ? 'Recalculating route weights…' : 'Telemetry refresh every 3 sec'}</small></div>
+  );
+}
+
 export default function HomePage() {
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
-  const [now, setNow] = useState(() => new Date());
+  // Rendered once; the wall clock lives in <TopbarClock /> so its 1 Hz tick
+  // does not re-render the page tree.
+  const [briefingDay] = useState(() => new Date());
   const progressRef = useRef<HTMLDivElement>(null);
   const {
     fetchCityData,
@@ -117,8 +139,6 @@ export default function HomePage() {
     route,
     backendOnline,
     gridFrequency,
-    usgsGageHeight,
-    surfaceTemp,
     failedSubstations,
     overloadedSubstations,
     cascadedSubstations,
@@ -133,15 +153,20 @@ export default function HomePage() {
     corridorComparison,
     addLog,
   } = useSimulationStore();
-
   useEffect(() => {
     void fetchCityData();
-    const telemetryTimer = window.setInterval(triggerLiveTick, 3000);
-    const clockTimer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => {
-      window.clearInterval(telemetryTimer);
-      window.clearInterval(clockTimer);
+    // Self-rescheduling timer: an inline interval fires mid-interaction and
+    // re-renders the workspace under the user's cursor. A trailing timeout
+    // waits for each tick's render to settle before scheduling the next.
+    let timer = 0;
+    const scheduleTick = () => {
+      timer = window.setTimeout(() => {
+        triggerLiveTick();
+        scheduleTick();
+      }, 3000 + Math.random() * 450);
     };
+    scheduleTick();
+    return () => window.clearTimeout(timer);
   }, [fetchCityData, triggerLiveTick]);
 
   // Scroll progress hairline: rAF-driven transform, no re-renders per frame.
@@ -221,9 +246,10 @@ export default function HomePage() {
       `Recommendation: ${route.success ? `evacuate via ${destination?.intersection_name ?? `Node ${route.dest_node}`}` : 'NO PASSABLE CORRIDOR'}`,
       route.success ? `ETA ${route.eta_minutes.toFixed(1)} min over ${formatDistance(route.distance_m)} (${route.route_steps.length} road segments)` : `Reason: ${route.message}`,
       `Risk: ${route.risk_level} (anomaly ${route.anomaly_score.toFixed(2)}), grid ${route.grid_frequency.toFixed(2)} Hz`,
+      route.corridor_capacity?.people_per_hour ? `Capacity: ${route.corridor_capacity.people_per_hour.toLocaleString()} people/hour (bottleneck: ${route.corridor_capacity.limiting_road}), ~${route.corridor_capacity.clearance_minutes.toFixed(0)} min clearance` : '',
       `Flooded intersections: ${route.flooded_nodes.length}, blackout grid cells: ${route.blackout_nodes.length}`,
       ...route.route_steps.slice(0, 6).map((step, i) => `  ${i + 1}. ${step.instruction} (${formatDistance(step.distance_m)})`),
-      corridorComparison?.corridors.length ? `Alternate exits: ${corridorComparison.corridors.slice(1, 4).map((c) => `${c.exit_name} ${c.eta_minutes.toFixed(1)} min`).join('; ') || 'none ranked'}` : '',
+      corridorComparison?.corridors.length ? `Alternate exits: ${corridorComparison.corridors.slice(1, 4).map((c) => `${c.exit_name} ${c.eta_minutes.toFixed(1)} min, ${c.people_per_hour.toLocaleString()} ppl/hr`).join('; ') || 'none ranked'}` : '',
     ].filter(Boolean);
     const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -252,7 +278,7 @@ export default function HomePage() {
           </div>
         </div>
         <div className="topbar-center">
-          <span className="live-dot" /> Houston operations district <b>·</b> {formatClock(now)} CST
+          <span className="live-dot" /> Houston operations district <b>·</b> <TopbarClock />
         </div>
         <div className="topbar-actions">
           <span className={`connection-pill ${backendOnline ? 'online' : ''}`}>
@@ -281,7 +307,7 @@ export default function HomePage() {
                 <h1>Make the next move <em>safer.</em></h1>
                 <p className="lede">Model floodwater, utility failures, and street-level access in one operational view. Every route follows a named road corridor instead of cutting across city blocks.</p>
               </div>
-              <div className="briefing-meta"><span>Operational day</span><strong>{now.toLocaleDateString([], { weekday: 'short' }).toUpperCase()}</strong><b>{now.toLocaleDateString([], { month: 'short', day: '2-digit' }).toUpperCase()}</b></div>
+              <div className="briefing-meta"><span>Operational day</span><strong>{briefingDay.toLocaleDateString([], { weekday: 'short' }).toUpperCase()}</strong><b>{briefingDay.toLocaleDateString([], { month: 'short', day: '2-digit' }).toUpperCase()}</b></div>
             </Reveal>
 
             <Reveal>
@@ -314,7 +340,7 @@ export default function HomePage() {
                 <div className="map-overlay map-overlay-top"><span className="live-dot" /> STREET NETWORK <b>·</b> {cityData?.edges.length ?? 0} street segments, {cityData?.blocks.length ?? 0} buildings</div>
                 <div className="map-overlay map-overlay-instruction"><strong>Map interaction</strong><span>Click a dry intersection to set a new origin</span></div>
                 <div className="map-legend"><span><i className="legend-line route" /> Recommended route</span><span><i className="legend-line arterial" /> Arterial</span><span><i className="legend-line local" /> Street</span><span><i className="legend-line hazard" /> Hazard / closure</span><span><i className="legend-dot flood" /> Flood cell</span></div>
-                <div className="map-readout"><span>Scenario surface</span><strong>{usgsGageHeight.toFixed(2)} ft gage · {surfaceTemp.toFixed(1)}°F</strong><small>{isLoading ? 'Recalculating route weights…' : 'Telemetry refresh every 3 sec'}</small></div>
+                <TelemetryReadout />
                 <ControlPanel />
               </div>
             </Reveal>

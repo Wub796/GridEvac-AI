@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "api:smoke": "python3 scripts/api_smoke_test.py"
   },
   "dependencies": {
     "axios": "^1.7.2",
