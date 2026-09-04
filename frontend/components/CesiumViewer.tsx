@@ -32,6 +32,7 @@ export default function CesiumViewer() {
 
   const roadEntitiesRef = useRef<Map<string, RoadEntity>>(new Map());
   const nodeEntitiesRef = useRef<Map<number, any>>(new Map());
+  const haloEntitiesRef = useRef<Map<number, any>>(new Map());
   const buildingEntitiesRef = useRef<any[]>([]);
   const buildingTilesRef = useRef<any>(null);
   const roadLabelEntitiesRef = useRef<any[]>([]);
@@ -102,6 +103,7 @@ export default function CesiumViewer() {
     const roadEntities = roadEntitiesRef.current;
     const nodeEntities = nodeEntitiesRef.current;
     const substationEntities = substationEntitiesRef.current;
+    const haloEntities = haloEntitiesRef.current;
 
     const initialise = async () => {
       try {
@@ -167,21 +169,53 @@ export default function CesiumViewer() {
 
         const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
         clickHandlerRef.current = handler;
+        // Pick through overlapping geometry in a forgiving 12px window so a
+        // click near a junction lands on the intersection, not the road under it.
+        handler.setInputAction((movement: any) => {
+          const current = useSimulationStore.getState();
+          const exits = new Set(current.cityData?.safe_exits ?? []);
+          const drills = viewer.scene.drillPick(movement.position, 8, 12, 12) ?? [];
+          const pickedNodes = drills
+            .map((item: any) => item?.id?.id ?? item?.id)
+            .filter((id: any): id is string => typeof id === 'string' && id.startsWith('node-'))
+            .map((id: string) => Number(id.replace('node-', '')));
+          // Prefer a regular selectable intersection; exits are endpoints, not origins.
+          const targetId = pickedNodes.find((id) => !exits.has(id)) ?? pickedNodes[0];
+          if (targetId === undefined) return;
+          const node = current.cityData?.nodes.find((item) => item.id === targetId);
+          if (!node) return;
+          if (node.elevation <= current.floodLevel * 1.7) {
+            current.addLog(`${node.intersection_name} is below the modeled flood surface; choose a dry intersection.`);
+            return;
+          }
+          current.setOriginNode(node.id);
+          current.addLog(`Map selection: ${node.intersection_name} set as route origin.`);
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+        // Hover affordance: pointer cursor plus a highlight tint on the
+        // intersection under the cursor, so clickable targets announce themselves.
+        let hoveredNodeId: number | null = null;
+        let hoveredRestore: any = null;
         handler.setInputAction((movement: any) => {
           const picked = viewer.scene.pick(movement.position);
           const pickedId = picked?.id?.id ?? picked?.id;
-          if (typeof pickedId !== 'string' || !pickedId.startsWith('node-')) return;
-          const nodeId = Number(pickedId.replace('node-', ''));
-          const current = useSimulationStore.getState();
-          const node = current.cityData?.nodes.find((item) => item.id === nodeId);
-          if (!node) return;
-          if (node.elevation <= current.floodLevel * 1.7) {
-            current.addLog(`Node ${nodeId} is below the modeled flood surface; choose a dry intersection.`);
-            return;
+          const hit = typeof pickedId === 'string' && pickedId.startsWith('node-') ? Number(pickedId.replace('node-', '')) : null;
+          if (hit === hoveredNodeId) return;
+          if (hoveredNodeId !== null) {
+            const previous = nodeEntities.get(hoveredNodeId);
+            if (previous?.point?.color && hoveredRestore) previous.point.color = hoveredRestore;
           }
-          current.setOriginNode(nodeId);
-          current.addLog(`Map selection: ${node.intersection_name} set as route origin.`);
-        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+          hoveredNodeId = hit;
+          hoveredRestore = null;
+          if (hit !== null) {
+            const entity = nodeEntities.get(hit);
+            if (entity?.point) {
+              hoveredRestore = entity.point.color;
+              entity.point.color = new Cesium.ConstantProperty(Cesium.Color.fromCssColorString('#a5f3d0'));
+            }
+          }
+          viewer.canvas.style.cursor = hit !== null ? 'pointer' : 'default';
+        }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
         resizeObserver = new ResizeObserver(() => {
           if (!viewer.isDestroyed()) viewer.resize();
@@ -208,6 +242,7 @@ export default function CesiumViewer() {
       roadEntities.clear();
       nodeEntities.clear();
       substationEntities.clear();
+      haloEntities.clear();
       buildingEntitiesRef.current = [];
       roadLabelEntitiesRef.current = [];
       transmissionEntitiesRef.current = [];
@@ -232,6 +267,7 @@ export default function CesiumViewer() {
       substationEntitiesRef,
       transmissionEntitiesRef,
       buildingTilesRef,
+      haloEntitiesRef,
     });
     playIntroFlight(viewerRef.current);
   }, [cityData, viewerReady]);
@@ -251,6 +287,7 @@ export default function CesiumViewer() {
       group.entities.forEach((entity) => { entity.show = showSubstations; });
     });
     nodeEntitiesRef.current.forEach((entity) => { entity.show = showIntersections; });
+    haloEntitiesRef.current.forEach((entity) => { entity.show = showIntersections; });
     roadLabelEntitiesRef.current.forEach((entity) => { entity.show = showRoadNames; });
   }, [showPowerLines, showSubstations, showIntersections, showRoadNames, viewerReady]);
 
@@ -632,9 +669,33 @@ function renderStaticCity(
     substationEntitiesRef: MutableRefObject<Map<number, SubstationEntities>>;
     transmissionEntitiesRef: MutableRefObject<any[]>;
     buildingTilesRef: MutableRefObject<any>;
+    haloEntitiesRef: MutableRefObject<Map<number, any>>;
   },
 ) {
   const EXIT_LABELS = exitLabelMap(cityData);
+  // Cartographic generalization: minor tiers vanish as the camera zooms out
+  // so the map reads as a district overview instead of a wireframe mat.
+  const TIERS = {
+    service: { near: 0, fade: 1100, base: 2, hidden: 2 },
+    local: { near: 0, fade: 1800, base: 4, hidden: 1.5 },
+    collector: { near: 0, fade: 3000, base: 6.5, hidden: 2 },
+    arterial: { near: 0, fade: 7000, base: 10, hidden: 3.5 },
+  } as const;
+  viewer.scene.postRender.addEventListener(function tierRoads() {
+    if (viewer.isDestroyed()) return;
+    const height = viewer.camera.positionCartographic.height;
+    refs.roadEntitiesRef.current.forEach(({ entity, edge }: { entity: any; edge: EdgeData }) => {
+      if (!entity?.polyline) return;
+      const tier = TIERS[(edge.road_class as keyof typeof TIERS) ?? 'local'] ?? TIERS.local;
+      if (height > tier.fade) {
+        entity.polyline.show = new Cesium.ConstantProperty(false);
+      } else {
+        const width = height <= tier.near ? tier.base : Math.max(tier.hidden, tier.base * (1 - (height - tier.near) / (tier.fade - tier.near)));
+        entity.polyline.show = new Cesium.ConstantProperty(true);
+        entity.polyline.width = new Cesium.ConstantProperty(Math.max(tier.hidden, Math.min(tier.base, width)));
+      }
+    });
+  });
   // Buildings and parks are real OpenStreetMap footprints extruded in place,
   // so they align exactly with the street corridors that surround them.
   const parkPolygons: ParkData[] = cityData.parks ?? [];
@@ -718,11 +779,31 @@ function renderStaticCity(
 
   cityData.nodes.forEach((node) => {
     const isExit = Boolean(EXIT_LABELS[node.id]);
-    // Exit beacons breathe so evacuation targets stay findable in peripheral vision.
+    // Only exits are persistent targets. Regular intersections appear as small
+    // quiet dots at street level and vanish below ~2.6 km camera height, which
+    // is what makes "what can I click here" legible at district zoom.
     const pulse = isExit && !prefersReducedMotion();
     const beaconSize = pulse
       ? new Cesium.CallbackProperty(() => 9 + 1.6 * Math.sin(performance.now() / 420), false)
       : isExit ? 9 : 3;
+    const haloSize = pulse
+      ? new Cesium.CallbackProperty(() => 20 + 5 * Math.sin(performance.now() / 420), false)
+      : 20;
+    const haloAlpha = pulse
+      ? new Cesium.CallbackProperty(() => 0.16 + 0.09 * Math.sin(performance.now() / 420), false)
+      : 0.16;
+    const halo = viewer.entities.add({
+      id: `halo-${node.id}`,
+      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 4),
+      point: {
+        pixelSize: haloSize,
+        color: Cesium.Color.fromCssColorString(isExit ? '#2ec98a' : '#ff8c42').withAlpha(0.14),
+        outlineColor: Cesium.Color.TRANSPARENT,
+        outlineWidth: 0,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3200),
+      },
+    });
     const entity = viewer.entities.add({
       id: `node-${node.id}`,
       position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 5),
@@ -732,20 +813,22 @@ function renderStaticCity(
         outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
         outlineWidth: isExit ? 2 : 1,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        scaleByDistance: new Cesium.NearFarScalar(300, 1, 5000, 0.4),
         distanceDisplayCondition: isExit ? undefined : new Cesium.DistanceDisplayCondition(0, 2600),
+        scaleByDistance: isExit ? undefined : new Cesium.NearFarScalar(600, 1, 2600, 0.55),
       },
       label: isExit ? {
         text: EXIT_LABELS[node.id],
-        font: '700 10px DM Mono, monospace',        fillColor: Cesium.Color.fromCssColorString('#7fe0b6'),
-          outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
-          outlineWidth: 3,
+        font: '700 10px DM Mono, monospace',
+        fillColor: Cesium.Color.fromCssColorString('#7fe0b6'),
+        outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+        outlineWidth: 3,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        pixelOffset: new Cesium.Cartesian2(0, -15),
+        pixelOffset: new Cesium.Cartesian2(0, -18),
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
       } : undefined,
     });
     refs.nodeEntitiesRef.current.set(node.id, entity);
+    refs.haloEntitiesRef.current.set(node.id, halo);
   });
 
   cityData.substations.forEach((sub) => {
