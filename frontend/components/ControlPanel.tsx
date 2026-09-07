@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useSimulationStore } from '@/hooks/useSimulation';
+import { logicalJunctions } from '@/lib/network';
 import type { RiskLevel } from '@/lib/types';
 import styles from './ControlPanel.module.css';
 
@@ -109,6 +110,10 @@ export default function ControlPanel() {
   const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
 
   const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
+  // Map dots, the origin dropdown and the search index all agree on which
+  // junctions are real: degree >= 3 intersections plus exits and shelter
+  // junctions, with duplicated corners merged.
+  const logicalNodeIds = useMemo(() => (cityData ? logicalJunctions(cityData).ids : new Set<number>()), [cityData]);
   // Node id -> intersection name, for naming the recommended exit in plain
   // language instead of "Exit node 606".
   const nodeNameById = useMemo(
@@ -155,15 +160,17 @@ export default function ControlPanel() {
       seenRoads.set(key, hit);
       streets.push(hit);
     });
-    const junctions: SearchHit[] = nodes.map((node) => ({
-      key: `node-${node.id}`,
-      label: node.intersection_name,
-      sublabel: `Intersection · node ${node.id}`,
-      kind: 'intersection' as const,
-      nodeId: node.id,
-    }));
+    const junctions: SearchHit[] = nodes
+      .filter((node) => logicalNodeIds.has(node.id))
+      .map((node) => ({
+        key: `node-${node.id}`,
+        label: node.intersection_name,
+        sublabel: `Intersection · node ${node.id}`,
+        kind: 'intersection' as const,
+        nodeId: node.id,
+      }));
     return { streets, junctions };
-  }, [cityData, nodes]);
+  }, [cityData, nodes, logicalNodeIds]);
 
   const [searchOpen, setSearchOpen] = useState(false);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
@@ -247,7 +254,7 @@ export default function ControlPanel() {
           ))}
         </div>
         <select className={styles.select} aria-label="Origin intersection" value={originNode} onChange={(event) => setOriginNode(Number(event.target.value))}>
-          {nodes.map((node) => {
+          {nodes.filter((node) => logicalNodeIds.has(node.id) || node.id === originNode).map((node) => {
             const isFlooded = node.elevation <= floodLevel * 1.7;
             return <option key={node.id} value={node.id} disabled={isFlooded}>{`Node ${node.id}: ${node.intersection_name}${isFlooded ? ', flooded' : ''}`}</option>;
           })}

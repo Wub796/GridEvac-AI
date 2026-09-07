@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import type * as CesiumType from 'cesium';
 import { useSimulationStore } from '@/hooks/useSimulation';
+import { logicalJunctions } from '@/lib/network';
 import type { BlockData, CityData, EdgeData, NodeData, ParkData, SubstationData } from '@/lib/types';
 
 declare const Cesium: typeof CesiumType;
@@ -1138,8 +1139,21 @@ function renderStaticCity(
     }
   });
 
+  // --- Logical origin set ------------------------------------------------
+  // Only real street junctions deserve a clickable dot: nodes where three or
+  // more roads meet (a place you could actually stand and start a route),
+  // plus the perimeter exits and shelter junctions regardless of degree.
+  // Pure shape points (degree 2, mid-block) and dead ends (degree 1) are
+  // routing geometry, not places anyone would pick as an origin - they get
+  // no dot and no pick target, which also stops taps on empty street from
+  // firing an origin.
+  const exitSet = new Set([...(cityData.safe_exits ?? []), ...Object.keys(EXIT_LABELS).map(Number)]);
+  const { ids: logicalJunctionIds, positions: junctionPositions } = logicalJunctions(cityData, exitSet);
+
   cityData.nodes.forEach((node) => {
+    if (!logicalJunctionIds.has(node.id)) return;
     const isExit = Boolean(EXIT_LABELS[node.id]);
+    const dotPos = junctionPositions.get(node.id) ?? node;
     // Regular intersections render as clearly visible 5px dots at street
     // level (fade past ~2.6 km). Clickability is decoupled from visibility:
     // every node also gets an invisible always-pickable dot, because
@@ -1155,7 +1169,7 @@ function renderStaticCity(
         : 30;
       viewer.entities.add({
         id: `halo-${node.id}`,
-        position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 4),
+        position: Cesium.Cartesian3.fromDegrees(dotPos.lon, dotPos.lat, 4),
         point: {
           pixelSize: haloSize,
           color: Cesium.Color.fromCssColorString('#2ec98a').withAlpha(0.14),
@@ -1167,7 +1181,7 @@ function renderStaticCity(
     }
     const entity = viewer.entities.add({
       id: `node-${node.id}`,
-      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 5),
+      position: Cesium.Cartesian3.fromDegrees(dotPos.lon, dotPos.lat, 5),
       point: {
         pixelSize: beaconSize,
         color: Cesium.Color.fromCssColorString(isExit ? '#2ec98a' : '#5d6f66'),
@@ -1193,7 +1207,7 @@ function renderStaticCity(
     // when its visible dot is hidden (drillPick ignores show:false entities).
     const pickDot = viewer.entities.add({
       id: `pick-node-${node.id}`,
-      position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 5),
+      position: Cesium.Cartesian3.fromDegrees(dotPos.lon, dotPos.lat, 5),
       point: {
         pixelSize: 8,
         color: Cesium.Color.TRANSPARENT,
