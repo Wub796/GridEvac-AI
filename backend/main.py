@@ -10,9 +10,10 @@ from models import (
     CityResponse, NodeData, EdgeData, BlockData, ParkData, SubstationData, TransmissionLink,
     SimulationRequest, RouteResponse, RouteCoord, RouteStep, FloodZoneResponse,
     CorridorComparisonResponse, CorridorInfo, IsochroneResponse, IsochroneRing, CorridorCapacity,
+    ShelterData,
 )
 from city_graph import (
-    _G, _NODES, _BLOCKS, PARKS, _SUBSTATIONS, TRANSMISSION_LINKS,
+    _G, _NODES, _BLOCKS, PARKS, _SUBSTATIONS, TRANSMISSION_LINKS, SHELTERS,
     CENTER_LAT, CENTER_LON, SAFE_EXITS, EXIT_NAMES,
 )
 from routing import compute_route, get_flooded_nodes, FLOOD_RISE_PER_LEVEL, _LINK_EDGES, compare_exit_corridors, compute_isochrone
@@ -66,6 +67,7 @@ async def get_city():
         center_lon=CENTER_LON,
         safe_exits=list(SAFE_EXITS),
         exit_names=dict(EXIT_NAMES),
+        shelters=[ShelterData(**shelter) for shelter in SHELTERS],
     )
 
 
@@ -135,6 +137,8 @@ async def calculate_route(req: SimulationRequest):
         flood_level=req.flood_level,
         failed_substations=req.failed_substations,
         travel_mode=req.travel_mode,
+        evacuees=req.evacuees,
+        destination=req.destination,
     )
     flow = result["power_flow"]
 
@@ -205,6 +209,9 @@ async def calculate_route(req: SimulationRequest):
         surface_temp=surface_temp,
         hazard_roads=hazard_roads,
         corridor_capacity=CorridorCapacity(**result.get("corridor_capacity", {})),
+        congested_eta_minutes=result.get("congested_eta_minutes", 0.0),
+        destination_name=result.get("destination_name", ""),
+        destination_kind=result.get("destination_kind", ""),
     )
 
 
@@ -214,9 +221,10 @@ async def compare_corridors(
     flood_level: float = Query(default=0.0, ge=0.0, le=10.0),
     failed_substations: str = Query(default=""),
     travel_mode: str = Query(default="vehicle"),
+    evacuees: int = Query(default=0, ge=0, le=200_000),
 ):
     failed = [int(x) for x in failed_substations.split(",") if x.strip().lstrip("-").isdigit()]
-    result = compare_exit_corridors(origin, flood_level, failed, travel_mode)
+    result = compare_exit_corridors(origin, flood_level, failed, travel_mode, evacuees)
     return CorridorComparisonResponse(
         origin=origin,
         travel_mode=travel_mode,
@@ -233,16 +241,18 @@ async def isochrone(
     failed_substations: str = Query(default=""),
     travel_mode: str = Query(default="vehicle"),
     minutes: str = Query(default="2,4,6,8"),
+    evacuees: int = Query(default=0, ge=0, le=200_000),
 ):
     failed = [int(x) for x in failed_substations.split(",") if x.strip().lstrip("-").isdigit()]
     ring_minutes = [float(x) for x in minutes.split(",") if x.strip()]
-    result = compute_isochrone(origin, flood_level, failed, travel_mode, ring_minutes or [2, 4, 6, 8])
+    result = compute_isochrone(origin, flood_level, failed, travel_mode, ring_minutes or [2, 4, 6, 8], evacuees)
     return IsochroneResponse(
         origin=origin,
         travel_mode=travel_mode,
         rings=[IsochroneRing(**ring) for ring in result["rings"]],
         flooded_nodes=result["flooded_nodes"],
         blackout_nodes=result["blackout_nodes"],
+        congestion_factor=result.get("congestion_factor", 1.0),
     )
 
 

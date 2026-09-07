@@ -30,6 +30,10 @@ SUBSTATIONS: List[Dict] = NETWORK["substations"]
 TRANSMISSION_LINKS: List[Dict] = NETWORK["transmission_links"]
 SAFE_EXITS: List[int] = NETWORK["safe_exits"]
 EXIT_NAMES: Dict[str, str] = NETWORK.get("exit_names", {})
+# Real evacuation destinations (shelters / medical), snapped to the nearest
+# network junction by tools/bake_shelters.py. Each carries its snap distance
+# so callers can flag placements that drifted off the street network.
+SHELTERS: List[Dict] = NETWORK.get("shelters", [])
 
 _NODES: Dict[int, Dict] = {node["id"]: node for node in NODES}
 

@@ -51,6 +51,20 @@ export interface TransmissionLink {
   to_sub: number;
 }
 
+export interface ShelterData {
+  id: string;
+  name: string;
+  kind: 'shelter' | 'medical';
+  capacity: number;
+  lat: number;
+  lon: number;
+  /** Nearest street-network junction id. */
+  node: number;
+  /** How far the real facility sits from that junction, in meters. */
+  snap_distance_m: number;
+  note: string;
+}
+
 export interface CityData {
   nodes: NodeData[];
   edges: EdgeData[];
@@ -63,6 +77,7 @@ export interface CityData {
   safe_exits: number[];
   /** Quadrant label per exit node id ("North exit", ...). */
   exit_names?: Record<string, string>;
+  shelters?: ShelterData[];
 }
 
 export interface RouteCoord {
@@ -108,6 +123,10 @@ export interface RouteResponse {
   surface_temp: number;
   hazard_roads: Record<string, string>;
   corridor_capacity?: CorridorCapacity;
+  /** Free-flow ETA inflated by the BPR congestion curve for `evacuees`. */
+  congested_eta_minutes: number;
+  destination_name: string;
+  destination_kind: '' | 'shelter' | 'medical';
 }
 
 export interface SimulationParams {
@@ -115,6 +134,8 @@ export interface SimulationParams {
   failed_substations: number[];
   origin_node: number;
   travel_mode?: TravelMode;
+  evacuees?: number;
+  destination?: string | null;
 }
 
 export type TravelMode = 'vehicle' | 'foot' | 'ems';
@@ -127,6 +148,7 @@ export interface CorridorInfo {
   hazard_count: number;
   path_length: number;
   people_per_hour: number;
+  congested_eta_minutes: number;
 }
 
 export interface CorridorCapacity {
@@ -155,4 +177,5 @@ export interface IsochroneResponse {
   rings: IsochroneRing[];
   flooded_nodes: number[];
   blackout_nodes: number[];
+  congestion_factor: number;
 }
