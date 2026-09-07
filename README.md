@@ -55,6 +55,8 @@ bash start.sh
 
 The frontend falls back to the same baked OpenStreetMap network (served from `/data/houston_network.json`) and identical route weighting when the FastAPI service is unavailable. Set `NEXT_PUBLIC_CESIUM_TOKEN` for Cesium World Buildings; the map remains fully usable with the CARTO basemap and baked footprints without a token.
 
+CARTO basemaps now require a free API key (see <https://basemaps.cartocdn.com> — request one with the domain this app runs on, e.g. `https://grid-evac-ai.vercel.app/` or `localhost`). Set `NEXT_PUBLIC_CARTO_API_KEY` in `frontend/.env.local` (and in Vercel's environment variables) and it is appended to the basemap tile URL automatically; keep the CARTO/OpenStreetMap attribution visible as their terms require.
+
 ## Map layers
 
 | Layer | Purpose |

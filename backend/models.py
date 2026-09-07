@@ -7,6 +7,20 @@ class SimulationRequest(BaseModel):
     failed_substations: List[int] = Field(default=[], description="IDs of failed substations")
     origin_node: int = Field(ge=0, le=100000, description="Origin intersection node ID")
     travel_mode: str = Field(default="vehicle", description="vehicle | foot | ems")
+    evacuees: int = Field(default=0, ge=0, le=200_000, description="Evacuating population driving road congestion")
+    destination: Optional[str] = Field(default=None, description="Destination id (shelter/medical) to route to instead of perimeter exits")
+
+
+class ShelterData(BaseModel):
+    id: str
+    name: str
+    kind: str = "shelter"
+    capacity: int
+    lat: float
+    lon: float
+    node: int
+    snap_distance_m: float = 0.0
+    note: str = ""
 
 
 class NodeData(BaseModel):
@@ -71,6 +85,7 @@ class CityResponse(BaseModel):
     center_lon: float
     safe_exits: List[int] = []
     exit_names: Dict[str, str] = {}
+    shelters: List[ShelterData] = []
 
 
 class RouteCoord(BaseModel):
@@ -120,6 +135,9 @@ class RouteResponse(BaseModel):
     surface_temp: float
     hazard_roads: Dict[str, str] = {}
     corridor_capacity: CorridorCapacity = CorridorCapacity()
+    congested_eta_minutes: float = 0.0
+    destination_name: str = ""
+    destination_kind: str = ""
 
 
 class CorridorInfo(BaseModel):
@@ -130,6 +148,7 @@ class CorridorInfo(BaseModel):
     hazard_count: int = 0
     path_length: int = 0
     people_per_hour: int = 0
+    congested_eta_minutes: float = 0.0
 
 
 class CorridorComparisonResponse(BaseModel):
@@ -152,6 +171,7 @@ class IsochroneResponse(BaseModel):
     rings: List[IsochroneRing]
     flooded_nodes: List[int]
     blackout_nodes: List[int]
+    congestion_factor: float = 1.0
 
 
 class FloodZoneResponse(BaseModel):

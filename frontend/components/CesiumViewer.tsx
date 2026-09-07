@@ -24,6 +24,16 @@ const CENTER = { lat: 29.7604, lon: -95.3698 };
 const SAFE_EXITS: Record<number, string> = {};
 const CESIUM_TOKEN = process.env.NEXT_PUBLIC_CESIUM_TOKEN ?? '';
 
+// CARTO basemaps now require an API key (free tier, 5M tile requests/month,
+// attribution must stay visible). Append it as the `key` query parameter when
+// the operator has set NEXT_PUBLIC_CARTO_API_KEY (Vercel env var, .env.local,
+// or .env). Without the key the URL is unchanged, so existing deployments keep
+// working until CARTO's watermark appears; with it, tiles render keyed.
+const CARTO_API_KEY = process.env.NEXT_PUBLIC_CARTO_API_KEY ?? '';
+const CARTO_BASEMAP_URL = CARTO_API_KEY.trim()
+  ? `https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png?key=${encodeURIComponent(CARTO_API_KEY.trim())}`
+  : 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png';
+
 export default function CesiumViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
@@ -48,6 +58,7 @@ export default function CesiumViewer() {
   const blackoutEntitiesRef = useRef<any[]>([]);
   const isochroneEntitiesRef = useRef<any[]>([]);
   const routeEntitiesRef = useRef<any[]>([]);
+  const shelterEntitiesRef = useRef<Map<string, { marker: any; halo: any }>>(new Map());
   const staticRenderedRef = useRef(false);
   const clickHandlerRef = useRef<any>(null);
   const touchHandlersRef = useRef<any>(null);
@@ -72,6 +83,7 @@ export default function CesiumViewer() {
   const originNode = useSimulationStore((state) => state.originNode);
   const flyToNodeId = useSimulationStore((state) => state.flyToNodeId);
   const flyToRoadKey = useSimulationStore((state) => state.flyToRoadKey);
+  const destinationId = useSimulationStore((state) => state.destinationId);
   const isochrone = useSimulationStore((state) => state.isochrone);
   const isochroneVisible = useSimulationStore((state) => state.isochroneVisible);
   const flyToCoords = useSimulationStore((state) => state.flyToCoords);
@@ -135,7 +147,7 @@ export default function CesiumViewer() {
         // glass overlays are the loudest elements on the deep basemap.
         const viewer = new Cesium.Viewer(containerRef.current, {
           baseLayer: new Cesium.ImageryLayer(new Cesium.UrlTemplateImageryProvider({
-            url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png',
+            url: CARTO_BASEMAP_URL,
             subdomains: ['a', 'b', 'c', 'd'],
             credit: '© OpenStreetMap contributors, © CARTO',
             maximumLevel: 19,
@@ -218,6 +230,31 @@ export default function CesiumViewer() {
             const match = /^(?:pick-)?node-(\d+)$/.exec(id);
             return match ? Number(match[1]) : null;
           };
+          // Destinations first: a shelter/medical marker takes priority over
+          // any intersection underneath it. Clicking the active destination
+          // again clears it and returns to the best-exit routing.
+          const shelterIds = new Set(current.cityData?.shelters?.map((shelter) => shelter.id) ?? []);
+          const pickedShelterId = drills
+            .map((item: any) => item?.id?.id ?? item?.id)
+            .find((raw: any): raw is string => typeof raw === 'string' && raw.startsWith('shelter-') && shelterIds.has(raw.slice('shelter-'.length)))
+            ?.slice('shelter-'.length);
+          if (pickedShelterId) {
+            const shelter = current.cityData?.shelters?.find((item) => item.id === pickedShelterId);
+            if (shelter) {
+              if (current.destinationId === shelter.id) {
+                current.setDestination(null);
+                current.addLog('Destination cleared; routing to the best dry perimeter exit.');
+              } else {
+                if (shelter.kind === 'medical' && current.travelMode !== 'ems') {
+                  current.addLog(`${shelter.name} is a medical facility; switch to EMS mode for priority routing.`);
+                }
+                current.setDestination(shelter.id);
+                current.setFlyToNodeId(shelter.node);
+                current.addLog(`Destination: ${shelter.name} (capacity ${shelter.capacity.toLocaleString()}).`);
+              }
+            }
+            return;
+          }
           const pickedNodes = drills
             .map((item: any) => nodeIdFromEntityId(item?.id?.id ?? item?.id))
             .filter((id: any): id is number => id !== null);
@@ -263,6 +300,7 @@ export default function CesiumViewer() {
           },
         });
         let hoveredNodeId: number | null = null;
+        let hoveredShelterId: string | null = null;
         let hoveredRestore: any = null;
         let hoverQueued = false;
         let lastMove: any = null;
@@ -273,16 +311,21 @@ export default function CesiumViewer() {
           requestAnimationFrame(() => {
             hoverQueued = false;
             if (viewer.isDestroyed() || !lastMove) return;
+            const current = useSimulationStore.getState();
+            const shelterIds = new Set(current.cityData?.shelters?.map((shelter) => shelter.id) ?? []);
             const picked = viewer.scene.pick(lastMove.position);
             const pickedId = picked?.id?.id ?? picked?.id;
             const match = typeof pickedId === 'string' ? /^(?:pick-)?node-(\d+)$/.exec(pickedId) : null;
             const hit = match ? Number(match[1]) : null;
-            if (hit === hoveredNodeId) return;
+            const shelterHit = typeof pickedId === 'string' && pickedId.startsWith('shelter-')
+              && shelterIds.has(pickedId.slice('shelter-'.length)) ? pickedId.slice('shelter-'.length) : null;
+            if (hit === hoveredNodeId && shelterHit === hoveredShelterId) return;
             if (hoveredNodeId !== null) {
               const previous = nodeEntities.get(hoveredNodeId);
               if (previous?.point?.color && hoveredRestore) previous.point.color = hoveredRestore;
             }
             hoveredNodeId = hit;
+            hoveredShelterId = shelterHit;
             hoveredRestore = null;
             if (hit !== null) {
               const entity = nodeEntities.get(hit);
@@ -290,17 +333,25 @@ export default function CesiumViewer() {
                 hoveredRestore = entity.point.color;
                 entity.point.color = new Cesium.ConstantProperty(Cesium.Color.fromCssColorString('#a5f3d0'));
               }
-              const node = (useSimulationStore.getState().cityData?.nodes ?? []).find((item) => item.id === hit);
+              const node = current.cityData?.nodes.find((item) => item.id === hit);
               if (node) {
-                const nodeIsExit = new Set(useSimulationStore.getState().cityData?.safe_exits ?? []).has(hit);
+                const nodeIsExit = new Set(current.cityData?.safe_exits ?? []).has(hit);
                 hoverPin.position = new Cesium.ConstantPositionProperty(Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 12));
                 hoverPin.label!.text = new Cesium.ConstantProperty(`${node.intersection_name}${nodeIsExit ? ' · EXIT' : ''}`);
+                hoverPin.label!.show = new Cesium.ConstantProperty(true);
+              }
+            } else if (shelterHit) {
+              const shelter = current.cityData?.shelters?.find((item) => item.id === shelterHit);
+              if (shelter) {
+                hoverPin.position = new Cesium.ConstantPositionProperty(Cesium.Cartesian3.fromDegrees(shelter.lon, shelter.lat, 12));
+                hoverPin.label!.text = new Cesium.ConstantProperty(
+                  `${shelter.name} · ${shelter.capacity.toLocaleString()} capacity · click to route`);
                 hoverPin.label!.show = new Cesium.ConstantProperty(true);
               }
             } else {
               hoverPin.label!.show = new Cesium.ConstantProperty(false);
             }
-            viewer.canvas.style.cursor = hit !== null ? 'pointer' : 'default';
+            viewer.canvas.style.cursor = hit !== null || shelterHit !== null ? 'pointer' : 'default';
             requestFrame(viewer);
           });
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
@@ -336,6 +387,7 @@ export default function CesiumViewer() {
       substationEntities.clear();
       haloEntities.clear();
       pickNodeEntities.clear();
+      shelterEntitiesRef.current.clear();
       buildingEntitiesRef.current = [];
       roadLabelEntitiesRef.current = [];
       transmissionEntitiesRef.current = [];
@@ -365,6 +417,7 @@ export default function CesiumViewer() {
       buildingTilesRef,
       haloEntitiesRef,
       pickNodeEntitiesRef,
+      shelterEntitiesRef,
     });
     playIntroFlight(viewerRef.current);
     requestFrame(viewerRef.current);
@@ -386,6 +439,23 @@ export default function CesiumViewer() {
     if (buildingTilesRef.current) buildingTilesRef.current.show = showBuildings;
     requestFrame(viewer);
   }, [showBuildings, viewerReady]);
+
+  // Active destination highlight: the chosen shelter/medical marker grows
+  // and gains a bright outline so the operator sees exactly where the route
+  // terminates before reading the panel.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !viewerReady || viewer.isDestroyed()) return;
+    shelterEntitiesRef.current.forEach((group, id) => {
+      if (!group.marker?.point) return;
+      const active = destinationId === id;
+      group.marker.point.pixelSize = new Cesium.ConstantProperty(active ? 16 : 12);
+      group.marker.point.outlineWidth = new Cesium.ConstantProperty(active ? 4 : 2.5);
+      group.marker.point.outlineColor = new Cesium.ConstantProperty(
+        Cesium.Color.fromCssColorString(active ? '#eafff5' : '#0b1a15'));
+    });
+    requestFrame(viewer);
+  }, [destinationId, viewerReady]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -962,6 +1032,7 @@ function renderStaticCity(
     buildingTilesRef: MutableRefObject<any>;
     haloEntitiesRef: MutableRefObject<Map<number, any>>;
     pickNodeEntitiesRef: MutableRefObject<Map<number, any>>;
+    shelterEntitiesRef: MutableRefObject<Map<string, { marker: any; halo: any }>>;
   },
 ) {
   const EXIT_LABELS = exitLabelMap(cityData);
@@ -1139,6 +1210,48 @@ function renderStaticCity(
     if (!node) return;
     const group = renderSubstation(viewer, sub, node);
     refs.substationEntitiesRef.current.set(sub.id, group);
+  });
+
+  // Evacuation destinations (shelters / medical) sit at their real facility
+  // coordinates - not the snapped junction - so the marker points at the
+  // building. Gold = shelter, coral = medical; labels appear at street zoom.
+  (cityData.shelters ?? []).forEach((shelter) => {
+    const isMedical = shelter.kind === 'medical';
+    const color = Cesium.Color.fromCssColorString(isMedical ? '#ff9d8a' : '#f5d98c');
+    const halo = viewer.entities.add({
+      id: `shelter-halo-${shelter.id}`,
+      position: Cesium.Cartesian3.fromDegrees(shelter.lon, shelter.lat, 6),
+      point: {
+        pixelSize: 34,
+        color: color.withAlpha(0.16),
+        outlineColor: Cesium.Color.TRANSPARENT,
+        outlineWidth: 0,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+    const marker = viewer.entities.add({
+      id: `shelter-${shelter.id}`,
+      position: Cesium.Cartesian3.fromDegrees(shelter.lon, shelter.lat, 8),
+      point: {
+        pixelSize: 12,
+        color,
+        outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+        outlineWidth: 2.5,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+      label: {
+        text: shelter.name,
+        font: '700 10px DM Mono, monospace',
+        fillColor: color,
+        outlineColor: Cesium.Color.fromCssColorString('#0b1a15'),
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -22),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3800),
+      },
+    });
+    refs.shelterEntitiesRef.current.set(shelter.id, { marker, halo });
   });
 
   cityData.transmission_links.forEach((link) => {

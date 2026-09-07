@@ -13,9 +13,6 @@ const RISK_COLORS: Record<RiskLevel, string> = {
   CRITICAL: '#a8453e',
 };
 
-// Exit labels resolve from the loaded network's intersection names.
-const EXIT_NAMES: Record<number, string> = {};
-
 function formatDistance(meters: number) {
   if (!meters) return '-';
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
@@ -89,6 +86,10 @@ export default function ControlPanel() {
   const setShowRoadNames = useSimulationStore((state) => state.setShowRoadNames);
   const travelMode = useSimulationStore((state) => state.travelMode);
   const setTravelMode = useSimulationStore((state) => state.setTravelMode);
+  const evacuees = useSimulationStore((state) => state.evacuees);
+  const setEvacuees = useSimulationStore((state) => state.setEvacuees);
+  const destinationId = useSimulationStore((state) => state.destinationId);
+  const setDestination = useSimulationStore((state) => state.setDestination);
   const corridorComparison = useSimulationStore((state) => state.corridorComparison);
   const isochrone = useSimulationStore((state) => state.isochrone);
   const isochroneVisible = useSimulationStore((state) => state.isochroneVisible);
@@ -108,11 +109,27 @@ export default function ControlPanel() {
   const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
 
   const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
+  // Node id -> intersection name, for naming the recommended exit in plain
+  // language instead of "Exit node 606".
+  const nodeNameById = useMemo(
+    () => new Map(nodes.map((node) => [node.id, node.intersection_name])),
+    [nodes],
+  );
   const substations = cityData?.substations ?? [];
   const riskLevel = route?.risk_level ?? 'LOW';
   const riskColor = RISK_COLORS[riskLevel];
   const floodedCount = route?.flooded_nodes.length ?? nodes.filter((node) => node.elevation <= floodLevel * 1.7).length;
   const activeSnapshot = snapshots.find((snap) => snap.id === activeSnapshotId) ?? null;
+  // Under evacuation demand the headline ETA is the congested figure; at zero
+  // demand the BPR multiplier is exactly 1.0, so they are identical.
+  const demandActive = evacuees > 0;
+  const effectiveEta = route?.success
+    ? (demandActive && route.congested_eta_minutes > 0 ? route.congested_eta_minutes : route.eta_minutes)
+    : null;
+  const congestionPct = route?.success && demandActive && route.eta_minutes > 0
+    ? Math.max(0, Math.round((route.congested_eta_minutes / route.eta_minutes - 1) * 100))
+    : null;
+  const shelters = cityData?.shelters ?? [];
 
   // Street search: indexes road segments and junctions once per dataset, then
   // answers prefix/substring queries client-side with zero latency.
@@ -245,7 +262,7 @@ export default function ControlPanel() {
             <div className={styles.searchResults} id="map-search-results" role="listbox">
               {searchHits.map((hit) => (
                 <button key={`${hit.kind}-${hit.key}`} role="option" aria-selected={false} className={styles.searchResult} onClick={() => gotoSearchHit(hit)}>
-                  <span className={styles.searchResultKind}>{hit.kind === 'street' ? 'ST' : 'IX'}</span>
+                  <span className={styles.searchResultKind}>{hit.kind === 'street' ? 'ST' : 'JCT'}</span>
                   <span className={styles.searchResultBody}><strong>{hit.label}</strong><small>{hit.sublabel}</small></span>
                 </button>
               ))}
@@ -253,6 +270,20 @@ export default function ControlPanel() {
           )}
         </div>
         <button className={styles.solveButton} onClick={() => void calculateRoute()} disabled={isLoading || !cityData}><span>{isLoading ? 'Recalculating corridor…' : 'Recalculate safe route'}</span><b>↗</b></button>
+      </section>
+
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Evacuation demand</h3></div><span className={styles.sectionHint}>{demandActive ? 'Congestion on' : 'Free flow'}</span></div>
+        <input aria-label="Evacuating population" className={styles.slider} type="range" min="0" max="100000" step="1000" value={evacuees} onChange={(event) => setEvacuees(Number(event.target.value))} style={{ '--fill': `${Math.min(100, evacuees / 1000)}%` } as CSSProperties} />
+        <div className={styles.sliderLabels}><span>0</span><span>{evacuees.toLocaleString()}{evacuees ? ' people' : ' people leaving'}</span><span>100k</span></div>
+        <div className={styles.demandPresets}>
+          {([[0, 'None'], [10000, '10k'], [25000, '25k'], [50000, '50k'], [100000, '100k']] as const).map(([value, label]) => (
+            <button key={value} className={evacuees === value ? styles.demandPresetActive : ''} onClick={() => setEvacuees(value)} aria-pressed={evacuees === value}>{label}</button>
+          ))}
+        </div>
+        {congestionPct !== null && (
+          <p className={styles.congestionNote}>Local travel times run <b>~{congestionPct}% longer</b> than free flow with {evacuees.toLocaleString()} people on the network.</p>
+        )}
       </section>
 
       <section className={styles.controlSection}>
@@ -275,7 +306,7 @@ export default function ControlPanel() {
       </section>
 
       <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Map layers</h3></div><span className={styles.sectionHint}>Live canvas</span></div>
+        <div className={styles.sectionHeading}><div><h3>Map layers</h3></div><span className={styles.sectionHint}>Toggle visibility</span></div>
         <div className={styles.toggleGrid}>
           <label><input type="checkbox" checked={showBuildings} onChange={(event) => setShowBuildings(event.target.checked)} /><span>Block footprints</span></label>
           <label><input type="checkbox" checked={showRoadNames} onChange={(event) => setShowRoadNames(event.target.checked)} /><span>Road labels</span></label>
@@ -289,7 +320,7 @@ export default function ControlPanel() {
 
       <section className={styles.routeSummary}>
         <div className={styles.routeSummaryTop}><div><p className={styles.kicker}>Current recommendation</p><h3 style={{ color: riskColor }}>{route?.success ? 'PASSABLE CORRIDOR' : route ? 'NO PASSABLE ROUTE' : 'AWAITING ASSESSMENT'}</h3></div><span className={styles.riskMark} style={{ color: riskColor }}>{route ? riskLevel : '-'}</span></div>
-        <div className={styles.summaryGrid}><span><b>{route?.success ? `${route.eta_minutes.toFixed(1)} min` : '-'}</b><small>estimated time</small></span><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b><small>street distance</small></span><span><b>{floodedCount}</b><small>flooded nodes</small></span><span><b>{route?.blocked_edges.length ?? 0}</b><small>closures</small></span></div>
+        <div className={styles.summaryGrid}><span><b>{effectiveEta !== null ? `${effectiveEta.toFixed(1)} min` : '-'}</b><small>{demandActive && effectiveEta !== null ? `with demand · ${route!.eta_minutes.toFixed(1)} free` : 'estimated time'}</small></span><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b><small>street distance</small></span><span><b>{floodedCount}</b><small>flooded nodes</small></span><span><b>{route?.blocked_edges.length ?? 0}</b><small>closures</small></span></div>
         {route?.corridor_capacity && route.corridor_capacity.people_per_hour > 0 && (
           <div className={styles.capacityStrip}>
             <span><b>{route.corridor_capacity.people_per_hour.toLocaleString()}</b><small>people/hour</small></span>
@@ -298,22 +329,53 @@ export default function ControlPanel() {
           </div>
         )}
         {route?.success && <div className={styles.stepList}>{route.route_steps.slice(0, 4).map((step, index) => <div className={styles.stepRow} key={`${step.from_node}-${step.to_node}`}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><small>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min</small></div></div>)}</div>}
-        {route?.success && <p className={styles.destination}>{EXIT_NAMES[route.dest_node] ?? `Exit node ${route.dest_node}`}. {route.message}</p>}
+        {route?.success && <p className={styles.destination}>{route.destination_name
+          ? `${route.destination_name} (${route.destination_kind === 'medical' ? 'medical facility' : 'shelter'}). ${route.message}`
+          : `Exit via ${nodeNameById.get(route.dest_node) ?? `node ${route.dest_node}`}. ${route.message}`}</p>}
         {route && <button className={styles.clearButton} onClick={clearRoute}>Clear route overlay</button>}
       </section>
 
       <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Exit corridors</h3></div><span className={styles.sectionHint}>{corridorComparison?.corridors.length ?? 0} ranked</span></div>
+        <div className={styles.sectionHeading}><div><h3>Destinations</h3></div><span className={styles.sectionHint}>{shelters.length} real facilities</span></div>
+        <div className={styles.destinationList}>
+          {shelters.map((shelter) => {
+            const active = destinationId === shelter.id;
+            const routed = Boolean(route?.success && route.destination_name === shelter.name);
+            const kindLabel = shelter.kind === 'medical' ? 'MED' : 'SHELTER';
+            return (
+              <button key={shelter.id} aria-pressed={active}
+                className={`${styles.destinationRow} ${active ? styles.destinationActive : ''}`}
+                onClick={() => setDestination(active ? null : shelter.id)}>
+                <span className={`${styles.destinationKind} ${shelter.kind === 'medical' ? styles.destinationKindMedical : ''}`}>{kindLabel}</span>
+                <span className={styles.destinationBody}>
+                  <strong>{shelter.name}</strong>
+                  <small>{shelter.note} · {shelter.capacity.toLocaleString()} capacity</small>
+                </span>
+                <span className={styles.destinationEta}>
+                  {routed && effectiveEta !== null ? `${effectiveEta.toFixed(1)} min` : active ? '…' : ''}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className={styles.destinationHint}>Click a destination to route there instead of the perimeter exits; click again to clear. Medical facilities route in any mode, but EMS honors priority.</p>
+      </section>
+
+      <section className={styles.controlSection}>
+        <div className={styles.sectionHeading}><div><h3>Exit corridors</h3></div><span className={styles.sectionHint}>{corridorComparison?.corridors.length ?? 0} · best first</span></div>
         <div className={styles.corridorList}>
           {(corridorComparison?.corridors ?? []).map((corridor, index) => {
             const isChosen = route?.success && route.dest_node === corridor.exit_node;
             const isFastest = index === 0;
-            return <button key={corridor.exit_node}
+            return <button key={corridor.exit_node} title="Fly to this exit on the map" aria-label={`Fly to ${corridor.exit_name}`}
               className={`${styles.corridorRow} ${isChosen ? styles.corridorChosen : ''}`}
               onClick={() => setFlyToNodeId(corridor.exit_node)}>
               <span className={`${styles.corridorRank} ${isFastest ? styles.corridorRankBest : ''}`}>{String(index + 1).padStart(2, '0')}</span>
               <span className={styles.corridorBody}><strong>{corridor.exit_name}</strong><small>{formatDistance(corridor.distance_m)} · {corridor.hazard_count} hazard{corridor.hazard_count === 1 ? '' : 's'} · {corridor.people_per_hour.toLocaleString()} ppl/hr</small></span>
-              <span className={styles.corridorEta}>{corridor.eta_minutes.toFixed(1)}<small> min</small></span>
+              <span className={styles.corridorEta}>
+                {demandActive && corridor.congested_eta_minutes > 0 ? corridor.congested_eta_minutes.toFixed(1) : corridor.eta_minutes.toFixed(1)}
+                <small>{demandActive && corridor.congested_eta_minutes > 0 ? `${corridor.eta_minutes.toFixed(1)} free` : 'min'}</small>
+              </span>
             </button>;
           })}
           {!corridorComparison && <p className={styles.corridorEmpty}>Load a scenario to rank every perimeter exit.</p>}
@@ -335,7 +397,7 @@ export default function ControlPanel() {
       </section>
 
       <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Scenario snapshots</h3></div><span className={styles.sectionHint}>{snapshots.length} saved</span></div>
+        <div className={styles.sectionHeading}><div><h3>Scenario snapshots</h3></div><span className={styles.sectionHint}>{snapshots.length} stored locally</span></div>
         <div className={styles.snapshotRow}>
           <input className={styles.snapshotInput} type="text" maxLength={28} placeholder="Name this scenario…" value={snapshotLabel} onChange={(event) => setSnapshotLabel(event.target.value)} aria-label="Snapshot name" />
           <button className={styles.smallButton} onClick={() => { saveSnapshot(snapshotLabel); setSnapshotLabel(''); }}>Save</button>

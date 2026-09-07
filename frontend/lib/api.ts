@@ -23,22 +23,24 @@ export const api = {
       failed_substations: params.failed_substations,
       origin_node:        params.origin_node,
       travel_mode:        params.travel_mode ?? 'vehicle',
+      evacuees:           params.evacuees ?? 0,
+      destination:        params.destination ?? null,
     });
     return data;
   },
 
   /** Rank every perimeter exit corridor from one origin */
-  compareCorridors: async (origin: number, floodLevel: number, failed: number[], mode: TravelMode): Promise<CorridorComparisonResponse> => {
+  compareCorridors: async (origin: number, floodLevel: number, failed: number[], mode: TravelMode, evacuees = 0): Promise<CorridorComparisonResponse> => {
     const { data } = await http.get<CorridorComparisonResponse>('/api/compare-corridors', {
-      params: { origin, flood_level: floodLevel, failed_substations: failed.join(','), travel_mode: mode },
+      params: { origin, flood_level: floodLevel, failed_substations: failed.join(','), travel_mode: mode, evacuees },
     });
     return data;
   },
 
   /** Street-network reachability rings from an origin */
-  isochrone: async (origin: number, floodLevel: number, failed: number[], mode: TravelMode, minutes: number[]): Promise<IsochroneResponse> => {
+  isochrone: async (origin: number, floodLevel: number, failed: number[], mode: TravelMode, minutes: number[], evacuees = 0): Promise<IsochroneResponse> => {
     const { data } = await http.get<IsochroneResponse>('/api/isochrone', {
-      params: { origin, flood_level: floodLevel, failed_substations: failed.join(','), travel_mode: mode, minutes: minutes.join(',') },
+      params: { origin, flood_level: floodLevel, failed_substations: failed.join(','), travel_mode: mode, minutes: minutes.join(','), evacuees },
     });
     return data;
   },

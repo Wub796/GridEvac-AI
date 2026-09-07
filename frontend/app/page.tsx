@@ -175,6 +175,8 @@ export default function HomePage() {
     isLoading,
     floodLevel,
     travelMode,
+    evacuees,
+    destinationId,
     corridorComparison,
     addLog,
   } = useSimulationStore();
@@ -237,6 +239,9 @@ export default function HomePage() {
 
   const totalOutages = new Set([...failedSubstations, ...cascadedSubstations]).size;
   const risk = route?.risk_level ?? 'LOW';
+  const etaShown = route?.success
+    ? (evacuees > 0 && route.congested_eta_minutes > 0 ? route.congested_eta_minutes : route.eta_minutes)
+    : (route?.eta_minutes ?? 0);
   const riskLabel = risk === 'LOW' ? 'Operational' : risk === 'MEDIUM' ? 'Elevated' : risk === 'HIGH' ? 'High risk' : 'Critical';
   const nodesById = useMemo(() => new Map((cityData?.nodes ?? []).map((node) => [node.id, node])), [cityData]);
   const origin = nodesById.get(originNode);
@@ -246,12 +251,14 @@ export default function HomePage() {
   // an operator can hand the exact scenario to another responder.
   const shareScenario = () => {
     if (typeof window === 'undefined') return;
-    const params = new URLSearchParams({
-      origin: String(originNode),
-      flood: floodLevel.toFixed(1),
-      mode: travelMode,
-    });
-    if (failedSubstations.length) params.set('failed', failedSubstations.join(','));
+  const params = new URLSearchParams({
+    origin: String(originNode),
+    flood: floodLevel.toFixed(1),
+    mode: travelMode,
+  });
+  if (failedSubstations.length) params.set('failed', failedSubstations.join(','));
+  if (evacuees > 0) params.set('evacuees', String(evacuees));
+  if (destinationId) params.set('dest', destinationId);
     const url = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
     void navigator.clipboard?.writeText(url).then(
       () => addLog('Scenario link copied to clipboard.'),
@@ -264,17 +271,20 @@ export default function HomePage() {
   const exportBriefing = () => {
     if (typeof window === 'undefined' || !route) return;
     const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const etaShown = evacuees > 0 && route.congested_eta_minutes > 0 ? route.congested_eta_minutes : route.eta_minutes;
+    const destinationLabel = route.destination_name || destination?.intersection_name || `Node ${route.dest_node}`;
     const lines = [
       `GridEvac AI - OPERATOR BRIEFING - ${stamp} CST`,
       `Origin: ${origin?.intersection_name ?? `Node ${originNode}`}`,
-      `Scenario: flood ${floodLevel.toFixed(1)}/10, ${failedSubstations.length} substation(s) offline, mode ${travelMode}`,
-      `Recommendation: ${route.success ? `evacuate via ${destination?.intersection_name ?? `Node ${route.dest_node}`}` : 'NO PASSABLE CORRIDOR'}`,
-      route.success ? `ETA ${route.eta_minutes.toFixed(1)} min over ${formatDistance(route.distance_m)} (${route.route_steps.length} road segments)` : `Reason: ${route.message}`,
+      `Scenario: flood ${floodLevel.toFixed(1)}/10, ${failedSubstations.length} substation(s) offline, mode ${travelMode}${evacuees ? `, ${evacuees.toLocaleString()} evacuating` : ''}`,
+      `Destination: ${route.destination_name ? `${route.destination_name} (${route.destination_kind})` : 'best dry perimeter exit'}`,
+      `Recommendation: ${route.success ? `evacuate via ${destinationLabel}` : 'NO PASSABLE CORRIDOR'}`,
+      route.success ? `ETA ${etaShown.toFixed(1)} min${evacuees > 0 && route.congested_eta_minutes > 0 ? ` (${route.eta_minutes.toFixed(1)} free-flow)` : ''} over ${formatDistance(route.distance_m)} (${route.route_steps.length} road segments)` : `Reason: ${route.message}`,
       `Risk: ${route.risk_level} (anomaly ${route.anomaly_score.toFixed(2)}), grid ${route.grid_frequency.toFixed(2)} Hz`,
       route.corridor_capacity?.people_per_hour ? `Capacity: ${route.corridor_capacity.people_per_hour.toLocaleString()} people/hour (bottleneck: ${route.corridor_capacity.limiting_road}), ~${route.corridor_capacity.clearance_minutes.toFixed(0)} min clearance` : '',
       `Flooded intersections: ${route.flooded_nodes.length}, blackout grid cells: ${route.blackout_nodes.length}`,
       ...route.route_steps.slice(0, 6).map((step, i) => `  ${i + 1}. ${step.instruction} (${formatDistance(step.distance_m)})`),
-      corridorComparison?.corridors.length ? `Alternate exits: ${corridorComparison.corridors.slice(1, 4).map((c) => `${c.exit_name} ${c.eta_minutes.toFixed(1)} min, ${c.people_per_hour.toLocaleString()} ppl/hr`).join('; ') || 'none ranked'}` : '',
+      corridorComparison?.corridors.length ? `Alternate exits: ${corridorComparison.corridors.slice(1, 4).map((c) => `${c.exit_name} ${(evacuees > 0 && c.congested_eta_minutes > 0 ? c.congested_eta_minutes : c.eta_minutes).toFixed(1)} min, ${c.people_per_hour.toLocaleString()} ppl/hr`).join('; ') || 'none ranked'}` : '',
     ].filter(Boolean);
     const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -344,7 +354,7 @@ export default function HomePage() {
             </Reveal>
 
             <div className="metric-grid">
-              <Reveal><article className="metric-card metric-card-route"><div className="metric-top"><span>Recommended ETA</span><span className="metric-status green">ROAD-AWARE</span></div><strong className="metric-figure">{route?.success ? <TweenNumber value={route.eta_minutes} decimals={1} /> : '-'}<small>{route?.success ? ' min' : ' pending'}</small></strong><div className="metric-caption">{destination ? `To ${destination.intersection_name}` : 'Run a route assessment to begin'}</div></article></Reveal>
+              <Reveal><article className="metric-card metric-card-route"><div className="metric-top"><span>Recommended ETA</span><span className={`metric-status ${evacuees > 0 ? 'amber' : 'green'}`}>{evacuees > 0 ? 'WITH DEMAND' : 'ROAD-AWARE'}</span></div><strong className="metric-figure">{route?.success ? <TweenNumber value={etaShown} decimals={1} /> : '-'}<small>{route?.success ? ' min' : ' pending'}</small></strong><div className="metric-caption">{route?.success ? (route.destination_name ? `To ${route.destination_name}` : destination ? `To ${destination.intersection_name}` : '') + (evacuees > 0 && route.congested_eta_minutes > 0 ? ` · ${route.eta_minutes.toFixed(1)} min free flow` : '') : 'Run a route assessment to begin'}</div></article></Reveal>
               <Reveal><article className="metric-card"><div className="metric-top"><span>Street distance</span><span className="metric-status green">{route?.success ? 'VALIDATED' : 'READY'}</span></div><strong>{route?.success ? formatDistance(route.distance_m) : '-'}<small>{route?.success ? '' : ' route'}</small></strong><div className="metric-caption">Weighted by road class, hazards, and access</div></article></Reveal>
               <Reveal><article className="metric-card"><div className="metric-top"><span>Grid frequency</span><span className={`metric-status ${gridFrequency < 59.7 ? 'red' : 'green'}`}>{gridFrequency < 59.7 ? 'DEGRADED' : 'STABLE'}</span></div><strong className="metric-figure"><TweenNumber value={gridFrequency} decimals={2} /><small> Hz</small></strong><Sparkline data={frequencyHistory} width={170} height={32} stroke={gridFrequency < 59.7 ? '#a8453e' : '#157050'} /><div className="metric-caption">Live utility telemetry · target 60.00 Hz</div></article></Reveal>
               <Reveal><article className="metric-card"><div className="metric-top"><span>Network impact</span><span className={`metric-status ${totalOutages ? 'amber' : 'green'}`}>{totalOutages ? 'WATCH' : 'CLEAR'}</span></div><strong>{String(totalOutages).padStart(2, '0')}<small> outages</small></strong><div className="impact-bar"><i style={{ width: `${Math.min(100, totalOutages * 16 + overloadedSubstations.length * 10)}%` }} /></div><div className="metric-caption">{overloadedSubstations.length} overloaded · {cascadedSubstations.length} cascaded</div></article></Reveal>
@@ -363,14 +373,14 @@ export default function HomePage() {
               <div className="map-console">
                 <CesiumViewer />
                 <div className="map-overlay map-overlay-top"><span className="live-dot" /> STREET NETWORK <b>·</b> {cityData?.edges.length ?? 0} street segments, {cityData?.blocks.length ?? 0} buildings</div>
-                <div className="map-overlay map-overlay-instruction"><strong>Map interaction</strong><span>Click a dry intersection to set a new origin</span></div>
-                <div className="map-legend"><span><i className="legend-line route" /> Recommended route</span><span><i className="legend-line arterial" /> Arterial</span><span><i className="legend-line local" /> Street</span><span><i className="legend-line hazard" /> Hazard / closure</span><span><i className="legend-dot flood" /> Flood cell</span></div>
+                <div className="map-overlay map-overlay-instruction"><strong>Map interaction</strong><span>Dry intersection = origin · gold marker = destination</span></div>
+                <div className="map-legend"><span><i className="legend-line route" /> Recommended route</span><span><i className="legend-line arterial" /> Arterial</span><span><i className="legend-line local" /> Street</span><span><i className="legend-line hazard" /> Hazard / closure</span><span><i className="legend-dot flood" /> Flood cell</span><span><i className="legend-dot shelter" /> Destination</span></div>
                 <TelemetryReadout />
                 <ControlPanel />
               </div>
             </Reveal>
 
-            <Reveal className="map-bottom-grid"><div className="map-stat"><span>Origin</span><strong>{origin ? `Node ${origin.id}` : '-'}</strong><small>{origin?.intersection_name ?? 'Select a dry intersection'}</small></div><div className="map-stat"><span>Destination</span><strong>{destination ? `Node ${destination.id}` : 'Awaiting route'}</strong><small>{destination?.intersection_name ?? 'Safest exit is calculated'}</small></div><div className="map-stat"><span>Corridor state</span><strong className={`risk-${risk.toLowerCase()}`}>{route?.success ? 'Passable' : 'Unresolved'}</strong><small>{route?.route_steps.length ?? 0} named road segments</small></div><div className="map-stat"><span>Flood exposure</span><strong>{route?.flooded_nodes.length ?? 0} nodes</strong><small>Threshold responds to slider</small></div></Reveal>
+            <Reveal className="map-bottom-grid"><div className="map-stat"><span>Origin</span><strong>{origin ? `Node ${origin.id}` : '-'}</strong><small>{origin?.intersection_name ?? 'Select a dry intersection'}</small></div>              <div className="map-stat"><span>Destination</span><strong>{route?.destination_name ? route.destination_name : destination ? `Node ${destination.id}` : 'Awaiting route'}</strong><small>{route?.destination_name ? (route.destination_kind === 'medical' ? 'Medical facility destination' : 'Shelter destination') : destination?.intersection_name ?? 'Safest exit is calculated'}</small></div><div className="map-stat"><span>Corridor state</span><strong className={`risk-${risk.toLowerCase()}`}>{route?.success ? 'Passable' : 'Unresolved'}</strong><small>{route?.route_steps.length ?? 0} named road segments</small></div><div className="map-stat"><span>Flood exposure</span><strong>{route?.flooded_nodes.length ?? 0} nodes</strong><small>Threshold responds to slider</small></div></Reveal>
           </section>
 
           <section className="audit-section" data-section="audit">

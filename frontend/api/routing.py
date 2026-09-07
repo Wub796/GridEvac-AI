@@ -11,6 +11,7 @@ from city_graph import (
     _NODES,
     _SUBSTATIONS,
     SAFE_EXITS,
+    SHELTERS,
     TRANSMISSION_LINKS,
 )
 
@@ -18,6 +19,22 @@ FLOOD_BLOCK = 999_999.0
 PARTIAL_FLOOD_WEIGHT = 180.0
 BLACKOUT_MULT = 4.5
 FLOOD_RISE_PER_LEVEL = 1.7
+
+# Bureau of Public Roads congestion curve (standard traffic theory):
+# t = t0 * (1 + alpha * (V/C)^beta), V = evacuating volume, C = corridor
+# throughput. At V/C = 1 travel time inflates 15%; at V/C = 2 it roughly
+# doubles. This is the "everyone leaves at once" answer to the operator's
+# question: free-flow ETA vs the ETA under real evacuation demand.
+BPR_ALPHA = 0.15
+BPR_BETA = 4.0
+
+
+def _bpr_multiplier(volume: float, capacity: float) -> float:
+    """Congestion factor from evacuating volume against district throughput."""
+    if capacity <= 0:
+        return 50.0
+    ratio = max(0.0, volume / capacity)
+    return 1.0 + BPR_ALPHA * (ratio ** BPR_BETA)
 
 # Travel-mode profiles: seconds-per-edge are derived from each segment's real
 # speed limit, then adjusted by how the mode interacts with road classes and
@@ -380,8 +397,29 @@ def _corridor_capacity(path: List[int], graph: nx.Graph) -> Dict:
     }
 
 
-def compute_route(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle") -> Dict:
-    """Find the lowest-risk, lowest-time route to the best dry perimeter exit."""
+def _district_throughput(paths: Dict[int, List[int]], graph: nx.Graph, dry_exits: List[int]) -> float:
+    """Sum of people/hour across every dry exit corridor from one Dijkstra.
+
+    Evacuating demand is distributed across all usable corridors, so the
+    congestion denominator is the district's total lane throughput rather than
+    any single corridor's capacity.
+    """
+    total = 0.0
+    for exit_node in dry_exits:
+        path = paths.get(exit_node)
+        if path:
+            total += _corridor_capacity(path, graph)["people_per_hour"]
+    return total
+
+
+def compute_route(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle", evacuees: int = 0, destination: Optional[str] = None) -> Dict:
+    """Find the lowest-risk, lowest-time route to the best dry perimeter exit,
+    or to a named evacuation destination (shelter / medical) when requested.
+
+    When evacuees > 0 the free-flow ETA is inflated with the BPR congestion
+    curve against the district's total corridor throughput, so the operator
+    sees the difference between "one car" and "everyone leaving at once".
+    """
     flooded = get_flooded_nodes(flood_level)
     flow = simulate_power_flow(failed_substations)
     blackout = flow["blackout_nodes"]
@@ -395,21 +433,36 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
     dead_edges, overloaded_edges = _hazard_edge_sets(flow)
     graph, blocked_edges = _build_weighted_graph(flooded, blackout, dead_edges, overloaded_edges, mode_cfg)
 
+    shelter = None
+    if destination:
+        shelter = next((s for s in SHELTERS if s["id"] == destination), None)
+        if shelter is None:
+            return _failure(f"Destination \"{destination}\" is not a known shelter or medical facility.", flooded, blackout, [], flow)
+
     # One multi-target Dijkstra prices every dry exit in a single pass; the
     # previous loop ran a full shortest-path solve per exit (4x the work).
     dry_exits = [e for e in SAFE_EXITS if e not in flooded]
     best_path: List[int] = []
     best_weight = float("inf")
     best_exit = -1
-    if dry_exits and origin in graph:
+    paths: Dict[int, List[int]] = {}
+    if origin in graph:
         distances, paths = nx.single_source_dijkstra(graph, source=origin, weight="weight")
-        for exit_node in dry_exits:
-            weight = distances.get(exit_node)
-            if weight is None or weight >= best_weight:
-                continue
-            best_path, best_weight, best_exit = paths[exit_node], weight, exit_node
+        if shelter is not None:
+            target = shelter["node"]
+            weight = distances.get(target)
+            if weight is not None:
+                best_path, best_weight, best_exit = paths[target], weight, target
+        else:
+            for exit_node in dry_exits:
+                weight = distances.get(exit_node)
+                if weight is None or weight >= best_weight:
+                    continue
+                best_path, best_weight, best_exit = paths[exit_node], weight, exit_node
 
     if not best_path:
+        if shelter is not None:
+            return _failure(f"No passable route to {shelter['name']}. Floodwater and utility hazards have isolated this start point.", flooded, blackout, blocked_edges, flow)
         return _failure("No passable route found. Floodwater and utility hazards have isolated this start point.", flooded, blackout, blocked_edges, flow)
 
     # Interleave each edge's curve geometry so the drawn route follows the
@@ -435,10 +488,23 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
     eta_minutes = round(best_weight / 60.0, 1)
     capacity = _corridor_capacity(best_path, graph)
 
-    exit_name = f"Exit Node {best_exit}"
-    dest_intersection = _NODES[best_exit]["intersection_name"]
-    if dest_intersection and dest_intersection != "Intersection":
-        exit_name = dest_intersection
+    # Congestion: evacuating demand against the district's total throughput.
+    # At evacuees = 0 the multiplier is exactly 1.0, so offline and online
+    # free-flow results are unchanged.
+    throughput = _district_throughput(paths, graph, dry_exits)
+    congested_eta_minutes = round(eta_minutes * _bpr_multiplier(float(evacuees), throughput), 1)
+
+    destination_name = ""
+    destination_kind = ""
+    if shelter is not None:
+        exit_name = shelter["name"]
+        destination_name = shelter["name"]
+        destination_kind = shelter["kind"]
+    else:
+        exit_name = f"Exit Node {best_exit}"
+        dest_intersection = _NODES[best_exit]["intersection_name"]
+        if dest_intersection and dest_intersection != "Intersection":
+            exit_name = dest_intersection
 
     return {
         "success": True,
@@ -449,6 +515,9 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
         "eta_minutes": eta_minutes,
         "route_steps": route_steps,
         "corridor_capacity": capacity,
+        "congested_eta_minutes": congested_eta_minutes,
+        "destination_name": destination_name,
+        "destination_kind": destination_kind,
         "message": f"Safest street corridor mapped to {exit_name} with {len(route_steps)} road segments.",
         "flooded_nodes": sorted(flooded),
         "blackout_nodes": sorted(blackout),
@@ -458,12 +527,13 @@ def compute_route(origin: int, flood_level: float, failed_substations: List[int]
     }
 
 
-def compare_exit_corridors(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle") -> Dict:
+def compare_exit_corridors(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle", evacuees: int = 0) -> Dict:
     """Solve one Dijkstra per dry perimeter exit and rank every corridor.
 
     Operators rarely care about the single best exit; they want to know how
     much worse the second-best is, and whether two corridors stay separated.
     All exits share one hazard model, so comparison is apples-to-apples.
+    Each corridor carries a congested ETA for the evacuating population.
     """
     flooded = get_flooded_nodes(flood_level)
     flow = simulate_power_flow(failed_substations)
@@ -504,26 +574,51 @@ def compare_exit_corridors(origin: int, flood_level: float, failed_substations: 
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 continue
     corridors.sort(key=lambda c: c["eta_minutes"])
+
+    # Congestion inflates every corridor by the same BPR factor because demand
+    # spreads across the district's total throughput - the ranking stays
+    # honest while each ETA answers "how long under full evacuation".
+    total_throughput = sum(c["people_per_hour"] for c in corridors)
+    factor = _bpr_multiplier(float(evacuees), total_throughput)
+    for corridor in corridors:
+        corridor["congested_eta_minutes"] = round(corridor["eta_minutes"] * factor, 1)
     return {"corridors": corridors, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
 
 
-def compute_isochrone(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle", minutes: List[float] = None) -> Dict:
+def compute_isochrone(origin: int, flood_level: float, failed_substations: List[int], travel_mode: str = "vehicle", minutes: List[float] = None, evacuees: int = 0) -> Dict:
     """Street-network reachability rings: which junctions are reachable in N minutes.
 
     Uses the same weighted graph as routing, so "5 minutes on foot" means the
     same thing as a 5-minute foot route. This is the evacuation-planning
     equivalent of a transit walk-shed, and the natural "who can get out" view.
+    Under evacuation demand the whole network slows by the BPR congestion
+    factor, so the rings honestly shrink when everyone leaves at once.
     """
     minutes = minutes or [2, 4, 6, 8]
     flooded = get_flooded_nodes(flood_level)
     flow = simulate_power_flow(failed_substations)
     blackout = flow["blackout_nodes"]
     if origin not in _NODES:
-        return {"origin": origin, "rings": [], "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
+        return {"origin": origin, "rings": [], "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout), "congestion_factor": 1.0}
 
     mode_cfg = TRAVEL_MODES.get(travel_mode, TRAVEL_MODES["vehicle"])
     dead_edges, overloaded_edges = _hazard_edge_sets(flow)
     graph, _ = _build_weighted_graph(flooded, blackout, dead_edges, overloaded_edges, mode_cfg)
+
+    # District throughput from every dry exit corridor, then scale all edge
+    # weights by the congestion factor so the rings reflect demand.
+    dry_exits = [e for e in SAFE_EXITS if e not in flooded]
+    throughput = 0.0
+    if dry_exits and origin in graph:
+        try:
+            _, paths = nx.single_source_dijkstra(graph, source=origin, weight="weight")
+            throughput = _district_throughput(paths, graph, dry_exits)
+        except nx.NetworkXError:
+            throughput = 0.0
+    factor = _bpr_multiplier(float(evacuees), throughput)
+    if factor != 1.0:
+        for u, v in graph.edges():
+            graph[u][v]["weight"] *= factor
 
     seconds_limit = [m * 60.0 for m in sorted(minutes)]
     try:
@@ -535,4 +630,4 @@ def compute_isochrone(origin: int, flood_level: float, failed_substations: List[
     for limit in seconds_limit:
         nodes = [node_id for node_id, cost in distances.items() if cost <= limit]
         rings.append({"minutes": round(limit / 60.0, 1), "node_count": len(nodes), "nodes": nodes})
-    return {"origin": origin, "rings": rings, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
+    return {"origin": origin, "rings": rings, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout), "congestion_factor": round(factor, 2)}

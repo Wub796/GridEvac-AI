@@ -57,6 +57,22 @@ const STEPS = [
     ),
   },
   {
+    title: 'Route to a real destination',
+    content: (
+      <>
+        Gold markers are real Houston evacuation facilities: <strong>GRB Convention Center, UH-Downtown, Metropolitan Multi-Service Center</strong>, and <strong>St. Joseph Medical Center</strong> (coral, EMS-focused). Click one to route there instead of the perimeter exits - click again to clear.
+      </>
+    ),
+  },
+  {
+    title: 'Model evacuation demand',
+    content: (
+      <>
+        The <strong>Evacuation demand</strong> slider sets how many people leave at once. ETAs inflate with real traffic theory (BPR congestion) - every corridor and reachability ring responds, so you can answer &ldquo;how bad is it when everyone leaves at the same time?&rdquo;
+      </>
+    ),
+  },
+  {
     title: 'Share and export',
     content: (
       <>
