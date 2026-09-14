@@ -211,7 +211,29 @@
 .input:focus, .select:focus { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-soft); }
 .select { margin-top: 6px; }
 
-.search { position: relative; display: flex; align-items: center; }
+.locateButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(139, 150, 255, 0.45);
+  border-radius: var(--radius-m);
+  background: rgba(139, 150, 255, 0.1);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  transition: background var(--dur-2), border-color var(--dur-2), transform var(--dur-2) var(--ease-out);
+}
+.locateButton svg { color: var(--you); }
+.locateButton:hover:not(:disabled) { border-color: var(--you); background: rgba(139, 150, 255, 0.18); }
+.locateButton:active:not(:disabled) { transform: scale(0.98); }
+.locateButton[aria-busy='true'] svg { animation: locate-spin 1.2s linear infinite; }
+@keyframes locate-spin { to { transform: rotate(360deg); } }
+.locateFollow { margin: 4px 0 8px; }
+.search { position: relative; display: flex; align-items: center; margin-top: 8px; }
 .search > svg { position: absolute; left: 11px; color: var(--ink-3); pointer-events: none; }
 .search .input { padding-left: 32px; }
 .results {

@@ -10,7 +10,7 @@ const STEPS: Array<{ title: string; body: ReactNode }> = [
   },
   {
     title: 'Set where people start',
-    body: <>Click a dry junction on the map or search for a street. Vehicle routes obey one-way streets; on-foot routes use sidewalks in both directions.</>,
+    body: <>Choose <strong>Use my location</strong> to start from the nearest passable street to you, or click a dry junction on the map. Vehicle routes obey one-way streets; on-foot routes use sidewalks in both directions. Your location stays in the browser.</>,
   },
   {
     title: 'Close streets you know are blocked',

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api, type ScenarioQuery } from '@/lib/api';
 import type { OperatorEvent } from '@/lib/exports';
+import { snapToNetwork, type DeviceFix, type SnapResult } from '@/lib/locate';
 import { logicalJunctions } from '@/lib/network';
 import { fetchObservations } from '@/lib/observations';
 import {
@@ -63,6 +64,9 @@ export type Section = 'briefing' | 'map' | 'audit';
 export type Basemap = 'dark' | 'light' | 'aerial';
 export type ScenarioPreset = 'clear' | 'flood' | 'cascade' | 'heatwave';
 export type { OperatorEvent };
+export type LocationStatus = 'idle' | 'requesting' | 'located' | 'outside' | 'imprecise' | 'denied' | 'unavailable' | 'error';
+/** The device fix snapped to the network; `active` while the route starts from it. */
+export type UserLocation = SnapResult & { fix: DeviceFix; active: boolean };
 
 /** A saved operating picture plus its outcome, so two snapshots can be compared later. */
 export interface ScenarioSnapshot {
@@ -94,6 +98,10 @@ type SimulationStore = {
   frequencyHistory: number[];
   events: OperatorEvent[];
   observations: ObservationsResponse | null;
+  userLocation: UserLocation | null;
+  locationStatus: LocationStatus;
+  locationMessage: string | null;
+  followLocation: boolean;
 
   showBuildings: boolean;
   showPowerLines: boolean;
@@ -135,6 +143,10 @@ type SimulationStore = {
   refreshIsochrone: () => Promise<void>;
   refreshObservations: () => Promise<void>;
   syncFloodToGage: () => void;
+  locateUser: (options?: { quiet?: boolean }) => Promise<void>;
+  setFollowLocation: (value: boolean) => void;
+  clearUserLocation: () => void;
+  dismissLocationMessage: () => void;
   triggerLiveTick: () => void;
 
   setFloodLevel: (value: number) => void;
@@ -174,6 +186,8 @@ let routeRequestSerial = 0;
 // One city load per page: React strict mode runs mount effects twice in
 // development, which previously solved and logged the first route twice.
 let cityLoad: Promise<void> | null = null;
+let locationWatch: number | null = null;
+let lastFollowUpdate = 0;
 let recalculateTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingReasons = new Map<string, string>();
 
@@ -354,6 +368,69 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     return { origin: state.originNode, floodLevel: state.floodLevel, failedSubstations: state.failedSubstations, travelMode: state.travelMode, evacuees: state.evacuees, destination: state.destinationId, closures: state.closures };
   };
 
+  /**
+   * Snap a device fix to the street network and start the route from it.
+   * `locate` is an explicit request, `follow` a watched position update, and
+   * `rescan` re-picks the start after conditions change (mode, water, preset).
+   */
+  const applyFix = (fix: DeviceFix, source: 'locate' | 'follow' | 'rescan') => {
+    const state = get();
+    const city = state.cityData;
+    if (!city) return;
+    const { origin: _origin, ...scenario } = solverInput();
+    const result = snapToNetwork(city, fix, scenario);
+    if (result.status === 'outside') {
+      set({
+        userLocation: null,
+        locationStatus: 'outside',
+        locationMessage: `You are about ${(result.distanceToDistrictM / 1000).toFixed(1)} km from downtown Houston, outside the mapped district. Pick a starting junction on the map instead.`,
+      });
+      if (state.followLocation) get().setFollowLocation(false);
+      return;
+    }
+    if (result.status === 'imprecise') {
+      set({ locationStatus: 'imprecise', locationMessage: `Your device only knows where you are to within ${formatDistance(fix.accuracy)}. Turn on precise location, or pick a starting junction on the map.` });
+      return;
+    }
+    if (result.status === 'unreachable' || result.originNode === null) {
+      set({ locationStatus: 'error', locationMessage: 'No dry, passable street is close to your location. Pick a starting junction on the map.' });
+      return;
+    }
+    const changed = result.originNode !== state.originNode;
+    set({
+      userLocation: { ...result, fix, active: true },
+      locationStatus: 'located',
+      locationMessage: null,
+      originNode: result.originNode,
+      activeSnapshotId: changed ? null : state.activeSnapshotId,
+      ...(source === 'locate' ? { flyToCoords: { lon: fix.lon, lat: fix.lat, elev: 1300, heading: 0, pitch: -72 } } : {}),
+    });
+    const junction = nodeById(city, result.originNode)?.intersection_name ?? `node ${result.originNode}`;
+    if (!changed) {
+      if (source === 'locate') get().addLog(`Your location confirms the current start, ${junction} (accuracy ±${Math.round(fix.accuracy)} m).`, 'action');
+      return;
+    }
+    queueRouteCalculation(get, 'origin', source === 'rescan'
+      ? `Start from your location moved to ${junction} for the new conditions.`
+      : `Origin set from your location: ${junction}, ${Math.round(result.accessM)} m along ${result.streetName} (accuracy ±${Math.round(fix.accuracy)} m).`);
+  };
+
+  const rescanLocation = () => {
+    const located = get().userLocation;
+    if (located?.active) applyFix(located.fix, 'rescan');
+  };
+
+  /** A start picked by hand (map, list, snapshot) ends location-based starts. */
+  const releaseLocation = (origin: number) => {
+    const { userLocation, followLocation } = get();
+    if (!userLocation?.active || userLocation.originNode === origin) return;
+    set({ userLocation: { ...userLocation, active: false } });
+    if (followLocation) {
+      get().setFollowLocation(false);
+      pendingReasons.set('follow', 'Stopped following your location because a start was chosen by hand.');
+    }
+  };
+
   return {
     floodLevel: 0,
     failedSubstations: [],
@@ -369,6 +446,10 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     frequencyHistory: Array(24).fill(60),
     events: [],
     observations: null,
+    userLocation: null,
+    locationStatus: 'idle',
+    locationMessage: null,
+    followLocation: false,
 
     showBuildings: true,
     showPowerLines: false,
@@ -576,6 +657,68 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
       pendingReasons.set('flood', `Water surface synced to the live USGS ${cityData.flood_model?.gage.site ?? ''} reading: ${observations.gage_height.value?.toFixed(2)} ft (${observations.gage_water_surface_m?.toFixed(2)} m NAVD88).`);
     },
 
+    locateUser: async ({ quiet = false } = {}) => {
+      if (typeof window === 'undefined' || !('geolocation' in navigator)) {
+        set({ locationStatus: 'unavailable', locationMessage: 'This browser cannot share your location. Pick a starting junction on the map.' });
+        return;
+      }
+      if (!window.isSecureContext) {
+        set({ locationStatus: 'unavailable', locationMessage: 'Location needs a secure (https) connection. Pick a starting junction on the map.' });
+        return;
+      }
+      set({ locationStatus: 'requesting', locationMessage: null });
+      await get().fetchCityData();
+      const result = await new Promise<GeolocationPosition | GeolocationPositionError>((resolve) => {
+        navigator.geolocation.getCurrentPosition(resolve, resolve, { enableHighAccuracy: true, timeout: 15_000, maximumAge: 30_000 });
+      });
+      if (!('coords' in result)) {
+        const denied = result.code === result.PERMISSION_DENIED;
+        set({
+          locationStatus: denied ? 'denied' : 'error',
+          locationMessage: denied
+            ? 'Location access is blocked for this site. Allow it in your browser’s site settings, or pick a starting junction on the map.'
+            : result.code === result.TIMEOUT
+              ? 'Finding your location took too long. Try again, or pick a starting junction on the map.'
+              : 'Your device could not work out where you are. Try again, or pick a starting junction on the map.',
+        });
+        if (!quiet) get().addLog(denied ? 'Location access denied; the start is unchanged.' : 'Device location unavailable; the start is unchanged.', 'warning');
+        return;
+      }
+      applyFix({ lat: result.coords.latitude, lon: result.coords.longitude, accuracy: result.coords.accuracy, timestamp: result.timestamp }, 'locate');
+    },
+
+    setFollowLocation: (value) => {
+      if (locationWatch !== null) navigator.geolocation.clearWatch(locationWatch);
+      locationWatch = null;
+      set({ followLocation: value });
+      if (!value || typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
+      locationWatch = navigator.geolocation.watchPosition((position) => {
+        const previous = get().userLocation?.fix;
+        const fix: DeviceFix = { lat: position.coords.latitude, lon: position.coords.longitude, accuracy: position.coords.accuracy, timestamp: position.timestamp };
+        const moved = previous
+          ? Math.hypot((fix.lat - previous.lat) * 111320, (fix.lon - previous.lon) * 111320 * Math.cos((fix.lat * Math.PI) / 180))
+          : Number.POSITIVE_INFINITY;
+        const sharper = previous ? fix.accuracy < previous.accuracy * 0.6 : true;
+        // Ignore GPS jitter; re-plan at most every 8 s unless the jump is large.
+        if (moved < 25 && !sharper) return;
+        if (Date.now() - lastFollowUpdate < 8000 && moved < 150) return;
+        lastFollowUpdate = Date.now();
+        applyFix(fix, 'follow');
+      }, (error) => {
+        if (error.code !== error.PERMISSION_DENIED) return;
+        set({ locationStatus: 'denied', locationMessage: 'Location access was turned off, so following stopped.' });
+        get().setFollowLocation(false);
+      }, { enableHighAccuracy: true, maximumAge: 10_000, timeout: 30_000 });
+      get().addLog('Following your location: the start moves as you do.', 'action');
+    },
+
+    clearUserLocation: () => {
+      if (get().followLocation) get().setFollowLocation(false);
+      set({ userLocation: null, locationStatus: 'idle', locationMessage: null });
+    },
+
+    dismissLocationMessage: () => set({ locationMessage: null }),
+
     triggerLiveTick: () => {
       const { route, cityData, gridFrequency, substationLoads } = get();
       if (!route || !cityData) return;
@@ -599,7 +742,14 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
 
     setFloodLevel: (value) => {
       const next = Math.round(Math.max(0, Math.min(10, value)) * 100) / 100;
-      const { cityData, originNode } = get();
+      const { cityData, originNode, userLocation } = get();
+      if (cityData && userLocation?.active) {
+        // Starting from the device: re-snap so the start stays on dry, reachable street.
+        set({ floodLevel: next, activeSnapshotId: null });
+        rescanLocation();
+        queueRouteCalculation(get, 'flood', `Water surface set to ${waterSurfaceM(cityData, next).toFixed(2)} m NAVD88 (level ${next.toFixed(1)}).`);
+        return;
+      }
       let nextOrigin = originNode;
       if (cityData) {
         const surface = waterSurfaceM(cityData, next);
@@ -628,12 +778,15 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
 
     setOriginNode: (id) => {
       const node = nodeById(get().cityData, id);
+      releaseLocation(id);
       set({ originNode: id, activeSnapshotId: null });
       queueRouteCalculation(get, 'origin', `Origin set to ${node?.intersection_name ?? `node ${id}`}.`);
     },
 
     setTravelMode: (mode) => {
       set({ travelMode: mode, activeSnapshotId: null });
+      // One-way rules differ by mode, so the reachable end of the street may change.
+      rescanLocation();
       queueRouteCalculation(get, 'mode', `Travel mode: ${TRAVEL_MODE_LABELS[mode]}.`);
     },
 
@@ -676,9 +829,14 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
       if (!cityData) return;
       const scenario = PRESETS[preset];
       const surface = waterSurfaceM(cityData, scenario.floodLevel);
-      const origin = pickOrigin(cityData, surface, { lat: cityData.center_lat, lon: cityData.center_lon }) ?? get().originNode;
+      const fromDevice = Boolean(get().userLocation?.active);
+      const origin = fromDevice
+        ? get().originNode
+        : pickOrigin(cityData, surface, { lat: cityData.center_lat, lon: cityData.center_lon }) ?? get().originNode;
       set({ floodLevel: scenario.floodLevel, failedSubstations: scenario.failedSubstations, originNode: origin, closures: [], destinationId: null, activeSnapshotId: null });
       pendingReasons.clear();
+      // Presets keep a location-based start, re-snapped for the new water level.
+      if (fromDevice) rescanLocation();
       queueRouteCalculation(get, 'preset', `Scenario loaded: ${scenario.label} (water surface ${surface.toFixed(1)} m NAVD88).`);
     },
 
@@ -712,6 +870,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     applySnapshot: (id) => {
       const snapshot = get().snapshots.find((snap) => snap.id === id);
       if (!snapshot) return;
+      releaseLocation(snapshot.originNode);
       set({
         originNode: snapshot.originNode,
         floodLevel: snapshot.floodLevel,

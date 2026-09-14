@@ -30,6 +30,8 @@ export interface ExportState {
   exposure: ExposureSummary | null;
   events: OperatorEvent[];
   backendOnline: boolean;
+  /** Device location summary only; raw coordinates are never exported. */
+  userLocation?: { active: boolean; accessM: number; streetName: string; fix: { accuracy: number } } | null;
   scenarioUrl: string;
 }
 
@@ -102,7 +104,9 @@ export function buildSituationReport(state: ExportState): string {
   lines.push(
     rule,
     '2. RECOMMENDATION',
-    `Origin: ${nodeLine(origin, `Node ${state.originNode}`)}`,
+    `Origin: ${nodeLine(origin, `Node ${state.originNode}`)}${state.userLocation?.active
+      ? `, set from device location (accuracy ±${Math.round(state.userLocation.fix.accuracy)} m, ${Math.round(state.userLocation.accessM)} m along ${state.userLocation.streetName})`
+      : ''}`,
     `Travel mode: ${MODE_LABELS[state.travelMode]}${state.evacuees ? `; evacuating population ${state.evacuees.toLocaleString()}` : ''}`,
   );
   if (route?.success) {

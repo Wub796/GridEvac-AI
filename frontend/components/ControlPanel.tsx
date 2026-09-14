@@ -332,6 +332,12 @@ function RouteTab() {
   const evacuees = useSimulationStore((state) => state.evacuees);
   const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
   const setFlyToRoadKey = useSimulationStore((state) => state.setFlyToRoadKey);
+  const userLocation = useSimulationStore((state) => state.userLocation);
+  const locationStatus = useSimulationStore((state) => state.locationStatus);
+  const locationMessage = useSimulationStore((state) => state.locationMessage);
+  const followLocation = useSimulationStore((state) => state.followLocation);
+  const locateUser = useSimulationStore((state) => state.locateUser);
+  const setFollowLocation = useSimulationStore((state) => state.setFollowLocation);
 
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -411,6 +417,21 @@ function RouteTab() {
       </Section>
 
       <Section title="Origin" aside={origin ? `ground ${origin.elevation.toFixed(1)} m` : undefined}>
+        <button className={styles.locateButton} onClick={() => void locateUser()} disabled={locationStatus === 'requesting'} aria-busy={locationStatus === 'requesting'}>
+          <Icon name="locate" size={16} />
+          {locationStatus === 'requesting' ? 'Finding your location…' : userLocation?.active ? 'Update from my location' : 'Use my location'}
+        </button>
+        {userLocation && (
+          <div className={styles.locateFollow}>
+            <Switch checked={followLocation} onChange={setFollowLocation} label="Follow my location" detail="Moves the start as you move" />
+          </div>
+        )}
+        {locationMessage && locationStatus !== 'located' && <p className={`${styles.note} ${styles.noteWarn}`}>{locationMessage}</p>}
+        {userLocation?.active && (
+          <p className={styles.note}>
+            You are {Math.round(userLocation.distanceToStreetM)} m from {userLocation.streetName}. The route starts {Math.round(userLocation.accessM)} m along it, at {origin?.intersection_name} (accuracy ±{Math.round(userLocation.fix.accuracy)} m).
+          </p>
+        )}
         <div className={styles.search}>
           <Icon name="search" size={15} />
           <input

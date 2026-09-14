@@ -12,6 +12,7 @@ Evacuation routing for downtown Houston on the real OpenStreetMap street network
 - Evacuation demand with BPR congestion, district clearance time, and shelter capacity against demand.
 
 **Decisions**
+- Start from your own location: the device fix is snapped to the nearest mapped street, and the route begins at whichever end of that street you can legally reach fastest (one-way rules for vehicles). The access leg is shown on the map and added to the total time. "Follow my location" re-plans as you move. The location stays in the browser; only the chosen junction reaches the API, and it never appears in shared links or exports.
 - Least-cost route to the safest dry exit or to a named shelter or medical facility. Vehicles obey one-way streets; ETAs are real travel time, while penalties for flooded approaches, blackout districts, and energized lines only decide the order.
 - Turn-by-turn directions with left/right maneuvers computed from street geometry.
 - Exit corridors ranked safest first, with capacity and hazard counts.

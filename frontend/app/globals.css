@@ -36,6 +36,7 @@
   --utility: #d8c56e;
   --shelter: #f3d58a;
   --medical: #ff9d8a;
+  --you: #8b96ff;
 
   --radius-s: 7px;
   --radius-m: 11px;
@@ -381,6 +382,31 @@ body::before {
 .reco-message { margin-top: 12px; color: var(--ink); font-size: 15px; }
 .reco-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .reco-foot { margin-top: 12px; color: var(--ink-3); font-size: 12px; }
+.reco-access { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 9px 11px; border-radius: var(--radius-m); background: rgba(139, 150, 255, 0.1); color: var(--ink-2); font-size: 13px; animation: rise var(--dur-3) var(--ease-out) both; }
+.reco-access svg { flex: 0 0 auto; margin-top: 2px; color: var(--you); }
+.reco-access b { color: var(--ink); }
+
+/* Location prompt: asks in context, says what the location is used for. */
+.locate-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(139, 150, 255, 0.35);
+  border-radius: var(--radius-l);
+  background: linear-gradient(120deg, rgba(139, 150, 255, 0.12), rgba(16, 27, 33, 0.9) 60%);
+  animation: rise var(--dur-4) var(--ease-out) 140ms both;
+}
+.locate-card--notice { border-color: var(--line-2); background: var(--surface); }
+.locate-icon { position: relative; display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: rgba(139, 150, 255, 0.16); color: var(--you); }
+.locate-icon::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 0 rgba(139, 150, 255, 0.5); animation: locate-ping 2.4s var(--ease-out) infinite; }
+.locate-icon.is-busy svg { animation: spin 1.2s linear infinite; }
+@keyframes locate-ping { 0% { box-shadow: 0 0 0 0 rgba(139, 150, 255, 0.45); } 70%, 100% { box-shadow: 0 0 0 12px rgba(139, 150, 255, 0); } }
+.locate-copy { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.locate-copy strong { font-size: 14px; }
+.locate-copy span { color: var(--ink-2); font-size: 13px; }
+.locate-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
 
 /* Hero network drawing: tilts back into the map as the briefing scrolls away. */
 .nc { position: relative; display: flex; flex-direction: column; min-height: 420px; perspective: 1400px; }
@@ -563,6 +589,12 @@ body::before {
 .lg-medical { background: var(--medical); }
 .lg-exit { background: var(--safe); box-shadow: 0 0 0 3px var(--safe-soft); }
 .lg-trigger { width: 9px; height: 9px; background: var(--watch); transform: rotate(45deg); }
+.lg-you { width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: var(--you); }
+.map-tool--locate.is-active { background: rgba(139, 150, 255, 0.16); color: var(--you); }
+.map-tool--locate[aria-busy='true'] svg { animation: spin 1.2s linear infinite; }
+.map-hint--info { display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100% - 120px)); border-color: rgba(139, 150, 255, 0.45); white-space: normal; }
+.map-hint-close { display: grid; flex: 0 0 auto; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--ink-2); }
+.map-hint-close:hover { background: rgba(255, 255, 255, 0.08); color: var(--ink); }
 .map-statusbar { left: 14px; bottom: 12px; display: flex; align-items: center; gap: 14px; max-width: calc(100% - 420px); padding: 6px 12px; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
 .map-scale { display: inline-flex; align-items: center; gap: 7px; }
 .map-scale i { display: block; width: 80px; height: 6px; border: 1.5px solid var(--ink-2); border-top: 0; transition: width var(--dur-2) var(--ease-out); }

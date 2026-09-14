@@ -158,7 +158,7 @@ function context(city: CityData): Context {
   return ctx;
 }
 
-function allowedArcs(u: number, v: number, edge: EdgeData): Array<[number, number]> {
+export function allowedArcs(u: number, v: number, edge: EdgeData): Array<[number, number]> {
   const oneway = edge.oneway ?? 0;
   const target = edge.source === u ? v : u;
   if (oneway === 1) return [[edge.source, target]];

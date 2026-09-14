@@ -8,6 +8,7 @@ import ControlPanel from '@/components/ControlPanel';
 import ExportMenu, { type ExportKind } from '@/components/ExportMenu';
 import Icon from '@/components/Icon';
 import LiveConditions from '@/components/LiveConditions';
+import LocationPrompt from '@/components/LocationPrompt';
 import NetworkCanvas from '@/components/NetworkCanvas';
 import RouteTimeline from '@/components/RouteTimeline';
 import TriggerGauge from '@/components/TriggerGauge';
@@ -260,6 +261,7 @@ export default function HomePage() {
                   Raise the water on real USGS terrain, take substations offline, and close the streets you know are blocked.
                   GridEvac routes people along the streets that stay passable and tells you how much rise is left before each way out is cut off.
                 </p>
+                <LocationPrompt />
                 <RecommendationCard onOpenPlanner={() => navigate('map')} onReport={() => handleExport('report')} />
               </div>
               <NetworkCanvas />

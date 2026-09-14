@@ -38,6 +38,8 @@ const COLOR = {
   shelter: '#f3d58a',
   medical: '#ff9d8a',
   park: '#2f7d5b',
+  // Periwinkle for "you": distinct from water cyan and route orange.
+  user: '#8b96ff',
 } as const;
 
 // Street hierarchy per basemap: light strokes on dark ground, dark on light,
@@ -97,6 +99,7 @@ interface Layers {
   triggers: any[];
   highlight: any[];
   endpoints: any[];
+  user: any[];
   rendered: boolean;
   visible: boolean;
   introPlayed: boolean;
@@ -253,7 +256,7 @@ export default function CesiumViewer() {
   const layers = useRef<Layers>({
     roads: new Map(), nodes: new Map(), pickNodes: [], halos: [], buildings: [], parks: [], labels: [], waterways: [],
     substations: new Map(), transmission: [], shelters: new Map(), flood: null, floodCanvases: [], floodFlip: 0, floodSurface: Number.NaN,
-    blackout: [], isochrone: [], route: [], routeWidth: 0, closures: [], triggers: [], highlight: [], endpoints: [],
+    blackout: [], isochrone: [], route: [], routeWidth: 0, closures: [], triggers: [], highlight: [], endpoints: [], user: [],
     rendered: false, visible: true, introPlayed: false, basemap: 'dark', fonts: { sans: 'sans-serif', mono: 'monospace' },
   });
 
@@ -282,6 +285,11 @@ export default function CesiumViewer() {
   const flyToCoords = useSimulationStore((state) => state.flyToCoords);
   const isLoading = useSimulationStore((state) => state.isLoading);
   const setClosureMode = useSimulationStore((state) => state.setClosureMode);
+  const userLocation = useSimulationStore((state) => state.userLocation);
+  const locationStatus = useSimulationStore((state) => state.locationStatus);
+  const locationMessage = useSimulationStore((state) => state.locationMessage);
+  const locateUser = useSimulationStore((state) => state.locateUser);
+  const dismissLocationMessage = useSimulationStore((state) => state.dismissLocationMessage);
 
   /* --------------------------------------------------------- viewer init */
   useEffect(() => {
@@ -563,7 +571,7 @@ export default function CesiumViewer() {
       fresh.nodes.clear();
       fresh.substations.clear();
       fresh.shelters.clear();
-      Object.assign(fresh, { pickNodes: [], halos: [], buildings: [], parks: [], labels: [], waterways: [], transmission: [], flood: null, blackout: [], isochrone: [], route: [], closures: [], triggers: [], highlight: [], endpoints: [], rendered: false, introPlayed: false, floodSurface: Number.NaN });
+      Object.assign(fresh, { pickNodes: [], halos: [], buildings: [], parks: [], labels: [], waterways: [], transmission: [], flood: null, blackout: [], isochrone: [], route: [], closures: [], triggers: [], highlight: [], endpoints: [], user: [], rendered: false, introPlayed: false, floodSurface: Number.NaN });
       setReady(false);
     };
   }, []);
@@ -990,6 +998,64 @@ export default function CesiumViewer() {
     requestFrame(viewer);
   }, [ready, cityData, originNode, route]);
 
+  /* ----------------------------------------------------- device location */
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const store = layers.current;
+    if (!ready || !viewer) return;
+    store.user.forEach((entity) => viewer.entities.remove(entity));
+    store.user = [];
+    if (userLocation) {
+      const { fix } = userLocation;
+      const at = Cesium.Cartesian3.fromDegrees(fix.lon, fix.lat);
+      const clamp = { heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, disableDepthTestDistance: Number.POSITIVE_INFINITY };
+      store.user.push(viewer.entities.add({
+        id: 'user-accuracy',
+        position: at,
+        ellipse: { semiMajorAxis: Math.max(4, fix.accuracy), semiMinorAxis: Math.max(4, fix.accuracy), material: css(COLOR.user, 0.14), classificationType: Cesium.ClassificationType.TERRAIN },
+      }));
+      if (userLocation.active && userLocation.accessPath.length >= 2) {
+        // The short leg from where you stand, along the street, to the junction the route starts at.
+        store.user.push(viewer.entities.add({
+          id: 'user-access',
+          polyline: {
+            positions: Cesium.Cartesian3.fromDegreesArray(userLocation.accessPath.flatMap(([lat, lon]) => [lon, lat])),
+            width: 4,
+            clampToGround: true,
+            zIndex: 5,
+            material: new Cesium.PolylineDashMaterialProperty({ color: css(COLOR.user), gapColor: css(COLOR.ground, 0.55), dashLength: 8 }),
+          },
+        }));
+      }
+      const pulse = !prefersReducedMotion();
+      store.user.push(viewer.entities.add({
+        id: 'user-halo',
+        position: at,
+        point: {
+          pixelSize: pulse ? new Cesium.CallbackProperty(() => 18 + 18 * ((performance.now() / 1800) % 1), false) as any : 26,
+          color: pulse ? new Cesium.CallbackProperty(() => css(COLOR.user, 0.45 * (1 - ((performance.now() / 1800) % 1))), false) as any : css(COLOR.user, 0.25),
+          ...clamp,
+        },
+      }));
+      store.user.push(viewer.entities.add({
+        id: 'user-position',
+        position: at,
+        point: { pixelSize: 14, color: css(COLOR.user), outlineColor: css('#ffffff'), outlineWidth: 3, ...clamp },
+        label: {
+          text: userLocation.active ? 'You' : 'You (start chosen by hand)',
+          font: `700 12px ${store.fonts.sans}`,
+          fillColor: css(COLOR.ink),
+          showBackground: true,
+          backgroundColor: css(COLOR.ground, 0.92),
+          backgroundPadding: new Cesium.Cartesian2(7, 4),
+          pixelOffset: new Cesium.Cartesian2(0, -24),
+          ...clamp,
+        },
+      }));
+    }
+    requestFrame(viewer);
+  }, [ready, userLocation]);
+
   /* ------------------------------------------------------ step highlight */
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -1151,6 +1217,9 @@ export default function CesiumViewer() {
       </div>
 
       <div className="map-overlay map-tools" role="toolbar" aria-label="Map tools">
+        <button className={`map-tool map-tool--locate ${userLocation?.active ? 'is-active' : ''}`} aria-pressed={Boolean(userLocation?.active)} aria-busy={locationStatus === 'requesting'} onClick={() => void locateUser()} disabled={locationStatus === 'requesting'}>
+          <Icon name="locate" size={18} /><span className="map-tool-label">{locationStatus === 'requesting' ? 'Finding your location…' : 'Use my location'}</span>
+        </button>
         <button className={`map-tool ${closureMode ? 'is-active' : ''}`} aria-pressed={closureMode} aria-keyshortcuts="C" onClick={() => setClosureMode(!closureMode)}>
           <Icon name="barrier" size={18} /><span className="map-tool-label">Close streets (C)</span>
         </button>
@@ -1168,7 +1237,14 @@ export default function CesiumViewer() {
         </button>
       </div>
 
-      {closureMode && <div className="map-overlay map-hint" role="status">Click a street to close it, or a closure to reopen it. Press Esc when done.</div>}
+      {closureMode ? (
+        <div className="map-overlay map-hint" role="status">Click a street to close it, or a closure to reopen it. Press Esc when done.</div>
+      ) : locationMessage && locationStatus !== 'located' ? (
+        <div className="map-overlay map-hint map-hint--info" role="status">
+          <span>{locationMessage}</span>
+          <button className="map-hint-close" onClick={dismissLocationMessage} aria-label="Dismiss"><Icon name="close" size={14} /></button>
+        </div>
+      ) : null}
 
       <div className="map-overlay map-legend" aria-label="Legend">
         <span><i className="lg lg-route" />Route</span>
@@ -1178,6 +1254,7 @@ export default function CesiumViewer() {
         <span><i className="lg lg-shelter" />Shelter</span>
         <span><i className="lg lg-medical" />Medical</span>
         <span><i className="lg lg-trigger" />Trigger point</span>
+        {userLocation && <span><i className="lg lg-you" />You</span>}
       </div>
 
       <div className="map-overlay map-statusbar">

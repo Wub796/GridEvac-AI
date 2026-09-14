@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useSimulationStore } from '@/hooks/useSimulation';
+import { useSimulationStore, type UserLocation } from '@/hooks/useSimulation';
 import { useScrollProgress } from '@/hooks/useScrollProgress';
 import { waterSurfaceM } from '@/lib/solver';
 import { loadTerrain, terrainBounds, type TerrainGrid } from '@/lib/terrain';
@@ -30,6 +30,7 @@ export default function NetworkCanvas() {
   const route = useSimulationStore((state) => state.route);
   const floodLevel = useSimulationStore((state) => state.floodLevel);
   const originNode = useSimulationStore((state) => state.originNode);
+  const userLocation = useSimulationStore((state) => state.userLocation);
 
   const engine = useRef({
     terrain: null as TerrainGrid | null,
@@ -52,6 +53,7 @@ export default function NetworkCanvas() {
     city: null as CityData | null,
     route: null as RouteResponse | null,
     origin: 0,
+    user: null as UserLocation | null,
     width: 0,
     height: 0,
     dpr: 1,
@@ -283,6 +285,24 @@ export default function NetworkCanvas() {
         context.stroke();
       }
 
+      const user = state.user;
+      if (user && booted) {
+        const x = state.projection.toX(user.fix.lon);
+        const y = state.projection.toY(user.fix.lat);
+        const radius = Math.abs(state.projection.toY(user.fix.lat + user.fix.accuracy / 111320) - y);
+        context.fillStyle = 'rgba(139, 150, 255, 0.18)';
+        context.beginPath();
+        context.arc(x, y, Math.max(7 * state.dpr, radius), 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = '#8b96ff';
+        context.strokeStyle = '#ffffff';
+        context.lineWidth = 2 * state.dpr;
+        context.beginPath();
+        context.arc(x, y, 4.5 * state.dpr, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+      }
+
       if (busy || pulsing) state.frame = requestAnimationFrame(render);
     };
 
@@ -370,6 +390,11 @@ export default function NetworkCanvas() {
     state.routeStart = performance.now();
     state.routeReady();
   }, [route, originNode]);
+
+  useEffect(() => {
+    engine.current.user = userLocation;
+    engine.current.kick();
+  }, [userLocation]);
 
   const flooded = route?.flooded_nodes.length ?? 0;
   const surface = waterSurfaceM(cityData, floodLevel);

@@ -16,6 +16,7 @@ export function RecommendationCard({ onOpenPlanner, onReport }: { onOpenPlanner:
   const isLoading = useSimulationStore((state) => state.isLoading);
   const lastSolvedAt = useSimulationStore((state) => state.lastSolvedAt);
   const backendOnline = useSimulationStore((state) => state.backendOnline);
+  const userLocation = useSimulationStore((state) => state.userLocation);
 
   const tone = !route ? 'pending' : route.success ? (route.risk_level === 'LOW' ? 'safe' : route.risk_level === 'CRITICAL' ? 'critical' : 'watch') : 'critical';
   const destinationNode = route ? cityData?.nodes.find((node) => node.id === route.dest_node) : undefined;
@@ -51,6 +52,16 @@ export function RecommendationCard({ onOpenPlanner, onReport }: { onOpenPlanner:
               <dd>{evacuees > 0 ? `${route.congestion_factor.toFixed(2)}× free flow` : `${(route.corridor_capacity?.people_per_hour ?? 0).toLocaleString()}/h`}</dd>
             </div>
           </dl>
+          {userLocation?.active && (
+            <p className="reco-access">
+              <Icon name="locate" size={15} />
+              <span>
+                From your location: {Math.round(userLocation.accessM)} m along {userLocation.streetName} to the start
+                {' '}({userLocation.accessSeconds < 60 ? `${Math.max(1, Math.round(userLocation.accessSeconds))} s` : `${(userLocation.accessSeconds / 60).toFixed(1)} min`}),
+                {' '}about <b>{(eta + userLocation.accessSeconds / 60).toFixed(1)} min</b> in total. Accuracy ±{Math.round(userLocation.fix.accuracy)} m.
+              </span>
+            </p>
+          )}
         </>
       ) : (
         <p className="reco-message">{route?.message ?? 'Loading the Houston street network and terrain.'}</p>
