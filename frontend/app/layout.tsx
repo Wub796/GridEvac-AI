@@ -1,53 +1,48 @@
 import type { Metadata, Viewport } from 'next';
-import { DM_Mono, Plus_Jakarta_Sans } from 'next/font/google';
+import { IBM_Plex_Mono, Public_Sans } from 'next/font/google';
 import './globals.css';
 
-const jakarta = Plus_Jakarta_Sans({
+// Public Sans is the typeface of the U.S. Web Design System: built for public
+// service interfaces, with tabular figures for live readings. IBM Plex Mono
+// carries coordinates, grid references, and timestamps.
+const publicSans = Public_Sans({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800'],
-  variable: '--font-jakarta',
+  variable: '--font-public-sans',
   display: 'swap',
 });
 
-const dmMono = DM_Mono({
+const plexMono = IBM_Plex_Mono({
   subsets: ['latin'],
-  weight: ['400', '500'],
-  variable: '--font-dm-mono',
+  weight: ['400', '500', '600'],
+  variable: '--font-plex-mono',
   display: 'swap',
 });
 
 export const metadata: Metadata = {
-  title: 'GridEvac AI - Houston Emergency Routing',
+  title: 'GridEvac: Houston evacuation routing',
   description:
-    'Real-time emergency evacuation routing for Houston, TX. ' +
-    'Analyzes flash flooding and CenterPoint Energy substation failures ' +
-    'using IsolationForest anomaly detection and NetworkX weighted pathfinding.',
-  keywords: ['evacuation', 'Houston', 'flood', 'emergency', 'routing', 'AI', 'GIS'],
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'black-translucent',
-    title: 'GridEvac',
-  },
+    'Evacuation routing for downtown Houston on real USGS terrain and the OpenStreetMap street network. '
+    + 'Model Buffalo Bayou flooding, utility outages, and road closures; get passable corridors, trigger points, and exportable situation reports.',
+  keywords: ['evacuation', 'Houston', 'flood', 'emergency management', 'routing', 'GIS', 'USNG'],
+  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'GridEvac' },
   formatDetection: { telephone: false },
 };
 
 /**
- * Cross-platform viewport: `viewportFit: cover` extends the app under the
- * iOS notch/home-indicator (paired with safe-area CSS), `themeColor` tints
- * browser chrome on Android and Safari 15+, `maximumScale: 1` stops the
- * double-tap zoom from fighting map gestures (pinch zoom stays enabled).
+ * `viewportFit: cover` extends the app under the iOS notch (paired with
+ * safe-area CSS); `themeColor` tints browser chrome. Page zoom stays enabled
+ * (WCAG 1.4.4); the map canvas handles its own pinch gestures.
  */
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
   viewportFit: 'cover',
-  themeColor: '#050d0b',
+  themeColor: '#0a1115',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${jakarta.variable} ${dmMono.variable}`}>
+    <html lang="en" className={`${publicSans.variable} ${plexMono.variable}`}>
       <body>{children}</body>
     </html>
   );

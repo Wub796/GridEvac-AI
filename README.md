@@ -1,47 +1,56 @@
-# GridEvac AI - Houston, TX
+# GridEvac: Houston evacuation routing
 
-> A street-aware emergency operations workspace for comparing flood exposure, utility interruptions, and safer evacuation corridors across a real downtown Houston street network.
+Evacuation routing for downtown Houston on the real OpenStreetMap street network and USGS 3DEP terrain. Operators raise the water, take substations offline, and close streets; GridEvac returns the safest passable corridor, turn-by-turn directions, the water level at which each way out is cut off, and exports for the incident log and GIS.
 
-## What changed
+## What it does
 
-GridEvac AI now treats the map as an operator tool rather than a decorative 3-D scene:
+**Scenario modeling**
+- Water surface on a real elevation scale (metres NAVD88), with a hydrologically connected flood model seeded from Buffalo, White Oak, and Little White Oak bayous. Bridge decks stay dry above flooded ground.
+- One-click sync to the live USGS Buffalo Bayou gage (08074000, datum 0.00 ft NAVD88).
+- Substation outages with load redistribution and cascade trips; flooded substations trip on their own.
+- Operator road closures drawn directly on the map and carried in shared links.
+- Evacuation demand with BPR congestion, district clearance time, and shelter capacity against demand.
 
-- The street graph is baked from OpenStreetMap: real downtown intersections, true road curvature, actual street names, road class, lane count, speed assumptions, and measured segment lengths (see `backend/tools/bake_city_network.py` and `backend/data/houston_network.json`).
-- Ground-level Dijkstra routing that follows road centerlines and street curves instead of elevated synthetic tubes.
-- Route distance, ETA, grouped road instructions, closures, flood exposure, and utility hazard penalties.
-- Real OpenStreetMap building and park footprints extruded in place, aligned with the surrounding streets.
-- Terrain rises away from the real Buffalo Bayou channel, so modeled floodwater appears in the actual low corridor.
-- One evacuation exit per compass quadrant (North / East / South / West) selected from perimeter junctions.
-- Clickable dry intersections for changing the origin directly on the map.
-- Scenario presets for normal operations, Buffalo Bayou flooding, feeder cascade, and heat strain.
-- Layer controls for blocks, road labels, intersections, substations, utility links, and map treatments.
-- A scroll-revealed workflow for briefing, live map operations, and transparent route audit.
-- Live telemetry, substation load state, anomaly scoring, and an operator event stream.
+**Decisions**
+- Least-cost route to the safest dry exit or to a named shelter or medical facility. Vehicles obey one-way streets; ETAs are real travel time, while penalties for flooded approaches, blackout districts, and energized lines only decide the order.
+- Turn-by-turn directions with left/right maneuvers computed from street geometry.
+- Exit corridors ranked safest first, with capacity and hazard counts.
+- Trigger points: the exact water surface at which each exit and shelter becomes unreachable, and which street floods first (a widest-path solve over flood stages).
+- Street-network reachability in minutes.
+- Exposure estimate: buildings and daytime occupants in the flood extent or without power.
+
+**Hand-off**
+- Shareable scenario links (origin, water level, mode, outages, demand, destination, closures).
+- Situation report laid out after the ICS-201 briefing, GeoJSON package for ArcGIS/QGIS, and a CSV operator event log with UTC and Houston local timestamps.
+- U.S. National Grid (USNG) coordinates under the cursor, for origins, and in exports.
+- Print stylesheet for the briefing and audit.
 
 ## Architecture
 
 ```
 GridEvac/
-├── backend/                   FastAPI standalone backend
-│   ├── main.py                API endpoints and live telemetry adapters
-│   ├── city_graph.py          Loader for the baked OpenStreetMap street network
-│   ├── routing.py             Hazard-aware, distance-weighted Dijkstra routing
-│   ├── anomaly.py             IsolationForest anomaly detection
-│   ├── models.py              Pydantic API schemas
-│   ├── data/houston_network.json  Baked network (nodes, curves, footprints, utility)
-│   └── tools/bake_city_network.py  OSM-to-network bake script
-├── frontend/
-│   ├── api/                   Vercel-compatible Python API mirror
-│   ├── app/page.tsx           Scroll-based operations workspace
-│   ├── app/globals.css        Responsive command-room visual system
-│   ├── components/CesiumViewer.tsx
-│   │                           Ground-referenced Cesium map and data layers
-│   ├── components/ControlPanel.tsx
-│   │                           Scenario, route, outage, and layer controls
-│   ├── hooks/useSimulation.ts  Zustand state and offline route solver
-│   └── lib/types.ts            Shared city and route contracts
-└── start.sh                   Local backend + frontend launcher
+├── backend/                     FastAPI service
+│   ├── main.py                  Endpoints, cached city payload, live observations relay
+│   ├── routing.py               Flood model, power flow, routing, corridors, isochrones, trigger points
+│   ├── city_graph.py            Loads the baked network into NetworkX
+│   ├── anomaly.py               IsolationForest risk score
+│   ├── models.py                Pydantic schemas
+│   └── data/houston_network.json
+├── frontend/                    Next.js 14 app (deployed to Vercel)
+│   ├── api/                     Vercel Python function: synced mirror of backend/ (index.py re-exports main.app)
+│   ├── app/                     Page shell and global styles
+│   ├── components/              Map (CesiumJS), control panel, briefing and audit panels
+│   ├── hooks/useSimulation.ts   Zustand store: scenario state, solver orchestration, event log
+│   ├── lib/solver.ts            Offline solver: a line-for-line mirror of backend/routing.py
+│   ├── lib/terrain.ts           Terrain grid used to draw the flood surface
+│   ├── lib/usng.ts              WGS84 to USNG conversion
+│   ├── lib/exports.ts           Situation report, GeoJSON, CSV
+│   └── public/data/             Baked network and terrain grid for offline mode
+├── tools/                       Data bakes and the API mirror sync
+└── scripts/api_smoke_test.py    Endpoint checks (runs in-process, no server needed)
 ```
+
+The frontend works without the API: it loads the same baked network from `/data/houston_network.json` and runs `lib/solver.ts`, which returns the same routes, ETAs, corridors, isochrones, and trigger points as the Python backend.
 
 ## Run locally
 
@@ -50,65 +59,73 @@ bash start.sh
 ```
 
 - Frontend: http://localhost:3000
-- Backend: http://localhost:8000
-- API docs: http://localhost:8000/docs
+- Backend: http://localhost:8000 (OpenAPI docs at `/docs`)
 
-The frontend falls back to the same baked OpenStreetMap network (served from `/data/houston_network.json`) and identical route weighting when the FastAPI service is unavailable. Set `NEXT_PUBLIC_CESIUM_TOKEN` for Cesium World Buildings; the map remains fully usable with the CARTO basemap and baked footprints without a token.
+Optional environment (`frontend/.env.local`, and in Vercel project settings):
 
-CARTO basemaps now require a free API key (see <https://basemaps.cartocdn.com> — request one with the domain this app runs on, e.g. `https://grid-evac-ai.vercel.app/` or `localhost`). Set `NEXT_PUBLIC_CARTO_API_KEY` in `frontend/.env.local` (and in Vercel's environment variables) and it is appended to the basemap tile URL automatically; keep the CARTO/OpenStreetMap attribution visible as their terms require.
-
-## Map layers
-
-| Layer | Purpose |
+| Variable | Purpose |
 |---|---|
-| CARTO Positron basemap | Light, low-noise real-world street context |
-| OpenStreetMap building footprints | Actual footprint shapes extruded in place |
-| Park polygons | Real green space from OpenStreetMap |
-| Street network | Arterial, collector, and local hierarchy from OSM classification |
-| Flood cells | Low-lying intersections along the real bayou channel responding to water level |
-| Substation zones | Utility service areas and outage state |
-| Transmission links | Overhead utility relationships and hazard roads |
-| Recommended route | Ground-clamped evacuation corridor following street curves |
+| `NEXT_PUBLIC_CARTO_API_KEY` | CARTO basemap key (appended to tile URLs; keep attribution visible) |
+| `NEXT_PUBLIC_CESIUM_TOKEN` | Cesium ion token: aerial imagery, world terrain, OSM 3D buildings |
+| `NEXT_PUBLIC_API_URL` | API origin when it is not served from the same host |
+| `GRIDEVAC_CORS_ORIGINS` | Backend: comma-separated allowed origins (default localhost:3000) |
 
-## Route model
-
-The weighted solver evaluates every street edge using:
-
-- Measured local distance and road speed assumptions.
-- A large penalty for one-sided flood exposure and impassable weight for flooded-to-flooded edges.
-- Blackout service-area penalties from failed or cascaded substations.
-- Additional penalties for streets beneath dead or overloaded transmission links.
-- A modest preference for arterials when safety conditions are comparable.
-
-The response includes the selected exit, route coordinates, street distance, estimated minutes, grouped road instructions, flooded nodes, blackout nodes, blocked edges, utility state, and anomaly risk.
-
-## API reference
+## API
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Backend health check |
-| `GET` | `/api/city` | Nodes, named edges, blocks, substations, and utility links |
-| `GET` | `/api/flood-zones?flood_level=5` | Flooded intersection IDs and threshold |
-| `POST` | `/api/calculate-route` | Scenario-aware route, telemetry, risk, and route steps |
+| `GET` | `/health` | Service health and data provenance |
+| `GET` | `/api/city` | Junctions with flood stages, curved streets with one-way rules, footprints, waterways, utilities, flood model |
+| `POST` | `/api/calculate-route` | Scenario route, turn-by-turn steps, utility state, risk |
+| `GET` | `/api/compare-corridors` | Every dry perimeter exit, safest first |
+| `GET` | `/api/isochrone` | Junctions reachable within N minutes |
+| `GET` | `/api/trigger-points` | Water surface at which each exit and shelter is cut off |
+| `GET` | `/api/flood-zones` | Flooded junctions for a scenario level |
+| `GET` | `/api/observations` | Live USGS gage, discharge, and air temperature (5-minute cache) |
 
-Example request:
+Example:
 
 ```json
+POST /api/calculate-route
 {
-  "flood_level": 2.5,
-  "failed_substations": [1],
-  "origin_node": 112
+  "flood_level": 8.0,
+  "failed_substations": [2],
+  "origin_node": 425,
+  "travel_mode": "vehicle",
+  "evacuees": 30000,
+  "destination": "grb",
+  "closed_edges": [[425, 426]]
 }
 ```
 
+Scenario level `L` maps to a water surface of `datum + L × rise` metres NAVD88 (published in `/api/city` as `flood_model`).
+
+## Data pipeline
+
+Run from the repository root with `numpy` and `tifffile` installed. Downloads are cached in `tools/.cache`.
+
+1. `backend/tools/bake_city_network.py`: streets, junctions, footprints, substations, and exits from an OpenStreetMap export.
+2. `tools/bake_street_attributes.py`: one-way rules, tagged lanes and speed limits, ramp names.
+3. `tools/bake_terrain.py`: USGS 3DEP elevations, connected flood stages, bridge decks, bayou centerlines, and the rendering grid.
+4. `tools/bake_shelters.py`: shelters snapped to junctions vehicles can reach and leave.
+5. `tools/sync_api_mirror.py`: copies the backend and data into `frontend/api` and `frontend/public/data`.
+
 ## Verification
 
-From `frontend/`:
-
 ```bash
-npm ci
-npm run lint
-npm run build
+python3 scripts/api_smoke_test.py --inprocess
+python3 tools/sync_api_mirror.py --check
+cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 ```
 
-The client-side route solver mirrors the backend contract so scenario exploration continues in local fallback mode. The application uses Next.js 14, React 18, Zustand, Axios, CesiumJS 1.119, FastAPI, NetworkX, and scikit-learn.
+CI runs the same checks on every push and pull request (`.github/workflows/ci.yml`).
+
+## Limitations
+
+- The flood model is a single water surface spreading over connected low ground. It does not model rainfall ponding, storm-drain backup, or the channel's downstream slope, and the upstream gage stands in for the whole reach.
+- Substations, loads, service areas, and transmission links are illustrative, not CenterPoint Energy data.
+- Occupancy estimates assume one person per 25 m² of floor area across the 1,400 largest mapped footprints.
+- Congestion assumes demand loads onto the network within one hour and spreads across every dry exit corridor.
+- GridEvac is a planning aid. Confirm conditions on the ground before directing people.
+
+Street, building, and waterway data © OpenStreetMap contributors. Elevation: USGS 3DEP. Basemap © CARTO.

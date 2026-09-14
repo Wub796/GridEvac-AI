@@ -1,66 +1,70 @@
 import { create } from 'zustand';
-import { api } from '@/lib/api';
+import { api, type ScenarioQuery } from '@/lib/api';
+import type { OperatorEvent } from '@/lib/exports';
+import { logicalJunctions } from '@/lib/network';
+import { fetchObservations } from '@/lib/observations';
+import {
+  ISOCHRONE_MINUTES,
+  compareCorridors,
+  edgeKey,
+  floodStage,
+  solveIsochrone,
+  solveRoute,
+  solveTriggerPoints,
+  vehicleCore,
+  waterSurfaceM,
+} from '@/lib/solver';
 import type {
   BlockData,
   CityData,
   CorridorComparisonResponse,
-  CorridorInfo,
-  EdgeData,
   IsochroneResponse,
   NodeData,
+  ObservationsResponse,
   RouteResponse,
-  RouteStep,
   ShelterData,
   SubstationData,
   TravelMode,
-  CorridorCapacity,
+  TriggerPointsResponse,
 } from '@/lib/types';
-
-const FLOOD_RISE_PER_LEVEL = 1.7;
-// Exits come from the loaded network; these fallbacks are replaced on fetch.
-let SAFE_EXITS: number[] = [];
-let EXIT_NAMES: Record<string, string> = {};
-const DEFAULT_ORIGIN = 0;
 
 /**
  * The baked OpenStreetMap network is a static asset, not a JS import, so it
  * never enters the application bundle. It is fetched once when the backend is
  * unreachable and shared by the offline map and solver.
  */
-type BakedNetwork = {
-  nodes: Array<{ id: number; osm?: number; lat: number; lon: number; elevation: number; intersection_name?: string }>;
-  edges: Array<{ source: number; target: number; weight: number; distance_m: number; road_name: string; road_class: string; lanes: number; speed_limit_mph: number; geometry?: [number, number][] }>;
-  blocks: BlockData[];
-  parks: BlockData[];
-  substations: SubstationData[];
-  transmission_links: CityData['transmission_links'];
-  safe_exits: number[];
-  exit_names?: Record<string, string>;
-  shelters?: ShelterData[];
-  meta: { center_lat: number; center_lon: number };
+type BakedNetwork = Omit<CityData, 'center_lat' | 'center_lon' | 'nodes' | 'flood_model'> & {
+  nodes: Array<Omit<NodeData, 'district'>>;
+  meta: {
+    center_lat: number;
+    center_lon: number;
+    vertical_datum?: string;
+    elevation_source?: string;
+    flood_model?: { method: string; datum_m: number; rise_per_level_m: number; gage: CityData['flood_model'] extends infer M ? M extends { gage: infer G } ? G : never : never };
+  };
 };
 
-let bakedNetwork: BakedNetwork | null = null;
+let bakedNetwork: Promise<BakedNetwork> | null = null;
 
-async function loadBakedNetwork(): Promise<BakedNetwork> {
-  if (bakedNetwork) return bakedNetwork;
-  // Cache-friendly: the baked graph only changes on deploy, so a 1-day TTL
-  // lets repeat visits resolve from disk cache instead of refetching 1.8 MB.
-  const response = await fetch('/data/houston_network.json', { cache: 'force-cache' });
-  if (!response.ok) throw new Error('Baked street network unavailable');
-  const parsed = (await response.json()) as BakedNetwork;
-  bakedNetwork = parsed;
-  SAFE_EXITS = parsed.safe_exits ?? [];
-  EXIT_NAMES = parsed.exit_names ?? {};
-  return parsed;
+function loadBakedNetwork(): Promise<BakedNetwork> {
+  // The baked graph only changes on deploy, so repeat visits resolve from the
+  // HTTP cache instead of refetching ~1.9 MB.
+  bakedNetwork ??= fetch('/data/houston_network.json', { cache: 'force-cache' }).then((response) => {
+    if (!response.ok) throw new Error('Baked street network unavailable');
+    return response.json() as Promise<BakedNetwork>;
+  }).catch((error) => {
+    bakedNetwork = null;
+    throw error;
+  });
+  return bakedNetwork;
 }
 
-type Section = 'briefing' | 'map' | 'audit';
-type MapFilterMode = 'nominal' | 'radar' | 'thermal';
-type ScenarioPreset = 'flood' | 'cascade' | 'heatwave' | 'clear';
+export type Section = 'briefing' | 'map' | 'audit';
+export type Basemap = 'dark' | 'light' | 'aerial';
+export type ScenarioPreset = 'clear' | 'flood' | 'cascade' | 'heatwave';
+export type { OperatorEvent };
 
-/** A saved operating picture: the full scenario knob state plus the route
- * outcome at save time, so two snapshots can be diffed after the fact. */
+/** A saved operating picture plus its outcome, so two snapshots can be compared later. */
 export interface ScenarioSnapshot {
   id: string;
   label: string;
@@ -69,120 +73,160 @@ export interface ScenarioSnapshot {
   floodLevel: number;
   failedSubstations: number[];
   travelMode: TravelMode;
-  outcome: {
-    success: boolean;
-    eta_minutes: number;
-    distance_m: number;
-    dest_node: number;
-    risk_level: string;
-  };
+  evacuees: number;
+  destinationId: string | null;
+  closures: Array<[number, number]>;
+  outcome: { success: boolean; eta_minutes: number; distance_m: number; dest_node: number; risk_level: string };
 }
-
-/* Travel-mode profiles mirror backend/routing.py so offline results match the
- * API exactly: seconds = distance_m * 2.23694 / mph, adjusted per road class. */
-const TRAVEL_MODES: Record<TravelMode, { mph: (limit: number) => number; roadClass: Record<string, number>; floodPartial: number; blackoutMult: number }> = {
-  vehicle: { mph: (limit) => Math.min(70, limit), roadClass: { arterial: 0.94, collector: 1, local: 1, service: 1.35 }, floodPartial: 180, blackoutMult: 4.5 },
-  foot: { mph: () => 3.1, roadClass: { arterial: 1.6, collector: 1.2, local: 1, service: 1 }, floodPartial: 450, blackoutMult: 1.6 },
-  ems: { mph: (limit) => Math.min(65, limit * 1.3), roadClass: { arterial: 0.8, collector: 0.9, local: 1.05, service: 1.9 }, floodPartial: 240, blackoutMult: 2 },
-};
-
-function travelModeConfig(mode: TravelMode) {
-  return TRAVEL_MODES[mode] ?? TRAVEL_MODES.vehicle;
-}
-
-const ISOCHRONE_MINUTES: Record<TravelMode, number[]> = {
-  vehicle: [3, 6, 9, 12],
-  foot: [5, 10, 15, 20],
-  ems: [2, 4, 6, 8],
-};
 
 type SimulationStore = {
   floodLevel: number;
   failedSubstations: number[];
   originNode: number;
-  destNode: number;
+  closures: Array<[number, number]>;
+  closureMode: boolean;
 
   gridFrequency: number;
   substationLoads: Record<number, number>;
   overloadedSubstations: number[];
   cascadedSubstations: number[];
-  voltageReadings: Record<number, number>;
-  liveLogs: string[];
-  usgsGageHeight: number;
-  surfaceTemp: number;
+  floodedSubstations: number[];
   frequencyHistory: number[];
-  gageHistory: number[];
+  events: OperatorEvent[];
+  observations: ObservationsResponse | null;
 
   showBuildings: boolean;
   showPowerLines: boolean;
   showSubstations: boolean;
   showIntersections: boolean;
   showRoadNames: boolean;
+  showWaterways: boolean;
+  basemap: Basemap;
   flyToNodeId: number | null;
   flyToRoadKey: string | null;
   flyToCoords: { lon: number; lat: number; elev: number; heading?: number; pitch?: number } | null;
-  mapFilterMode: MapFilterMode;
+  highlightedStep: number | null;
   activeSection: Section;
 
   travelMode: TravelMode;
-  /** Evacuating population driving BPR congestion on ETAs and reach. */
   evacuees: number;
-  /** Route to a shelter/medical destination instead of a perimeter exit. */
   destinationId: string | null;
   corridorComparison: CorridorComparisonResponse | null;
   isochrone: IsochroneResponse | null;
   isochroneVisible: boolean;
+  triggerPoints: TriggerPointsResponse | null;
 
   snapshots: ScenarioSnapshot[];
   activeSnapshotId: string | null;
 
   cityData: CityData | null;
   route: RouteResponse | null;
+  lastSolvedAt: string | null;
   isLoading: boolean;
   backendOnline: boolean;
   error: string | null;
 
-  setTravelMode: (mode: TravelMode) => void;
-  setEvacuees: (value: number) => void;
-  setDestination: (id: string | null) => void;
-  refreshCorridors: () => Promise<void>;
-  setIsochroneVisible: (value: boolean) => void;
+  addLog: (message: string, kind?: OperatorEvent['kind']) => void;
+  fetchCityData: () => Promise<void>;
+  loadCity: () => Promise<void>;
+  reconnect: () => Promise<void>;
+  calculateRoute: () => Promise<void>;
+  refreshAnalysis: () => Promise<void>;
   refreshIsochrone: () => Promise<void>;
-  saveSnapshot: (label: string) => void;
-  applySnapshot: (id: string) => void;
-  deleteSnapshot: (id: string) => void;
-  setActiveSnapshotId: (id: string | null) => void;
+  refreshObservations: () => Promise<void>;
+  syncFloodToGage: () => void;
+  triggerLiveTick: () => void;
+
   setFloodLevel: (value: number) => void;
   toggleSubstation: (id: number) => void;
   setOriginNode: (id: number) => void;
-  fetchCityData: () => Promise<void>;
-  calculateRoute: () => Promise<void>;
-  clearRoute: () => void;
-  checkBackend: () => Promise<void>;
-  addLog: (message: string) => void;
-  triggerLiveTick: () => void;
+  setTravelMode: (mode: TravelMode) => void;
+  setEvacuees: (value: number) => void;
+  setDestination: (id: string | null) => void;
+  toggleClosure: (source: number, target: number) => void;
+  clearClosures: () => void;
+  setClosureMode: (value: boolean) => void;
+  applyScenario: (preset: ScenarioPreset) => void;
+
+  saveSnapshot: (label: string) => void;
+  applySnapshot: (id: string) => void;
+  deleteSnapshot: (id: string) => void;
+
   setShowBuildings: (value: boolean) => void;
   setShowPowerLines: (value: boolean) => void;
   setShowSubstations: (value: boolean) => void;
   setShowIntersections: (value: boolean) => void;
   setShowRoadNames: (value: boolean) => void;
+  setShowWaterways: (value: boolean) => void;
+  setBasemap: (value: Basemap) => void;
+  setIsochroneVisible: (value: boolean) => void;
   setFlyToNodeId: (id: number | null) => void;
   setFlyToRoadKey: (key: string | null) => void;
-  setFlyToCoords: (coords: { lon: number; lat: number; elev: number; heading?: number; pitch?: number } | null) => void;
-  setMapFilterMode: (mode: MapFilterMode) => void;
-  applyScenario: (preset: ScenarioPreset) => void;
+  setFlyToCoords: (coords: SimulationStore['flyToCoords']) => void;
+  setHighlightedStep: (index: number | null) => void;
   setActiveSection: (section: Section) => void;
 };
 
+const MAX_EVENTS = 250;
+const SNAPSHOT_KEY = 'gridevac-snapshots';
+let eventSerial = 0;
 let routeRequestSerial = 0;
+// One city load per page: React strict mode runs mount effects twice in
+// development, which previously solved and logged the first route twice.
+let cityLoad: Promise<void> | null = null;
 let recalculateTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingReasons = new Map<string, string>();
 
-function queueRouteCalculation(calculate: () => Promise<void>) {
+const TRAVEL_MODE_LABELS: Record<TravelMode, string> = { vehicle: 'response vehicle', foot: 'on-foot evacuation', ems: 'EMS priority run' };
+
+const PRESETS: Record<ScenarioPreset, { label: string; floodLevel: number; failedSubstations: number[] }> = {
+  clear: { label: 'Normal operations', floodLevel: 0, failedSubstations: [] },
+  flood: { label: 'Buffalo Bayou flood', floodLevel: 8, failedSubstations: [] },
+  cascade: { label: 'Downtown feeder cascade', floodLevel: 0, failedSubstations: [0, 2] },
+  heatwave: { label: 'Peak heat and transmission strain', floodLevel: 0, failedSubstations: [1, 3] },
+};
+
+const nodeIndexes = new WeakMap<CityData, Map<number, NodeData>>();
+function nodeById(city: CityData | null, id: number): NodeData | undefined {
+  if (!city) return undefined;
+  let index = nodeIndexes.get(city);
+  if (!index) {
+    index = new Map(city.nodes.map((node) => [node.id, node]));
+    nodeIndexes.set(city, index);
+  }
+  return index.get(id);
+}
+
+/**
+ * A sensible origin: a real street junction vehicles can leave, not a bridge
+ * deck or exit, dry by `margin` metres at `surface`, nearest `near`.
+ */
+function pickOrigin(city: CityData, surface: number, near: { lat: number; lon: number }, margin = 1): number | null {
+  const junctions = logicalJunctions(city).ids;
+  const core = vehicleCore(city);
+  const exits = new Set(city.safe_exits);
+  let best: NodeData | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  city.nodes.forEach((node) => {
+    if (!junctions.has(node.id) || !core.has(node.id) || exits.has(node.id) || node.elevated) return;
+    if (floodStage(node) <= surface + margin) return;
+    const distance = Math.hypot(node.lat - near.lat, (node.lon - near.lon) * Math.cos((near.lat * Math.PI) / 180));
+    if (distance < bestDistance) { best = node; bestDistance = distance; }
+  });
+  return best ? (best as NodeData).id : null;
+}
+
+function queueRouteCalculation(get: () => SimulationStore, key: string, reason: string) {
+  pendingReasons.set(key, reason);
   if (recalculateTimer) clearTimeout(recalculateTimer);
   recalculateTimer = setTimeout(() => {
     recalculateTimer = null;
-    void calculate();
-  }, 140);
+    // One log line per settled change: dragging a slider no longer writes a
+    // hundred events into the audit trail.
+    pendingReasons.forEach((message) => get().addLog(message, 'action'));
+    pendingReasons.clear();
+    void get().calculateRoute();
+  }, 160);
 }
 
 function normalizeRoute(route: RouteResponse): RouteResponse {
@@ -190,1001 +234,519 @@ function normalizeRoute(route: RouteResponse): RouteResponse {
     ...route,
     path_coords: route.path_coords ?? [],
     blocked_edges: route.blocked_edges ?? [],
+    closed_edges: route.closed_edges ?? [],
+    flooded_substations: route.flooded_substations ?? [],
     distance_m: route.distance_m ?? 0,
     eta_minutes: route.eta_minutes ?? 0,
-    congested_eta_minutes: route.congested_eta_minutes ?? 0,
+    congested_eta_minutes: route.congested_eta_minutes ?? route.eta_minutes ?? 0,
+    congestion_factor: route.congestion_factor ?? 1,
+    water_surface_m: route.water_surface_m ?? 0,
     destination_name: route.destination_name ?? '',
     destination_kind: route.destination_kind ?? '',
-    route_steps: route.route_steps ?? [],
+    route_steps: (route.route_steps ?? []).map((step) => ({ ...step, maneuver: step.maneuver ?? 'continue', bearing: step.bearing ?? 0 })),
     hazard_roads: route.hazard_roads ?? {},
   };
 }
 
 function normalizeCityData(data: CityData): CityData {
-  const rawNodes = data.nodes ?? [];
-  const nodes = rawNodes.map((node) => ({
-    ...node,
-    intersection_name: node.intersection_name || `Node ${node.id}`,
-    district: node.district || 'Houston operations district',
-  }));
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  const edges = (data.edges ?? []).map((edge) => {
-    const source = nodesById.get(edge.source);
-    const target = nodesById.get(edge.target);
-    const distance_m = edge.distance_m || (source && target ? distanceMeters(source, target) : 0);
-    return {
-      ...edge,
-      distance_m,
-      road_name: edge.road_name || 'Unnamed street',
-      road_class: edge.road_class || 'local',
-      lanes: edge.lanes || 2,
-      speed_limit_mph: edge.speed_limit_mph || 25,
-      geometry: edge.geometry ?? [],
-    };
-  });
   return {
     ...data,
-    nodes,
-    edges,
-    blocks: (data.blocks ?? []).map((block) => ({ ...block, footprint: block.footprint ?? [] })),
+    nodes: (data.nodes ?? []).map((node) => ({ ...node, intersection_name: node.intersection_name || `Node ${node.id}`, district: node.district || 'Houston operations district' })),
+    edges: (data.edges ?? []).map((edge) => ({ ...edge, road_name: edge.road_name || 'Unnamed street', road_class: edge.road_class || 'local', lanes: edge.lanes || 2, speed_limit_mph: edge.speed_limit_mph || 25, oneway: edge.oneway ?? 0, geometry: edge.geometry ?? [] })),
+    blocks: (data.blocks ?? []).map((block: BlockData) => ({ ...block, footprint: block.footprint ?? [] })),
     parks: data.parks ?? [],
-    substations: (data.substations ?? []).map((sub) => ({ ...sub, affected_nodes: sub.affected_nodes ?? [] })),
+    waterways: data.waterways ?? [],
+    substations: (data.substations ?? []).map((sub: SubstationData) => ({ ...sub, affected_nodes: sub.affected_nodes ?? [] })),
     transmission_links: data.transmission_links ?? [],
-    safe_exits: data.safe_exits?.length ? data.safe_exits : SAFE_EXITS,
-    exit_names: data.exit_names && Object.keys(data.exit_names).length ? data.exit_names : EXIT_NAMES,
-    shelters: data.shelters ?? [],
+    safe_exits: data.safe_exits ?? [],
+    exit_names: data.exit_names ?? {},
+    shelters: (data.shelters ?? []).map((shelter: ShelterData) => ({ ...shelter, kind: shelter.kind === 'medical' ? 'medical' : 'shelter' })),
   };
 }
 
-export const useSimulationStore = create<SimulationStore>((set, get) => ({
-  floodLevel: 0,
-  failedSubstations: [],
-  originNode: DEFAULT_ORIGIN,
-  destNode: -1,
+function buildOfflineCityData(network: BakedNetwork): CityData {
+  const meta = network.meta;
+  return normalizeCityData({
+    ...network,
+    nodes: network.nodes.map((node) => ({ ...node, district: 'Houston operations district' })),
+    center_lat: meta.center_lat,
+    center_lon: meta.center_lon,
+    flood_model: meta.flood_model ? {
+      method: meta.flood_model.method,
+      datum_m: meta.flood_model.datum_m,
+      rise_per_level_m: meta.flood_model.rise_per_level_m,
+      vertical_datum: meta.vertical_datum ?? 'NAVD88',
+      elevation_source: meta.elevation_source ?? '',
+      gage: meta.flood_model.gage ?? {},
+    } : undefined,
+  } as CityData);
+}
 
-  gridFrequency: 60,
-  substationLoads: {},
-  overloadedSubstations: [],
-  cascadedSubstations: [],
-  voltageReadings: {},
-  liveLogs: [
-    'GridEvac AI: Regional operations console initialized.',
-    'Street network: awaiting first route assessment.',
-  ],
-  usgsGageHeight: 4.5,
-  surfaceTemp: 87.5,
-  frequencyHistory: Array(16).fill(60),
-  gageHistory: Array(16).fill(4.5),
+interface SharedScenario {
+  origin?: number;
+  flood?: number;
+  mode?: TravelMode;
+  failed?: number[];
+  evacuees?: number;
+  dest?: string;
+  closed?: Array<[number, number]>;
+}
 
-  showBuildings: true,
-  showPowerLines: false,
-  showSubstations: true,
-  // Intersections and road-name labels start off: with ~4,000 junctions and
-  // ~90 labels the default view stays calm, and both are one toggle away.
-  // Street-level dots stay visible by default; a hidden-dots default made the
-  // map look inert. Clickability is independent of this toggle anyway (there
-  // is an invisible always-pickable dot layer), so this is purely cosmetic.
-  showIntersections: true,
-  showRoadNames: false,
-  flyToNodeId: null,
-  flyToRoadKey: null,
-  flyToCoords: null,
-  mapFilterMode: 'nominal',
-  activeSection: 'briefing',
+/** Deep-link restore: a shared link drops the recipient into the same operating picture. */
+function readSharedScenario(): SharedScenario {
+  if (typeof window === 'undefined' || !window.location.search) return {};
+  const params = new URLSearchParams(window.location.search);
+  const number = (key: string) => {
+    const value = params.get(key);
+    return value !== null && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : undefined;
+  };
+  return {
+    origin: number('origin'),
+    flood: number('flood'),
+    mode: (['vehicle', 'foot', 'ems'] as const).find((mode) => mode === params.get('mode')),
+    failed: params.get('failed')?.split(',').map(Number).filter(Number.isInteger),
+    evacuees: number('evacuees'),
+    dest: params.get('dest') || undefined,
+    closed: params.get('closed')?.split(',').map((pair) => pair.split('-').map(Number) as [number, number]).filter((pair) => pair.length === 2 && pair.every(Number.isInteger)),
+  };
+}
 
-  travelMode: 'vehicle' as TravelMode,
-  evacuees: 0,
-  destinationId: null,
-  corridorComparison: null,
-  isochrone: null,
-  isochroneVisible: false,
-
-  snapshots: [],
-  activeSnapshotId: null,
-
-  cityData: null,
-  route: null,
-  isLoading: false,
-  backendOnline: false,
-  error: null,
-
-  addLog: (message) => {
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    set((state) => ({ liveLogs: [`${time}  ${message}`, ...state.liveLogs].slice(0, 40) }));
-  },
-
-  setFloodLevel: (value) => {
-    const next = Math.max(0, Math.min(10, value));
-    const { cityData, originNode } = get();
-    let nextOrigin = originNode;
-    const currentOrigin = cityData?.nodes.find((node) => node.id === originNode);
-    if (currentOrigin && currentOrigin.elevation <= next * FLOOD_RISE_PER_LEVEL) {
-      const replacement = cityData?.nodes
-        .filter((node) => !SAFE_EXITS.includes(node.id) && node.elevation > next * FLOOD_RISE_PER_LEVEL)
-        .sort((a, b) => Math.hypot(a.lat - currentOrigin.lat, a.lon - currentOrigin.lon) - Math.hypot(b.lat - currentOrigin.lat, b.lon - currentOrigin.lon))[0];
-      if (replacement) {
-        nextOrigin = replacement.id;
-        get().addLog(`Origin Node ${originNode} entered the flood surface; moved to dry Node ${replacement.id}.`);
-      }
-    }
-    set({ floodLevel: next, originNode: nextOrigin });
-    get().addLog(`Scenario parameter changed: water surface ${next.toFixed(1)} / 10.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-
-  toggleSubstation: (id) => {
-    const { failedSubstations, cityData } = get();
-    const nextFailed = failedSubstations.includes(id)
-      ? failedSubstations.filter((item) => item !== id)
-      : [...failedSubstations, id];
-    const name = cityData?.substations.find((sub) => sub.id === id)?.name ?? `Substation ${id}`;
-    set({ failedSubstations: nextFailed });
-    get().addLog(`${name}: ${nextFailed.includes(id) ? 'manual outage applied' : 'returned to service'}.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-
-  setOriginNode: (id) => {
-    const node = get().cityData?.nodes.find((item) => item.id === id);
-    set({ originNode: id });
-    get().addLog(`Origin moved to Node ${id}${node ? ` (${node.intersection_name})` : ''}.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-
-  clearRoute: () => {
-    set({ route: null, destNode: -1, error: null });
-    get().addLog('Route overlay cleared; scenario parameters retained.');
-  },
-
-  checkBackend: async () => {
-    const online = await api.health();
-    set({ backendOnline: online });
-  },
-
-  fetchCityData: async () => {
-    set({ isLoading: true, error: null });
-    // Restore saved scenario snapshots before anything else so the UI shows
-    // them immediately.
-    try {
-      const stored = typeof window !== 'undefined' ? window.localStorage.getItem('gridevac-snapshots') : null;
-      if (stored) set({ snapshots: JSON.parse(stored) as ScenarioSnapshot[] });
-    } catch { /* ignore malformed storage */ }
-    // Start pulling the baked network immediately: if the API path fails, the
-    // 1.8 MB offline graph is already mid-flight instead of starting cold.
-    const bakedPromise = loadBakedNetwork().catch(() => null);
-    // Deep-link restore (?origin=&flood=&mode=&failed=) - a shared scenario
-    // link drops the recipient into the exact operating picture.
-    let shared: { origin?: number; flood?: number; mode?: TravelMode; failed?: number[]; evacuees?: number; dest?: string } = {};
-    if (typeof window !== 'undefined' && window.location.search) {
-      const params = new URLSearchParams(window.location.search);
-      shared = {
-        origin: params.get('origin') ? Number(params.get('origin')) : undefined,
-        flood: params.get('flood') ? Number(params.get('flood')) : undefined,
-        mode: (['vehicle', 'foot', 'ems'] as const).find((m) => m === params.get('mode')),
-        failed: params.get('failed') ? params.get('failed')!.split(',').map(Number).filter(Number.isInteger) : undefined,
-        evacuees: params.get('evacuees') ? Math.max(0, Math.min(200_000, Number(params.get('evacuees')))) : undefined,
-        dest: params.get('dest') || undefined,
-      };
-    }
-    try {
-      const cityData = normalizeCityData(await api.getCityData());
-      const loads: Record<number, number> = {};
-      cityData.substations.forEach((sub) => { loads[sub.id] = sub.base_load_mw; });
-      SAFE_EXITS = cityData.safe_exits;
-      const sharedState: Partial<SimulationStore> = {};
-      if (shared.origin !== undefined && cityData.nodes.some((node) => node.id === shared.origin)) sharedState.originNode = shared.origin;
-      if (shared.flood !== undefined) sharedState.floodLevel = Math.max(0, Math.min(10, shared.flood));
-      if (shared.mode) sharedState.travelMode = shared.mode;
-      if (shared.failed) sharedState.failedSubstations = shared.failed;
-      if (shared.evacuees !== undefined) sharedState.evacuees = shared.evacuees;
-      if (shared.dest && cityData.shelters?.some((shelter) => shelter.id === shared.dest)) sharedState.destinationId = shared.dest;
-      if (Object.keys(sharedState).length) set(sharedState);
-      set({ cityData, substationLoads: loads, isLoading: false, backendOnline: true });
-      get().addLog(`Street database loaded: ${cityData.nodes.length} intersections, ${cityData.edges.length} street segments.`);
-      await get().calculateRoute();
-    } catch {
-      try {
-        const network = await bakedPromise;
-        if (!network) throw new Error('Baked street network unavailable');
-        const cityData = buildOfflineCityData(network);
-        const loads: Record<number, number> = {};
-        cityData.substations.forEach((sub) => { loads[sub.id] = sub.base_load_mw; });
-        const sharedState: Partial<SimulationStore> = {};
-        if (shared.origin !== undefined && cityData.nodes.some((node) => node.id === shared.origin)) sharedState.originNode = shared.origin;
-        if (shared.flood !== undefined) sharedState.floodLevel = Math.max(0, Math.min(10, shared.flood));
-        if (shared.mode) sharedState.travelMode = shared.mode;
-        if (shared.failed) sharedState.failedSubstations = shared.failed;
-        if (shared.evacuees !== undefined) sharedState.evacuees = shared.evacuees;
-        if (shared.dest && cityData.shelters?.some((shelter) => shelter.id === shared.dest)) sharedState.destinationId = shared.dest;
-        if (Object.keys(sharedState).length) set(sharedState);
-        set({ cityData, substationLoads: loads, isLoading: false, backendOnline: false, error: null });
-        get().addLog('Offline mode: local OpenStreetMap street graph loaded; route solver remains available.');
-        await get().calculateRoute();
-      } catch {
-        set({ isLoading: false, error: 'No street data is available. Check the backend connection and reload.' });
-      }
-    }
-  },
-
-  calculateRoute: async () => {
-    const requestId = ++routeRequestSerial;
-    const { floodLevel, failedSubstations, originNode, travelMode, evacuees, destinationId } = get();
-    set({ isLoading: true, error: null });
-    const params = { flood_level: floodLevel, failed_substations: failedSubstations, origin_node: originNode, travel_mode: travelMode, evacuees, destination: destinationId };
-    try {
-      const response = normalizeRoute(await api.calculateRoute(params));
-      if (requestId !== routeRequestSerial) return;
-      setRouteTelemetry(set, response);
-      set({ backendOnline: true, isLoading: false });
-      const label = response.destination_name || `Node ${response.dest_node}`;
-      get().addLog(`Route solved (${travelMode}): ${response.success ? `${formatDistance(response.distance_m)} to ${label}` : 'no passable corridor'}.`);
-    } catch {
-      const cityData = get().cityData;
-      if (requestId !== routeRequestSerial) return;
-      if (!cityData) {
-        set({ isLoading: false, error: 'No street data is available for route calculation.' });
-        return;
-      }
-      const response = calculateOfflineRoute(cityData, floodLevel, failedSubstations, originNode, travelMode, evacuees, destinationId);
-      setRouteTelemetry(set, response);
-      set({ backendOnline: false, isLoading: false });
-      get().addLog(`Local route solver (${travelMode}): ${response.success ? `${formatDistance(response.distance_m)} corridor found` : 'no passable corridor'}.`);
-    }
-    // Keep the comparison and reachability views in sync with the new state.
-    void get().refreshCorridors();
-    if (get().isochroneVisible) void get().refreshIsochrone();
-  },
-
-  setEvacuees: (value) => {
-    const next = Math.max(0, Math.min(200_000, Math.round(value)));
-    set({ evacuees: next });
-    get().addLog(`Evacuation demand: ${next === 0 ? 'free flow' : `${next.toLocaleString()} people on the road network`}.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-
-  setDestination: (id) => {
-    set({ destinationId: id });
-    const shelter = get().cityData?.shelters?.find((item) => item.id === id);
-    if (shelter) get().addLog(`Destination set: ${shelter.name} (${shelter.kind === 'medical' ? 'medical' : 'shelter'}).`);
-    else get().addLog('Destination cleared; routing to the best dry perimeter exit.');
-    queueRouteCalculation(get().calculateRoute);
-  },
-
-  triggerLiveTick: () => {
-    const { route, cityData, failedSubstations, cascadedSubstations, substationLoads, gridFrequency, usgsGageHeight, surfaceTemp } = get();
-    if (!route || !cityData || Object.keys(substationLoads).length === 0) return;
-    const nextLoads = { ...substationLoads };
-    const nextOverloaded = get().overloadedSubstations.filter((id) => !failedSubstations.includes(id) && !cascadedSubstations.includes(id));
-    Object.keys(nextLoads).forEach((key) => {
-      const id = Number(key);
-      if (failedSubstations.includes(id) || cascadedSubstations.includes(id)) return;
-      const sub = cityData.substations.find((item) => item.id === id);
-      nextLoads[id] = Math.max(10, Number((nextLoads[id] + (Math.random() - 0.5) * 1.4).toFixed(1)));
-      if (sub && nextLoads[id] > sub.capacity_mw && !nextOverloaded.includes(id)) nextOverloaded.push(id);
-      if (sub && nextLoads[id] <= sub.capacity_mw) {
-        const index = nextOverloaded.indexOf(id);
-        if (index >= 0) nextOverloaded.splice(index, 1);
-      }
-    });
-
-    const failedCount = failedSubstations.length + cascadedSubstations.length;
-    const nextFrequency = Number(Math.max(45, Math.min(60, gridFrequency + (Math.random() - 0.5) * 0.02 - failedCount * 0.001)).toFixed(2));
-    const nextGage = Number(Math.max(1, usgsGageHeight + (Math.random() - 0.5) * 0.08).toFixed(2));
-    const nextTemp = Number(Math.max(50, surfaceTemp + (Math.random() - 0.5) * 0.12).toFixed(1));
-    set((state) => ({
-      substationLoads: nextLoads,
-      overloadedSubstations: nextOverloaded,
-      gridFrequency: nextFrequency,
-      usgsGageHeight: nextGage,
-      surfaceTemp: nextTemp,
-      frequencyHistory: [...state.frequencyHistory.slice(1), nextFrequency],
-      gageHistory: [...state.gageHistory.slice(1), nextGage],
-    }));
-  },
-
-  setShowBuildings: (value) => set({ showBuildings: value }),
-  setShowPowerLines: (value) => set({ showPowerLines: value }),
-  setShowSubstations: (value) => set({ showSubstations: value }),
-  setShowIntersections: (value) => set({ showIntersections: value }),
-  setShowRoadNames: (value) => set({ showRoadNames: value }),
-  setTravelMode: (mode) => {
-    set({ travelMode: mode });
-    get().addLog(`Travel mode: ${mode === 'vehicle' ? 'response vehicle' : mode === 'foot' ? 'on-foot evacuation' : 'EMS priority run'}.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-  refreshCorridors: async () => {
-    const { cityData, floodLevel, failedSubstations, originNode, travelMode, evacuees } = get();
-    if (!cityData) return;
-    if (get().backendOnline) {
-      try {
-        set({ corridorComparison: await api.compareCorridors(originNode, floodLevel, failedSubstations, travelMode, evacuees) });
-        return;
-      } catch { /* fall through to local solver */ }
-    }
-    set({ corridorComparison: offlineCompareCorridors(cityData, originNode, floodLevel, failedSubstations, travelMode, evacuees) });
-  },
-  setIsochroneVisible: (value) => set({ isochroneVisible: value }),
-  saveSnapshot: (label) => {
-    const { originNode, floodLevel, failedSubstations, travelMode, route } = get();
-    const snapshot: ScenarioSnapshot = {
-      id: `snap-${Date.now()}-${Math.round(Math.random() * 1e4)}`,
-      label: label.trim() || `Scenario ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-      savedAt: Date.now(),
-      originNode,
-      floodLevel,
-      failedSubstations: [...failedSubstations],
-      travelMode,
-      outcome: {
-        success: route?.success ?? false,
-        eta_minutes: route?.eta_minutes ?? 0,
-        distance_m: route?.distance_m ?? 0,
-        dest_node: route?.dest_node ?? -1,
-        risk_level: route?.risk_level ?? '-',
-      },
-    };
-    let next: ScenarioSnapshot[] = [snapshot];
-    try {
-      const stored = window.localStorage.getItem('gridevac-snapshots');
-      const prior: ScenarioSnapshot[] = stored ? JSON.parse(stored) : [];
-      next = [snapshot, ...prior].slice(0, 6);
-      window.localStorage.setItem('gridevac-snapshots', JSON.stringify(next));
-    } catch { /* private mode: keep session-only */ }
-    set({ snapshots: next, activeSnapshotId: snapshot.id });
-    get().addLog(`Scenario snapshot saved: ${snapshot.label}.`);
-  },
-  applySnapshot: (id) => {
-    const snapshot = get().snapshots.find((snap) => snap.id === id);
-    if (!snapshot) return;
-    set({
-      originNode: snapshot.originNode,
-      floodLevel: snapshot.floodLevel,
-      failedSubstations: [...snapshot.failedSubstations],
-      travelMode: snapshot.travelMode,
-      activeSnapshotId: id,
-    });
-    get().addLog(`Scenario restored: ${snapshot.label}.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-  deleteSnapshot: (id) => {
-    const next = get().snapshots.filter((snap) => snap.id !== id);
-    try { window.localStorage.setItem('gridevac-snapshots', JSON.stringify(next)); } catch { /* ignore */ }
-    set({ snapshots: next, activeSnapshotId: get().activeSnapshotId === id ? null : get().activeSnapshotId });
-  },
-  setActiveSnapshotId: (id) => set({ activeSnapshotId: id }),
-  refreshIsochrone: async () => {
-    const { cityData, floodLevel, failedSubstations, originNode, travelMode, isochroneVisible, evacuees } = get();
-    if (!cityData || !isochroneVisible) return;
-    if (get().backendOnline) {
-      try {
-        set({ isochrone: await api.isochrone(originNode, floodLevel, failedSubstations, travelMode, ISOCHRONE_MINUTES[travelMode], evacuees) });
-        return;
-      } catch { /* fall through to local solver */ }
-    }
-    set({ isochrone: offlineIsochrone(cityData, originNode, floodLevel, failedSubstations, travelMode, ISOCHRONE_MINUTES[travelMode], evacuees) });
-  },
-  setFlyToNodeId: (id) => set({ flyToNodeId: id }),
-  setFlyToRoadKey: (key) => set({ flyToRoadKey: key }),
-  setFlyToCoords: (coords) => set({ flyToCoords: coords }),
-  setMapFilterMode: (mode) => set({ mapFilterMode: mode }),
-
-  applyScenario: (preset) => {
-    const { cityData } = get();
-    const substations = cityData?.substations ?? [];
-    const downtown = substations[0]?.node ?? DEFAULT_ORIGIN;
-    const secondary = substations[1]?.node ?? DEFAULT_ORIGIN;
-    // Bayou-rise drill: start from the driest central node so the operator
-    // watches the low corridor flood while the origin stays viable.
-    const centerLat = cityData?.center_lat ?? 29.7604;
-    const centerLon = cityData?.center_lon ?? -95.3698;
-    const bayouRiseOrigin = cityData?.nodes
-      .slice()
-      .filter((node) => node.elevation > 7.2 * FLOOD_RISE_PER_LEVEL)
-      .sort((a, b) => Math.hypot(a.lat - centerLat, a.lon - centerLon) - Math.hypot(b.lat - centerLat, b.lon - centerLon))[0]?.id ?? downtown;
-    const scenarios: Record<ScenarioPreset, { floodLevel: number; failedSubstations: number[]; originNode: number; label: string }> = {
-      clear: { floodLevel: 0, failedSubstations: [], originNode: downtown, label: 'Normal operations' },
-      flood: { floodLevel: 7.2, failedSubstations: [], originNode: bayouRiseOrigin, label: 'Buffalo Bayou flash flood' },
-      cascade: { floodLevel: 1.8, failedSubstations: [0, 2], originNode: downtown, label: 'Downtown feeder cascade' },
-      heatwave: { floodLevel: 0.4, failedSubstations: [1, 3], originNode: secondary, label: 'Peak heat and transmission strain' },
-    };
-    const scenario = scenarios[preset];
-    set({ floodLevel: scenario.floodLevel, failedSubstations: scenario.failedSubstations, originNode: scenario.originNode });
-    get().addLog(`Scenario loaded: ${scenario.label}.`);
-    queueRouteCalculation(get().calculateRoute);
-  },
-
-  setActiveSection: (section) => set({ activeSection: section }),
-}));
-
-function setRouteTelemetry(set: (partial: Partial<SimulationStore>) => void, route: RouteResponse) {
-  set({
-    route,
-    destNode: route.dest_node,
-    gridFrequency: route.grid_frequency,
-    substationLoads: route.substation_loads,
-    overloadedSubstations: route.overloaded_substations,
-    cascadedSubstations: route.cascaded_substations,
-    voltageReadings: route.voltage_readings,
-    usgsGageHeight: route.usgs_gage_height,
-    surfaceTemp: route.surface_temp,
-  });
+export function scenarioUrl(state: Pick<SimulationStore, 'originNode' | 'floodLevel' | 'travelMode' | 'failedSubstations' | 'evacuees' | 'destinationId' | 'closures'>): string {
+  if (typeof window === 'undefined') return '';
+  const params = new URLSearchParams({ origin: String(state.originNode), flood: state.floodLevel.toFixed(2), mode: state.travelMode });
+  if (state.failedSubstations.length) params.set('failed', state.failedSubstations.join(','));
+  if (state.evacuees > 0) params.set('evacuees', String(state.evacuees));
+  if (state.destinationId) params.set('dest', state.destinationId);
+  if (state.closures.length) params.set('closed', state.closures.map(([u, v]) => `${u}-${v}`).join(','));
+  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 }
 
 function formatDistance(meters: number): string {
   return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
 }
 
-function distanceMeters(a: NodeData, b: NodeData) {
-  const lat = (b.lat - a.lat) * 111320;
-  const lon = (b.lon - a.lon) * 111320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
-  return Math.hypot(lat, lon);
+function readSnapshots(): ScenarioSnapshot[] {
+  try {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem(SNAPSHOT_KEY) : null;
+    const parsed = stored ? (JSON.parse(stored) as Partial<ScenarioSnapshot>[]) : [];
+    return parsed.filter((snap) => typeof snap?.id === 'string').map((snap) => ({
+      evacuees: 0,
+      destinationId: null,
+      closures: [],
+      ...snap,
+    }) as ScenarioSnapshot);
+  } catch {
+    return [];
+  }
 }
 
-/* ------------------------------------------------------------------ */
-/* Offline city data: built from the same baked OpenStreetMap network  */
-/* the backend uses, so offline mode matches online behavior exactly.  */
-/* ------------------------------------------------------------------ */
+function writeSnapshots(snapshots: ScenarioSnapshot[]) {
+  try { window.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots)); } catch { /* private mode: session only */ }
+}
 
-function buildOfflineCityData(network: BakedNetwork): CityData {
-  const nodes: NodeData[] = network.nodes.map((node) => ({
-    id: node.id,
-    osm: node.osm,
-    lat: node.lat,
-    lon: node.lon,
-    elevation: node.elevation,
-    intersection_name: node.intersection_name || `Node ${node.id}`,
-    district: 'Houston operations district',
-  }));
-  const edges: EdgeData[] = network.edges.map((edge) => ({
-    source: edge.source,
-    target: edge.target,
-    weight: edge.weight,
-    distance_m: edge.distance_m,
-    road_name: edge.road_name,
-    road_class: edge.road_class,
-    lanes: edge.lanes,
-    speed_limit_mph: edge.speed_limit_mph,
-    geometry: edge.geometry ?? [],
-  }));
-  return {
-    nodes,
-    edges,
-    blocks: network.blocks ?? [],
-    parks: network.parks ?? [],
-    substations: (network.substations ?? []).map((sub) => ({ ...sub, affected_nodes: sub.affected_nodes ?? [] })),
-    transmission_links: network.transmission_links ?? [],
-    center_lat: network.meta.center_lat,
-    center_lon: network.meta.center_lon,
-    safe_exits: network.safe_exits ?? [],
-    exit_names: network.exit_names ?? {},
-    shelters: (network.shelters ?? []).map((shelter) => ({ ...shelter, kind: shelter.kind === 'medical' ? 'medical' : 'shelter' })),
+export const useSimulationStore = create<SimulationStore>((set, get) => {
+  const scenarioQuery = (): ScenarioQuery => {
+    const state = get();
+    return { origin: state.originNode, floodLevel: state.floodLevel, failed: state.failedSubstations, mode: state.travelMode, evacuees: state.evacuees, closures: state.closures };
   };
-}
-
-/* --------------------------- offline solver --------------------------- */
-
-function bearingLabel(a: NodeData, b: NodeData): string {
-  const dLat = b.lat - a.lat;
-  const dLon = (b.lon - a.lon) * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
-  const angle = Math.atan2(dLon, dLat) * 180 / Math.PI;
-  const compass = ['northbound', 'northeastbound', 'eastbound', 'southeastbound', 'southbound', 'southwestbound', 'westbound', 'northwestbound'];
-  return compass[Math.floor((((angle + 360) % 360) + 22.5) / 45) % 8];
-}
-
-function transmissionLineEdges(cityData: CityData): Record<number, [number, number][]> {
-  const mapped: Record<number, [number, number][]> = {};
-  cityData.transmission_links.forEach((link) => {
-    const subA = cityData.substations.find((sub) => sub.id === link.from_sub);
-    const subB = cityData.substations.find((sub) => sub.id === link.to_sub);
-    const a = subA && cityData.nodes.find((node) => node.id === subA.node);
-    const b = subB && cityData.nodes.find((node) => node.id === subB.node);
-    mapped[link.id] = a && b
-      ? cityData.edges.filter((edge) => {
-          const start = cityData.nodes.find((node) => node.id === edge.source);
-          const end = cityData.nodes.find((node) => node.id === edge.target);
-          if (!start || !end) return false;
-          return pointLineDistanceMeters({ lat: (start.lat + end.lat) / 2, lon: (start.lon + end.lon) / 2 }, a, b) <= 90;
-        }).map((edge) => [edge.source, edge.target])
-      : [];
-  });
-  return mapped;
-}
-
-function pointLineDistanceMeters(point: { lat: number; lon: number }, a: NodeData, b: NodeData): number {
-  const cosLat = Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
-  const px = point.lon * cosLat;
-  const py = point.lat;
-  const ax = a.lon * cosLat;
-  const ay = a.lat;
-  const bx = b.lon * cosLat;
-  const by = b.lat;
-  const lengthSq = (bx - ax) ** 2 + (by - ay) ** 2;
-  if (!lengthSq) return Math.hypot(px - ax, py - ay) * 111320;
-  const t = Math.max(0, Math.min(1, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / lengthSq));
-  return Math.hypot(px - (ax + t * (bx - ax)), py - (ay + t * (by - ay))) * 111320;
-}
-
-function offlinePowerFlow(cityData: CityData, failedInputs: number[]) {
-  const failed = new Set(failedInputs);
-  const cascaded = new Set<number>();
-  const substations = cityData.substations.map((sub) => ({ ...sub, current: sub.base_load_mw }));
-
-  for (let iteration = 0; iteration < 5; iteration += 1) {
-    const active = substations.filter((sub) => !failed.has(sub.id) && !cascaded.has(sub.id));
-    const offline = substations.filter((sub) => failed.has(sub.id) || cascaded.has(sub.id));
-    active.forEach((sub) => { sub.current = sub.base_load_mw; });
-    if (!active.length) break;
-    offline.forEach((offlineSub) => {
-      const origin = cityData.nodes.find((node) => node.id === offlineSub.node);
-      if (!origin) return;
-      const weights = active.map((activeSub) => {
-        const target = cityData.nodes.find((node) => node.id === activeSub.node);
-        if (!target) return 0;
-        const distance = Math.hypot(
-          origin.lat - target.lat,
-          (origin.lon - target.lon) * Math.cos(origin.lat * Math.PI / 180),
-        );
-        return 1 / (distance + 0.001);
-      });
-      const total = weights.reduce((sum, value) => sum + value, 0) || 1;
-      active.forEach((activeSub, index) => { activeSub.current += (weights[index] / total) * offlineSub.base_load_mw; });
-    });
-    let addedCascade = false;
-    active.forEach((sub) => {
-      if (sub.current > sub.capacity_mw * 1.25) { cascaded.add(sub.id); addedCascade = true; }
-    });
-    if (!addedCascade) break;
-  }
-
-  const overloaded = substations.filter((sub) => !failed.has(sub.id) && !cascaded.has(sub.id) && sub.current > sub.capacity_mw).map((sub) => sub.id);
-  const blackout = new Set<number>();
-  const loads: Record<number, number> = {};
-  let capacity = 0;
-  let load = 0;
-  substations.forEach((sub) => {
-    if (failed.has(sub.id) || cascaded.has(sub.id)) {
-      loads[sub.id] = 0;
-      sub.affected_nodes.forEach((node) => blackout.add(node));
-    } else {
-      loads[sub.id] = Number(sub.current.toFixed(1));
-      capacity += sub.capacity_mw;
-      load += sub.current;
-      if (overloaded.includes(sub.id)) {
-        // radius is in city blocks (~150 m each), matching the bake script.
-        const radiusMeters = sub.radius * 150 * (1 + 0.6 * ((sub.current - sub.capacity_mw) / sub.capacity_mw));
-        const center = cityData.nodes.find((node) => node.id === sub.node);
-        if (center) {
-          cityData.nodes.forEach((node) => {
-            const distance = Math.hypot(
-              node.lat - center.lat,
-              (node.lon - center.lon) * Math.cos(center.lat * Math.PI / 180),
-            );
-            if (distance * 111320 <= radiusMeters) blackout.add(node.id);
-          });
-        }
-      }
-    }
-  });
-
-  const ratio = capacity ? load / capacity : 1.5;
-  const gridFrequency = Number(Math.max(45, Math.min(60.1, 60 - (ratio > 1 ? 1.4 * (ratio - 1) : 0.06 * (failed.size + cascaded.size)) + (Math.random() - 0.5) * 0.02)).toFixed(2));
-  const voltageReadings: Record<number, number> = {};
-  cityData.nodes.forEach((node) => { voltageReadings[node.id] = blackout.has(node.id) ? 0 : 100; });
-  const transmission_line_states: Record<number, string> = {};
-  cityData.transmission_links.forEach((link) => {
-    transmission_line_states[link.id] = failed.has(link.from_sub) || failed.has(link.to_sub) || cascaded.has(link.from_sub) || cascaded.has(link.to_sub)
-      ? 'dead'
-      : overloaded.includes(link.from_sub) || overloaded.includes(link.to_sub) ? 'overloaded' : 'active';
-  });
-  return {
-    substation_loads: loads,
-    overloaded_substations: overloaded,
-    cascaded_substations: Array.from(cascaded),
-    blackout_nodes: blackout,
-    voltage_readings: voltageReadings,
-    grid_frequency: gridFrequency,
-    transmission_line_states,
+  const solverInput = () => {
+    const state = get();
+    return { origin: state.originNode, floodLevel: state.floodLevel, failedSubstations: state.failedSubstations, travelMode: state.travelMode, evacuees: state.evacuees, destination: state.destinationId, closures: state.closures };
   };
-}
 
-type WeightedEdge = EdgeData & { routeWeight: number };
+  return {
+    floodLevel: 0,
+    failedSubstations: [],
+    originNode: 0,
+    closures: [],
+    closureMode: false,
 
-/** Offline mirror of backend _corridor_capacity: throughput via lane geometry.
- * Clearance time = district population share served by this origin, divided by
- * the bottleneck throughput, expressed in minutes. */
-function corridorCapacity(pathEdges: WeightedEdge[], travelMode: TravelMode): CorridorCapacity {
-  if (!pathEdges.length) return { people_per_hour: 0, clearance_minutes: 0, limiting_road: '-' };
-  let bottleneckPph = Number.POSITIVE_INFINITY;
-  let bottleneckRoad = '-';
-  pathEdges.forEach((edge) => {
-    const lanes = Math.max(1, edge.lanes || 2);
-    const pph = edge.road_class === 'service' ? lanes * 300
-      : edge.road_class === 'collector' ? lanes * 1700 * 2.5
-      : lanes * 1900 * 2.475;
-    if (pph < bottleneckPph) { bottleneckPph = pph; bottleneckRoad = edge.road_name; }
-  });
-  // District population of the modeled area (~24,000 in downtown Houston) is
-  // apportioned across 6 typical origins served from this corridor.
-  const servedPeople = 24000 / 6;
-  const clearanceMinutes = travelMode === 'foot'
-    ? Number((servedPeople / 5000 * 60).toFixed(1))
-    : Number((servedPeople / bottleneckPph * 60).toFixed(1));
-  return { people_per_hour: Math.round(bottleneckPph), clearance_minutes: clearanceMinutes, limiting_road: bottleneckRoad };
-}
+    gridFrequency: 60,
+    substationLoads: {},
+    overloadedSubstations: [],
+    cascadedSubstations: [],
+    floodedSubstations: [],
+    frequencyHistory: Array(24).fill(60),
+    events: [],
+    observations: null,
 
-function buildOfflineEdgeMap(
-  cityData: CityData,
-  flow: ReturnType<typeof offlinePowerFlow>,
-  flooded: Set<number>,
-  mode: ReturnType<typeof travelModeConfig>,
-) {
-  const hazards = transmissionLineEdges(cityData);
-  const deadEdges = new Set<string>();
-  const overloadedEdges = new Set<string>();
-  Object.entries(flow.transmission_line_states).forEach(([linkId, state]) => {
-    hazards[Number(linkId)]?.forEach(([u, v]) => (state === 'dead' ? deadEdges : overloadedEdges).add(`${u}-${v}`));
-  });
-  const edgeMap = new Map<string, WeightedEdge>();
-  cityData.edges.forEach((edge) => {
-    if (flooded.has(edge.source) && flooded.has(edge.target)) {
-      edgeMap.set(`${edge.source}-${edge.target}`, { ...edge, routeWeight: Number.POSITIVE_INFINITY });
-      return;
-    }
-    const mph = Math.max(1, mode.mph(edge.speed_limit_mph));
-    let routeWeight = edge.distance_m * 2.23694 / mph * (mode.roadClass[edge.road_class] ?? 1);
-    if (flooded.has(edge.source) || flooded.has(edge.target)) routeWeight += mode.floodPartial;
-    if (flow.blackout_nodes.has(edge.source) || flow.blackout_nodes.has(edge.target)) routeWeight *= mode.blackoutMult;
-    if (deadEdges.has(`${edge.source}-${edge.target}`) || deadEdges.has(`${edge.target}-${edge.source}`)) routeWeight += 240;
-    else if (overloadedEdges.has(`${edge.source}-${edge.target}`) || overloadedEdges.has(`${edge.target}-${edge.source}`)) routeWeight += 90;
-    edgeMap.set(`${edge.source}-${edge.target}`, { ...edge, routeWeight });
-  });
-  return { edgeMap, deadEdges, overloadedEdges };
-}
+    showBuildings: true,
+    showPowerLines: false,
+    showSubstations: true,
+    showIntersections: true,
+    showRoadNames: false,
+    showWaterways: true,
+    basemap: 'dark',
+    flyToNodeId: null,
+    flyToRoadKey: null,
+    flyToCoords: null,
+    highlightedStep: null,
+    activeSection: 'briefing',
 
-/**
- * Binary min-heap for Dijkstra. The previous implementation rescanned every
- * edge for every dequeued node (O(V·E) ≈ 23M ops on this network per solve);
- * the heap restores the classic O(E log V) bound.
- */
-class MinHeap {
-  private items: Array<{ id: number; cost: number }> = [];
+    travelMode: 'vehicle',
+    evacuees: 0,
+    destinationId: null,
+    corridorComparison: null,
+    isochrone: null,
+    isochroneVisible: false,
+    triggerPoints: null,
 
-  get size() { return this.items.length; }
+    snapshots: [],
+    activeSnapshotId: null,
 
-  push(id: number, cost: number) {
-    const items = this.items;
-    items.push({ id, cost });
-    let i = items.length - 1;
-    while (i > 0) {
-      const parent = (i - 1) >> 1;
-      if (items[parent].cost <= items[i].cost) break;
-      [items[parent], items[i]] = [items[i], items[parent]];
-      i = parent;
-    }
-  }
+    cityData: null,
+    route: null,
+    lastSolvedAt: null,
+    isLoading: false,
+    backendOnline: false,
+    error: null,
 
-  pop(): { id: number; cost: number } | undefined {
-    const items = this.items;
-    const top = items[0];
-    const last = items.pop();
-    if (items.length && last) {
-      items[0] = last;
-      let i = 0;
-      for (;;) {
-        const left = i * 2 + 1;
-        const right = left + 1;
-        let smallest = i;
-        if (left < items.length && items[left].cost < items[smallest].cost) smallest = left;
-        if (right < items.length && items[right].cost < items[smallest].cost) smallest = right;
-        if (smallest === i) break;
-        [items[smallest], items[i]] = [items[i], items[smallest]];
-        i = smallest;
+    addLog: (message, kind = 'action') => {
+      eventSerial += 1;
+      const event: OperatorEvent = { id: eventSerial, at: new Date().toISOString(), kind, message };
+      set((state) => ({ events: [event, ...state.events].slice(0, MAX_EVENTS) }));
+    },
+
+    fetchCityData: () => {
+      if (cityLoad && !get().error) return cityLoad;
+      cityLoad = get().loadCity();
+      return cityLoad;
+    },
+
+    loadCity: async () => {
+      set({ isLoading: true, error: null, snapshots: readSnapshots() });
+      // Start the static network download immediately: if the API is down the
+      // offline graph is already mid-flight instead of starting cold.
+      const baked = loadBakedNetwork().catch(() => null);
+      const shared = readSharedScenario();
+      let city: CityData | null = null;
+      let online = false;
+      try {
+        city = normalizeCityData(await api.getCityData());
+        online = true;
+      } catch {
+        const network = await baked;
+        if (network) city = buildOfflineCityData(network);
       }
-    }
-    return top;
-  }
-}
+      if (!city) {
+        set({ isLoading: false, error: 'No street data is available. Check the network connection, then reload.' });
+        return;
+      }
 
-/** Adjacency lists cached per edge-map instance — rebuilt only when the scenario changes. */
-const adjacencyCache = new WeakMap<Map<string, WeightedEdge>, Map<number, Array<{ to: number; weight: number }>>>();
-
-function adjacencyFromEdgeMap(edgeMap: Map<string, WeightedEdge>) {
-  let adjacency = adjacencyCache.get(edgeMap);
-  if (!adjacency) {
-    adjacency = new Map();
-    edgeMap.forEach((edge) => {
-      if (!Number.isFinite(edge.routeWeight)) return; // flooded pair: never traversable
-      const link = (from: number, to: number) => {
-        const list = adjacency!.get(from);
-        if (list) list.push({ to, weight: edge.routeWeight });
-        else adjacency!.set(from, [{ to, weight: edge.routeWeight }]);
+      const next: Partial<SimulationStore> = {
+        cityData: city,
+        backendOnline: online,
+        substationLoads: Object.fromEntries(city.substations.map((sub) => [sub.id, sub.base_load_mw])),
       };
-      link(edge.source, edge.target);
-      link(edge.target, edge.source);
-    });
-    adjacencyCache.set(edgeMap, adjacency);
-  }
-  return adjacency;
-}
+      const hasShared = Object.values(shared).some((value) => value !== undefined);
+      if (shared.origin !== undefined && nodeById(city, shared.origin)) next.originNode = shared.origin;
+      if (shared.flood !== undefined) next.floodLevel = Math.max(0, Math.min(10, shared.flood));
+      if (shared.mode) next.travelMode = shared.mode;
+      if (shared.failed) next.failedSubstations = shared.failed.filter((id) => city!.substations.some((sub) => sub.id === id));
+      if (shared.evacuees !== undefined) next.evacuees = Math.max(0, Math.min(200_000, Math.round(shared.evacuees)));
+      if (shared.dest && city.shelters?.some((shelter) => shelter.id === shared.dest)) next.destinationId = shared.dest;
+      if (shared.closed) {
+        const known = new Set(city.edges.map((edge) => edgeKey(edge.source, edge.target)));
+        next.closures = shared.closed.filter(([u, v]) => known.has(edgeKey(u, v)));
+      }
+      if (next.originNode === undefined) {
+        next.originNode = pickOrigin(city, waterSurfaceM(city, next.floodLevel ?? 0), { lat: city.center_lat, lon: city.center_lon }) ?? city.nodes[0]?.id ?? 0;
+      }
+      set({ ...next, isLoading: false });
+      get().addLog(online
+        ? `Connected to the routing API: ${city.nodes.length.toLocaleString()} junctions, ${city.edges.length.toLocaleString()} street segments.`
+        : `Working offline from the baked OpenStreetMap network: ${city.nodes.length.toLocaleString()} junctions. The local solver mirrors the API.`, 'system');
+      if (hasShared) get().addLog('Shared scenario restored from the link.', 'system');
+      await get().calculateRoute();
+      void get().refreshObservations();
+    },
 
-function offlineDijkstra(cityData: CityData, edgeMap: Map<string, WeightedEdge>, originNode: number) {
-  const distances: Record<number, number> = {};
-  const previous: Record<number, number | null> = {};
-  cityData.nodes.forEach((node) => { distances[node.id] = Number.POSITIVE_INFINITY; previous[node.id] = null; });
-  if (!(originNode in distances)) return { distances, previous };
-  const adjacency = adjacencyFromEdgeMap(edgeMap);
-  distances[originNode] = 0;
-  const heap = new MinHeap();
-  const settled = new Set<number>();
-  heap.push(originNode, 0);
-  while (heap.size) {
-    const current = heap.pop()!;
-    if (settled.has(current.id)) continue;
-    settled.add(current.id);
-    const neighbors = adjacency.get(current.id);
-    if (!neighbors) continue;
-    const base = distances[current.id];
-    for (const { to, weight } of neighbors) {
-      if (settled.has(to)) continue;
-      const candidate = base + weight;
-      if (candidate < distances[to]) { distances[to] = candidate; previous[to] = current.id; heap.push(to, candidate); }
-    }
-  }
-  return { distances, previous };
-}
+    reconnect: async () => {
+      const online = await api.health();
+      set({ backendOnline: online });
+      get().addLog(online ? 'Routing API reachable again; results now come from the API.' : 'Routing API still unreachable; staying on the local solver.', online ? 'system' : 'warning');
+      if (online) await get().calculateRoute();
+    },
 
-function offlinePathFrom(previous: Record<number, number | null>, destination: number): number[] {
-  const path: number[] = [];
-  let cursor: number | null = destination;
-  while (cursor !== null) { path.unshift(cursor); cursor = previous[cursor]; }
-  return path;
-}
-
-function offlinePathEdges(path: number[], edgeMap: Map<string, WeightedEdge>): WeightedEdge[] {
-  return path.slice(0, -1)
-    .map((from, index) => edgeMap.get(`${from}-${path[index + 1]}`) ?? edgeMap.get(`${path[index + 1]}-${from}`))
-    .filter((edge): edge is WeightedEdge => Boolean(edge));
-}
-
-function buildRouteSteps(path: number[], cityData: CityData, edgeMap: Map<string, WeightedEdge>): RouteStep[] {
-  const steps: Array<RouteStep & { direction: string }> = [];
-  path.slice(0, -1).forEach((from, index) => {
-    const to = path[index + 1];
-    const edge = edgeMap.get(`${from}-${to}`) ?? edgeMap.get(`${to}-${from}`);
-    const nodeA = cityData.nodes.find((node) => node.id === from);
-    const nodeB = cityData.nodes.find((node) => node.id === to);
-    if (!edge || !nodeA || !nodeB) return;
-    const direction = bearingLabel(nodeA, nodeB);
-    const previous = steps[steps.length - 1];
-    if (previous && previous.road_name === edge.road_name) {
-      previous.distance_m += edge.distance_m;
-      previous.duration_s += edge.routeWeight;
-      previous.to_node = to;
-    } else {
-      steps.push({
-        instruction: `${previous ? 'Turn onto' : 'Depart on'} ${edge.road_name} ${direction}`,
-        road_name: edge.road_name,
-        road_class: edge.road_class,
-        distance_m: edge.distance_m,
-        duration_s: edge.routeWeight,
-        from_node: from,
-        to_node: to,
-        direction,
+    calculateRoute: async () => {
+      const requestId = ++routeRequestSerial;
+      const { cityData, backendOnline, originNode, floodLevel, failedSubstations, travelMode, evacuees, destinationId, closures } = get();
+      if (!cityData) return;
+      set({ isLoading: true, error: null });
+      let online = backendOnline;
+      let response: RouteResponse;
+      if (online) {
+        try {
+          response = normalizeRoute(await api.calculateRoute({
+            origin_node: originNode, flood_level: floodLevel, failed_substations: failedSubstations,
+            travel_mode: travelMode, evacuees, destination: destinationId, closed_edges: closures,
+          }));
+        } catch {
+          online = false;
+          response = solveRoute(cityData, solverInput());
+          get().addLog('Routing API stopped responding; switched to the local solver.', 'warning');
+        }
+      } else {
+        response = solveRoute(cityData, solverInput());
+      }
+      if (requestId !== routeRequestSerial) return;
+      set({
+        route: response,
+        backendOnline: online,
+        isLoading: false,
+        lastSolvedAt: new Date().toISOString(),
+        gridFrequency: response.grid_frequency,
+        substationLoads: response.substation_loads,
+        overloadedSubstations: response.overloaded_substations,
+        cascadedSubstations: response.cascaded_substations,
+        floodedSubstations: response.flooded_substations,
+        highlightedStep: null,
       });
-    }
-  });
-  return steps.map(({ direction: _direction, ...step }) => ({ ...step, distance_m: Number(step.distance_m.toFixed(1)), duration_s: Number(step.duration_s.toFixed(1)) }));
-}
-
-/* Bureau of Public Roads congestion curve - mirrors backend/routing.py so
- * online and offline ETAs agree under evacuation demand. */
-const BPR_ALPHA = 0.15;
-const BPR_BETA = 4;
-
-function bprMultiplier(volume: number, capacity: number): number {
-  if (capacity <= 0) return volume > 0 ? 50 : 1;
-  const ratio = Math.max(0, volume / capacity);
-  return 1 + BPR_ALPHA * ratio ** BPR_BETA;
-}
-
-/** District people/hour throughput across every dry exit corridor - mirrors
- * backend _district_throughput. Used as the congestion denominator. */
-function offlineDistrictThroughput(
-  cityData: CityData,
-  edgeMap: Map<string, WeightedEdge>,
-  previous: Record<number, number | null>,
-  distances: Record<number, number>,
-  flooded: Set<number>,
-  travelMode: TravelMode,
-): number {
-  let throughput = 0;
-  SAFE_EXITS.forEach((exit) => {
-    if (!cityData.nodes.some((node) => node.id === exit) || flooded.has(exit)) return;
-    if (!Number.isFinite(distances[exit])) return;
-    const path = offlinePathFrom(previous, exit);
-    throughput += corridorCapacity(offlinePathEdges(path, edgeMap), travelMode).people_per_hour;
-  });
-  return throughput;
-}
-
-function calculateOfflineRoute(cityData: CityData, floodLevel: number, failedSubstations: number[], originNode: number, travelMode: TravelMode = 'vehicle', evacuees = 0, destination: string | null = null): RouteResponse {
-  const flow = offlinePowerFlow(cityData, failedSubstations);
-  const flooded = new Set(cityData.nodes.filter((node) => node.elevation <= floodLevel * FLOOD_RISE_PER_LEVEL).map((node) => node.id));
-  if (flooded.has(originNode)) return failureRoute(flow, flooded, 'Starting intersection is flooded. Select a dry origin on higher ground.');
-  const mode = travelModeConfig(travelMode);
-  const { edgeMap, deadEdges, overloadedEdges } = buildOfflineEdgeMap(cityData, flow, flooded, mode);
-
-  const nodesById = new Map(cityData.nodes.map((node) => [node.id, node]));
-  const { distances, previous } = offlineDijkstra(cityData, edgeMap, originNode);
-  const shelter = destination ? (cityData.shelters ?? []).find((item) => item.id === destination) ?? null : null;
-  let target = -1;
-  if (shelter) {
-    if (flooded.has(shelter.node)) return failureRoute(flow, flooded, `No passable route to ${shelter.name}: the street approach is flooded.`);
-    target = shelter.node;
-  } else {
-    SAFE_EXITS.forEach((exit) => {
-      if (nodesById.has(exit) && !flooded.has(exit) && Number.isFinite(distances[exit]) && distances[exit] < (target < 0 ? Number.POSITIVE_INFINITY : distances[target])) target = exit;
-    });
-  }
-  if (target < 0 || !Number.isFinite(distances[target])) {
-    return failureRoute(flow, flooded, shelter
-      ? `No passable street corridor to ${shelter.name}. Floodwater and utility hazards isolate this origin.`
-      : 'No passable street corridor found. Floodwater and utility hazards isolate this origin.');
-  }
-  const path = offlinePathFrom(previous, target);
-
-  // Interleave street-curve geometry so the drawn route follows real roads.
-  const pathCoords: Array<{ lat: number; lon: number; elevation: number }> = [];
-  path.slice(0, -1).forEach((from, index) => {
-    const to = path[index + 1];
-    const node = cityData.nodes.find((item) => item.id === from);
-    if (!node) return;
-    pathCoords.push({ lat: node.lat, lon: node.lon, elevation: Number((node.elevation + 0.65).toFixed(2)) });
-    const edge = edgeMap.get(`${from}-${to}`) ?? edgeMap.get(`${to}-${from}`);
-    (edge?.geometry ?? []).forEach(([lat, lon]) => pathCoords.push({ lat, lon, elevation: 0 }));
-  });
-  const lastNode = cityData.nodes.find((item) => item.id === path[path.length - 1]);
-  if (lastNode) pathCoords.push({ lat: lastNode.lat, lon: lastNode.lon, elevation: Number((lastNode.elevation + 0.65).toFixed(2)) });
-
-  const pathEdges = offlinePathEdges(path, edgeMap);
-  const distance_m = Number(pathEdges.reduce((sum, edge) => sum + edge.distance_m, 0).toFixed(1));
-  const capacity = corridorCapacity(pathEdges, travelMode);
-  const throughput = offlineDistrictThroughput(cityData, edgeMap, previous, distances, flooded, travelMode);
-  const congested_eta_minutes = Number((Number((distances[target] / 60).toFixed(1)) * bprMultiplier(evacuees, throughput)).toFixed(1));
-  const failedCount = failedSubstations.length + flow.cascaded_substations.length;
-  const anomaly_score = Math.min(1, Number((0.04 + floodLevel * 0.05 + failedCount * 0.14 + flow.overloaded_substations.length * 0.08).toFixed(4)));
-  const risk_level = anomaly_score >= 0.78 ? 'CRITICAL' : anomaly_score >= 0.55 ? 'HIGH' : anomaly_score >= 0.3 ? 'MEDIUM' : 'LOW';
-  const hazard_roads: Record<string, string> = {};
-  cityData.edges.forEach((edge) => {
-    if (deadEdges.has(`${edge.source}-${edge.target}`)) hazard_roads[`${edge.source}-${edge.target}`] = 'dead';
-    else if (overloadedEdges.has(`${edge.source}-${edge.target}`)) hazard_roads[`${edge.source}-${edge.target}`] = 'overloaded';
-  });
-  const destinationNode = nodesById.get(target);
-  const fallbackLabel = destinationNode && destinationNode.intersection_name !== 'Intersection' ? destinationNode.intersection_name : `Node ${target}`;
-  const exitLabel = shelter ? shelter.name : fallbackLabel;
-  return {
-    success: true,
-    path,
-    path_coords: pathCoords,
-    total_nodes: path.length,
-    distance_m,
-    eta_minutes: Number((distances[target] / 60).toFixed(1)),
-    congested_eta_minutes,
-    destination_name: shelter?.name ?? '',
-    destination_kind: shelter ? (shelter.kind === 'medical' ? 'medical' : 'shelter') : '',
-    route_steps: buildRouteSteps(path, cityData, edgeMap),
-    corridor_capacity: capacity,
-    flooded_nodes: Array.from(flooded),
-    blackout_nodes: Array.from(flow.blackout_nodes),
-    blocked_edges: cityData.edges.filter((edge) => flooded.has(edge.source) && flooded.has(edge.target)).map((edge) => [edge.source, edge.target]),
-    anomaly_score,
-    risk_level,
-    message: `Safest street corridor mapped to ${exitLabel}.`,
-    dest_node: target,
-    substation_loads: flow.substation_loads,
-    overloaded_substations: flow.overloaded_substations,
-    cascaded_substations: flow.cascaded_substations,
-    grid_frequency: flow.grid_frequency,
-    voltage_readings: flow.voltage_readings,
-    transmission_line_states: flow.transmission_line_states,
-    usgs_gage_height: Number((4.2 + floodLevel * 2.8).toFixed(2)),
-    surface_temp: Number((88 - floodLevel * 0.95 - failedCount * 0.45).toFixed(1)),
-    hazard_roads,
-  };
-}
-
-function failureRoute(flow: ReturnType<typeof offlinePowerFlow>, flooded: Set<number>, message: string): RouteResponse {
-  const failedCount = flow.cascaded_substations.length;
-  return {
-    success: false,
-    path: [],
-    path_coords: [],
-    total_nodes: 0,
-    distance_m: 0,
-    eta_minutes: 0,
-    congested_eta_minutes: 0,
-    destination_name: '',
-    destination_kind: '',
-    route_steps: [],
-    flooded_nodes: Array.from(flooded),
-    blackout_nodes: Array.from(flow.blackout_nodes),
-    blocked_edges: [],
-    anomaly_score: Math.min(1, 0.65 + failedCount * 0.1),
-    risk_level: 'CRITICAL',
-    message,
-    dest_node: -1,
-    substation_loads: flow.substation_loads,
-    overloaded_substations: flow.overloaded_substations, // keep shape
-    cascaded_substations: flow.cascaded_substations,
-    grid_frequency: flow.grid_frequency,
-    voltage_readings: flow.voltage_readings,
-    transmission_line_states: flow.transmission_line_states,
-    usgs_gage_height: 4.2,
-    surface_temp: 88,
-    hazard_roads: {},
-  };
-}
-
-/* --------------------- offline corridor + isochrone --------------------- */
-
-function offlineCompareCorridors(cityData: CityData, origin: number, floodLevel: number, failed: number[], mode: TravelMode, evacuees = 0): CorridorComparisonResponse {
-  const flow = offlinePowerFlow(cityData, failed);
-  const flooded = new Set(cityData.nodes.filter((node) => node.elevation <= floodLevel * FLOOD_RISE_PER_LEVEL).map((node) => node.id));
-  const dryExits = SAFE_EXITS.filter((exit) => cityData.nodes.some((node) => node.id === exit) && !flooded.has(exit));
-  const { edgeMap, deadEdges } = buildOfflineEdgeMap(cityData, flow, flooded, travelModeConfig(mode));
-
-  const nodesById = new Map(cityData.nodes.map((node) => [node.id, node]));
-  const corridors: CorridorInfo[] = [];
-  if (dryExits.length && nodesById.has(origin)) {
-    const { distances, previous } = offlineDijkstra(cityData, edgeMap, origin);
-    dryExits.forEach((exit) => {
-      const cost = distances[exit];
-      if (cost === undefined || !Number.isFinite(cost)) return;
-      const path = offlinePathFrom(previous, exit);
-      const pathEdgeList = offlinePathEdges(path, edgeMap);
-      const hazardCount = pathEdgeList.filter((edge) =>
-        deadEdges.has(`${edge.source}-${edge.target}`)
-        || deadEdges.has(`${edge.target}-${edge.source}`)
-        || flow.blackout_nodes.has(edge.source)
-        || flow.blackout_nodes.has(edge.target)).length;
-      corridors.push({
-        exit_node: exit,
-        exit_name: nodesById.get(exit)?.intersection_name || `Exit ${exit}`,
-        eta_minutes: Number((cost / 60).toFixed(1)),
-        congested_eta_minutes: Number((cost / 60).toFixed(1)),
-        distance_m: Number(pathEdgeList.reduce((sum, edge) => sum + edge.distance_m, 0).toFixed(1)),
-        hazard_count: hazardCount,
-        path_length: path.length,
-        people_per_hour: corridorCapacity(pathEdgeList, mode).people_per_hour,
+      const destination = response.destination_name
+        || cityData.exit_names?.[String(response.dest_node)]
+        || nodeById(cityData, response.dest_node)?.intersection_name
+        || `node ${response.dest_node}`;
+      get().addLog(response.success
+        ? `Route solved (${TRAVEL_MODE_LABELS[travelMode]}): ${formatDistance(response.distance_m)} to ${destination}, ${response.eta_minutes.toFixed(1)} min.`
+        : `No passable corridor: ${response.message}`, response.success ? 'result' : 'warning');
+      response.flooded_substations.forEach((id) => {
+        if (!get().floodedSubstations.includes(id)) return;
+        const name = cityData.substations.find((sub) => sub.id === id)?.name ?? `Substation ${id}`;
+        if (!get().events.slice(0, 8).some((event) => event.message.startsWith(name))) get().addLog(`${name} is under water and tripped offline.`, 'warning');
       });
-    });
-  }
-  corridors.sort((a, b) => a.eta_minutes - b.eta_minutes);
+      void get().refreshAnalysis();
+    },
 
-  // Demand inflates every corridor by the same BPR factor (mirrors backend).
-  const factor = bprMultiplier(evacuees, corridors.reduce((sum, corridor) => sum + corridor.people_per_hour, 0));
-  corridors.forEach((corridor) => {
-    corridor.congested_eta_minutes = Number((corridor.eta_minutes * factor).toFixed(1));
-  });
-  return { origin, travel_mode: mode, corridors, flooded_nodes: Array.from(flooded), blackout_nodes: Array.from(flow.blackout_nodes) };
-}
+    refreshAnalysis: async () => {
+      const { cityData, backendOnline, isochroneVisible, originNode, travelMode, closures } = get();
+      if (!cityData) return;
+      const input = solverInput();
+      const serial = routeRequestSerial;
+      if (backendOnline) {
+        const query = scenarioQuery();
+        const [corridors, triggers] = await Promise.allSettled([
+          api.compareCorridors(query),
+          api.triggerPoints(originNode, travelMode, closures),
+        ]);
+        if (serial !== routeRequestSerial) return;
+        set({
+          corridorComparison: corridors.status === 'fulfilled' ? corridors.value : compareCorridors(cityData, input),
+          triggerPoints: triggers.status === 'fulfilled' ? triggers.value : solveTriggerPoints(cityData, originNode, travelMode, closures),
+        });
+      } else {
+        set({
+          corridorComparison: compareCorridors(cityData, input),
+          triggerPoints: solveTriggerPoints(cityData, originNode, travelMode, closures),
+        });
+      }
+      if (isochroneVisible) void get().refreshIsochrone();
+    },
 
-function offlineIsochrone(cityData: CityData, origin: number, floodLevel: number, failed: number[], mode: TravelMode, minutes: number[], evacuees = 0): IsochroneResponse {
-  const flow = offlinePowerFlow(cityData, failed);
-  const flooded = new Set(cityData.nodes.filter((node) => node.elevation <= floodLevel * FLOOD_RISE_PER_LEVEL).map((node) => node.id));
-  const modeCfg = travelModeConfig(mode);
-  const { edgeMap } = buildOfflineEdgeMap(cityData, flow, flooded, modeCfg);
-  const { distances, previous } = offlineDijkstra(cityData, edgeMap, origin);
+    refreshIsochrone: async () => {
+      const { cityData, backendOnline, isochroneVisible, travelMode } = get();
+      if (!cityData || !isochroneVisible) return;
+      const minutes = ISOCHRONE_MINUTES[travelMode];
+      if (backendOnline) {
+        try {
+          set({ isochrone: await api.isochrone(scenarioQuery(), minutes) });
+          return;
+        } catch { /* local solver below */ }
+      }
+      set({ isochrone: solveIsochrone(cityData, { ...solverInput(), minutes }) });
+    },
 
-  // Demand slows every edge by the same BPR factor (uniform spread), which
-  // shrinks reachability - a junction 6 minutes away under free flow may sit
-  // at 9 minutes when the district evacuates. Scaling the time limits is
-  // equivalent to scaling every edge weight, without touching the cache.
-  const factor = bprMultiplier(evacuees, offlineDistrictThroughput(cityData, edgeMap, previous, distances, flooded, mode));
-  const limits = (minutes.length ? minutes : ISOCHRONE_MINUTES[mode]).slice().sort((a, b) => a - b).map((m) => m * 60 / factor);
-  const rings = limits.map((limit) => {
-    const nodes = Object.entries(distances)
-      .filter(([, cost]) => cost <= limit)
-      .map(([id]) => Number(id));
-    return { minutes: Number((limit * factor / 60).toFixed(1)), node_count: nodes.length, nodes };
-  });
-  return { origin, travel_mode: mode, rings, flooded_nodes: Array.from(flooded), blackout_nodes: Array.from(flow.blackout_nodes), congestion_factor: Number(factor.toFixed(2)) };
-}
+    refreshObservations: async () => {
+      const { cityData, backendOnline } = get();
+      if (!cityData) return;
+      const observations = await fetchObservations(cityData, backendOnline);
+      const previous = get().observations;
+      set({ observations });
+      if (!previous) {
+        const gage = observations.gage_height;
+        get().addLog(gage.status === 'live'
+          ? `USGS ${cityData.flood_model?.gage.site ?? '08074000'} reports ${gage.value?.toFixed(2)} ft (${observations.gage_water_surface_m?.toFixed(2)} m NAVD88).`
+          : 'Live river gage unavailable; scenario values are modeled only.', gage.status === 'live' ? 'system' : 'warning');
+      }
+    },
+
+    syncFloodToGage: () => {
+      const { observations, cityData } = get();
+      if (!observations || observations.equivalent_flood_level === null || !cityData) return;
+      get().setFloodLevel(observations.equivalent_flood_level);
+      pendingReasons.set('flood', `Water surface synced to the live USGS ${cityData.flood_model?.gage.site ?? ''} reading: ${observations.gage_height.value?.toFixed(2)} ft (${observations.gage_water_surface_m?.toFixed(2)} m NAVD88).`);
+    },
+
+    triggerLiveTick: () => {
+      const { route, cityData, gridFrequency, substationLoads } = get();
+      if (!route || !cityData) return;
+      // Simulated SCADA jitter that mean-reverts to the solved power flow:
+      // readings breathe around the scenario instead of drifting away from it.
+      const noise = () => Math.random() + Math.random() - 1;
+      const target = route.grid_frequency || 60;
+      const nextFrequency = Number(Math.max(45, Math.min(60.1, gridFrequency + 0.3 * (target - gridFrequency) + noise() * 0.012)).toFixed(2));
+      const nextLoads: Record<number, number> = {};
+      cityData.substations.forEach((sub) => {
+        const solved = route.substation_loads[sub.id] ?? sub.base_load_mw;
+        const current = substationLoads[sub.id] ?? solved;
+        nextLoads[sub.id] = solved === 0 ? 0 : Number(Math.max(0, current + 0.3 * (solved - current) + noise() * 0.9).toFixed(1));
+      });
+      set((state) => ({
+        gridFrequency: nextFrequency,
+        substationLoads: nextLoads,
+        frequencyHistory: [...state.frequencyHistory.slice(1), nextFrequency],
+      }));
+    },
+
+    setFloodLevel: (value) => {
+      const next = Math.round(Math.max(0, Math.min(10, value)) * 100) / 100;
+      const { cityData, originNode } = get();
+      let nextOrigin = originNode;
+      if (cityData) {
+        const surface = waterSurfaceM(cityData, next);
+        const current = nodeById(cityData, originNode);
+        if (current && floodStage(current) <= surface) {
+          const replacement = pickOrigin(cityData, surface, current, 0.25);
+          if (replacement !== null) {
+            nextOrigin = replacement;
+            pendingReasons.set('origin', `Origin ${current.intersection_name} went under water; moved to the nearest dry junction, ${nodeById(cityData, replacement)?.intersection_name}.`);
+          }
+        }
+        pendingReasons.set('flood', `Water surface set to ${surface.toFixed(2)} m NAVD88 (level ${next.toFixed(1)}).`);
+      }
+      set({ floodLevel: next, originNode: nextOrigin, activeSnapshotId: null });
+      queueRouteCalculation(get, 'flood', pendingReasons.get('flood') ?? `Scenario level ${next.toFixed(1)}.`);
+    },
+
+    toggleSubstation: (id) => {
+      const { failedSubstations, cityData } = get();
+      const failed = failedSubstations.includes(id);
+      const nextFailed = failed ? failedSubstations.filter((item) => item !== id) : [...failedSubstations, id];
+      const name = cityData?.substations.find((sub) => sub.id === id)?.name ?? `Substation ${id}`;
+      set({ failedSubstations: nextFailed, activeSnapshotId: null });
+      queueRouteCalculation(get, `substation-${id}`, `${name}: ${failed ? 'returned to service' : 'manual outage applied'}.`);
+    },
+
+    setOriginNode: (id) => {
+      const node = nodeById(get().cityData, id);
+      set({ originNode: id, activeSnapshotId: null });
+      queueRouteCalculation(get, 'origin', `Origin set to ${node?.intersection_name ?? `node ${id}`}.`);
+    },
+
+    setTravelMode: (mode) => {
+      set({ travelMode: mode, activeSnapshotId: null });
+      queueRouteCalculation(get, 'mode', `Travel mode: ${TRAVEL_MODE_LABELS[mode]}.`);
+    },
+
+    setEvacuees: (value) => {
+      const next = Math.max(0, Math.min(200_000, Math.round(value)));
+      set({ evacuees: next, activeSnapshotId: null });
+      queueRouteCalculation(get, 'demand', next === 0 ? 'Evacuation demand cleared: free-flow travel times.' : `Evacuation demand: ${next.toLocaleString()} people leaving within the hour.`);
+    },
+
+    setDestination: (id) => {
+      const shelter = get().cityData?.shelters?.find((item) => item.id === id);
+      set({ destinationId: shelter ? shelter.id : null, activeSnapshotId: null });
+      queueRouteCalculation(get, 'destination', shelter
+        ? `Destination set: ${shelter.name} (${shelter.kind === 'medical' ? 'medical facility' : 'shelter'}, capacity ${shelter.capacity.toLocaleString()}).`
+        : 'Destination cleared; routing to the safest dry perimeter exit.');
+    },
+
+    toggleClosure: (source, target) => {
+      const { closures, cityData } = get();
+      const key = edgeKey(source, target);
+      const exists = closures.some(([u, v]) => edgeKey(u, v) === key);
+      const edge = cityData?.edges.find((item) => edgeKey(item.source, item.target) === key);
+      set({ closures: exists ? closures.filter(([u, v]) => edgeKey(u, v) !== key) : [...closures, [source, target]], activeSnapshotId: null });
+      const road = edge?.road_name && edge.road_name !== 'Unnamed street' ? edge.road_name : 'street segment';
+      const near = [nodeById(cityData, source)?.intersection_name, nodeById(cityData, target)?.intersection_name]
+        .find((name) => name && name !== road && !name.startsWith('Node '));
+      queueRouteCalculation(get, `closure-${key}`, `${exists ? 'Reopened' : 'Closed'} ${road}${near ? ` near ${near}` : ''}.`);
+    },
+
+    clearClosures: () => {
+      if (!get().closures.length) return;
+      set({ closures: [], activeSnapshotId: null });
+      queueRouteCalculation(get, 'closures', 'All operator road closures reopened.');
+    },
+
+    setClosureMode: (value) => set({ closureMode: value }),
+
+    applyScenario: (preset) => {
+      const { cityData } = get();
+      if (!cityData) return;
+      const scenario = PRESETS[preset];
+      const surface = waterSurfaceM(cityData, scenario.floodLevel);
+      const origin = pickOrigin(cityData, surface, { lat: cityData.center_lat, lon: cityData.center_lon }) ?? get().originNode;
+      set({ floodLevel: scenario.floodLevel, failedSubstations: scenario.failedSubstations, originNode: origin, closures: [], destinationId: null, activeSnapshotId: null });
+      pendingReasons.clear();
+      queueRouteCalculation(get, 'preset', `Scenario loaded: ${scenario.label} (water surface ${surface.toFixed(1)} m NAVD88).`);
+    },
+
+    saveSnapshot: (label) => {
+      const { originNode, floodLevel, failedSubstations, travelMode, evacuees, destinationId, closures, route, snapshots } = get();
+      const snapshot: ScenarioSnapshot = {
+        id: `snap-${Date.now()}-${Math.round(Math.random() * 1e4)}`,
+        label: label.trim() || `Scenario ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hour12: false })}`,
+        savedAt: Date.now(),
+        originNode,
+        floodLevel,
+        failedSubstations: [...failedSubstations],
+        travelMode,
+        evacuees,
+        destinationId,
+        closures: [...closures],
+        outcome: {
+          success: route?.success ?? false,
+          eta_minutes: route ? (evacuees > 0 ? route.congested_eta_minutes : route.eta_minutes) : 0,
+          distance_m: route?.distance_m ?? 0,
+          dest_node: route?.dest_node ?? -1,
+          risk_level: route?.risk_level ?? '-',
+        },
+      };
+      const next = [snapshot, ...snapshots].slice(0, 12);
+      writeSnapshots(next);
+      set({ snapshots: next, activeSnapshotId: snapshot.id });
+      get().addLog(`Scenario snapshot saved: ${snapshot.label}.`, 'action');
+    },
+
+    applySnapshot: (id) => {
+      const snapshot = get().snapshots.find((snap) => snap.id === id);
+      if (!snapshot) return;
+      set({
+        originNode: snapshot.originNode,
+        floodLevel: snapshot.floodLevel,
+        failedSubstations: [...snapshot.failedSubstations],
+        travelMode: snapshot.travelMode,
+        evacuees: snapshot.evacuees,
+        destinationId: snapshot.destinationId,
+        closures: [...snapshot.closures],
+      });
+      queueRouteCalculation(get, 'snapshot', `Scenario restored: ${snapshot.label}.`);
+      // Restoring counts as comparing against the snapshot just applied.
+      setTimeout(() => set({ activeSnapshotId: id }), 200);
+    },
+
+    deleteSnapshot: (id) => {
+      const next = get().snapshots.filter((snap) => snap.id !== id);
+      writeSnapshots(next);
+      set({ snapshots: next, activeSnapshotId: get().activeSnapshotId === id ? null : get().activeSnapshotId });
+    },
+
+    setShowBuildings: (value) => set({ showBuildings: value }),
+    setShowPowerLines: (value) => set({ showPowerLines: value }),
+    setShowSubstations: (value) => set({ showSubstations: value }),
+    setShowIntersections: (value) => set({ showIntersections: value }),
+    setShowRoadNames: (value) => set({ showRoadNames: value }),
+    setShowWaterways: (value) => set({ showWaterways: value }),
+    setBasemap: (value) => set({ basemap: value }),
+    setIsochroneVisible: (value) => {
+      set({ isochroneVisible: value });
+      if (value) void get().refreshIsochrone();
+    },
+    setFlyToNodeId: (id) => set({ flyToNodeId: id }),
+    setFlyToRoadKey: (key) => set({ flyToRoadKey: key }),
+    setFlyToCoords: (coords) => set({ flyToCoords: coords }),
+    setHighlightedStep: (index) => set({ highlightedStep: index }),
+    setActiveSection: (section) => set({ activeSection: section }),
+  };
+});

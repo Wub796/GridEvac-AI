@@ -24,3 +24,8 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Build caches and local tool state
+*.tsbuildinfo
+tools/.cache/
+.freebuff/

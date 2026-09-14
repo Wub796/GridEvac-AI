@@ -1,440 +1,658 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { useSimulationStore } from '@/hooks/useSimulation';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import Icon, { type IconName } from '@/components/Icon';
+import { useSimulationStore, type Basemap, type ScenarioPreset } from '@/hooks/useSimulation';
+import { formatDistance } from '@/lib/exports';
 import { logicalJunctions } from '@/lib/network';
-import type { RiskLevel } from '@/lib/types';
+import { floodStage, vehicleCore, waterSurfaceM } from '@/lib/solver';
 import styles from './ControlPanel.module.css';
 
-/* Aligned with the WCAG-AA status tokens in globals.css */
-const RISK_COLORS: Record<RiskLevel, string> = {
-  LOW: '#157050',
-  MEDIUM: '#96601c',
-  HIGH: '#9a5321',
-  CRITICAL: '#a8453e',
-};
+type Tab = 'scenario' | 'route' | 'analysis' | 'layers';
 
-function formatDistance(meters: number) {
-  if (!meters) return '-';
-  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
-}
+const TABS: Array<{ id: Tab; label: string; icon: IconName }> = [
+  { id: 'scenario', label: 'Scenario', icon: 'water' },
+  { id: 'route', label: 'Route', icon: 'route' },
+  { id: 'analysis', label: 'Analysis', icon: 'chart' },
+  { id: 'layers', label: 'Layers', icon: 'layers' },
+];
+
+const PRESETS: Array<{ id: ScenarioPreset; title: string; detail: (surface: number) => string; level: number }> = [
+  { id: 'clear', title: 'Normal day', detail: () => 'Dry streets, full grid', level: 0 },
+  { id: 'flood', title: 'Bayou flood', detail: (surface) => `Water at ${surface.toFixed(0)} m NAVD88`, level: 8 },
+  { id: 'cascade', title: 'Feeder loss', detail: () => 'Two substations down', level: 0 },
+  { id: 'heatwave', title: 'Heat peak', detail: () => 'Transmission strain', level: 0 },
+];
+
+const HAS_ION = Boolean((process.env.NEXT_PUBLIC_CESIUM_TOKEN ?? '').trim());
+const FEET = 3.28084;
 
 interface SearchHit {
   key: string;
   label: string;
-  sublabel: string;
-  kind: 'street' | 'intersection';
+  detail: string;
+  kind: 'street' | 'junction';
   nodeId?: number;
   roadKey?: string;
 }
 
-export default function ControlPanel() {
-  const [searchInput, setSearchInput] = useState('');
-  const [snapshotLabel, setSnapshotLabel] = useState('');
-  // Phones and tablets start collapsed: the floating panel covers most of a
-  // phone's map, and the map is the point on a small screen.
-  const [collapsed, setCollapsed] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches,
+function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <section className={styles.section}>
+      <div className={styles.sectionHead}>
+        <h3>{title}</h3>
+        {aside && <span className={styles.aside}>{aside}</span>}
+      </div>
+      {children}
+    </section>
   );
-  const [showTab, setShowTab] = useState(false);
-  const collapseTimer = useRef<number | null>(null);
+}
 
-  // The show tab fades in only after the panel has slid out, so the two
-  // elements never cross paths mid-animation. Touch skips the delay: 260 ms
-  // of dead time after every toggle reads as lag on a phone.
+function Switch({ checked, onChange, label, detail }: { checked: boolean; onChange: (value: boolean) => void; label: string; detail?: string }) {
+  return (
+    <label className={styles.switch}>
+      <input type="checkbox" role="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span className={styles.switchTrack} aria-hidden="true"><i /></span>
+      <span className={styles.switchText}>{label}{detail && <small>{detail}</small>}</span>
+    </label>
+  );
+}
+
+export default function ControlPanel() {
+  const [tab, setTab] = useState<Tab>('scenario');
+  const [collapsed, setCollapsed] = useState(false);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
   useEffect(() => {
-    if (collapseTimer.current) window.clearTimeout(collapseTimer.current);
-    if (collapsed) {
-      const coarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
-      collapseTimer.current = window.setTimeout(() => setShowTab(true), coarse ? 60 : 260);
-    } else {
-      setShowTab(false);
-    }
-    return () => {
-      if (collapseTimer.current) window.clearTimeout(collapseTimer.current);
-    };
-  }, [collapsed]);
+    // Phones start with the map visible; the sheet is one tap away.
+    if (window.matchMedia('(max-width: 760px)').matches) setCollapsed(true);
+  }, []);
 
-  // Per-field selector subscriptions: the panel re-renders only when a field
-  // it actually displays changes, not on unrelated store activity. Actions
-  // are identity-stable in zustand, so those subscriptions never invalidate.
-  const floodLevel = useSimulationStore((state) => state.floodLevel);
-  const setFloodLevel = useSimulationStore((state) => state.setFloodLevel);
-  const failedSubstations = useSimulationStore((state) => state.failedSubstations);
-  const toggleSubstation = useSimulationStore((state) => state.toggleSubstation);
-  const originNode = useSimulationStore((state) => state.originNode);
-  const setOriginNode = useSimulationStore((state) => state.setOriginNode);
+  const route = useSimulationStore((state) => state.route);
+  const cityData = useSimulationStore((state) => state.cityData);
+  const evacuees = useSimulationStore((state) => state.evacuees);
+  const isLoading = useSimulationStore((state) => state.isLoading);
+  const closureMode = useSimulationStore((state) => state.closureMode);
+
+  const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const index = TABS.findIndex((item) => item.id === tab);
+    let next = index;
+    if (event.key === 'ArrowRight') next = (index + 1) % TABS.length;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + TABS.length) % TABS.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = TABS.length - 1;
+    else return;
+    event.preventDefault();
+    setTab(TABS[next].id);
+    tabRefs.current[next]?.focus();
+  };
+
+  useEffect(() => {
+    // Turning the closure tool on from the keyboard or map toolbar opens the matching tab.
+    if (closureMode) {
+      setTab('route');
+    }
+  }, [closureMode]);
+
+  const eta = route?.success ? (evacuees > 0 ? route.congested_eta_minutes : route.eta_minutes) : null;
+  const statusLine = isLoading
+    ? 'Solving the corridor…'
+    : route?.success
+      ? `${eta?.toFixed(1)} min to ${route.destination_name || cityData?.exit_names?.[String(route.dest_node)] || 'exit'}`
+      : route ? 'No passable corridor' : 'Loading';
+  const tabIndex = TABS.findIndex((item) => item.id === tab);
+  const hiddenProps = collapsed ? ({ inert: '' } as Record<string, string>) : {};
+
+  return (
+    <>
+      <button className={`${styles.reopen} ${collapsed ? styles.reopenVisible : ''}`} onClick={() => setCollapsed(false)} aria-hidden={!collapsed} tabIndex={collapsed ? 0 : -1}>
+        <Icon name="layers" size={16} />Controls
+        {route?.success && <span className={styles.reopenEta}>{eta?.toFixed(1)} min</span>}
+      </button>
+      <aside className={`${styles.panel} ${collapsed ? styles.panelHidden : ''}`} aria-label="Scenario and route controls" {...hiddenProps}>
+        <header className={styles.header}>
+          <div>
+            <h2>Controls</h2>
+            <p className={route && !route.success ? styles.statusBad : undefined} aria-live="polite">{statusLine}</p>
+          </div>
+          <button className={styles.iconButton} onClick={() => setCollapsed(true)} aria-label="Hide controls"><Icon name="chevronRight" size={16} /></button>
+        </header>
+
+        <div className={styles.tabs} role="tablist" aria-label="Control groups" onKeyDown={onTabKey} style={{ '--tab': tabIndex } as CSSProperties}>
+          <span className={styles.tabIndicator} aria-hidden="true" />
+          {TABS.map((item, index) => (
+            <button
+              key={item.id}
+              ref={(element) => { tabRefs.current[index] = element; }}
+              role="tab"
+              id={`control-tab-${item.id}`}
+              aria-selected={tab === item.id}
+              aria-controls={`control-panel-${item.id}`}
+              tabIndex={tab === item.id ? 0 : -1}
+              className={`${styles.tab} ${tab === item.id ? styles.tabActive : ''}`}
+              onClick={() => setTab(item.id)}
+            >
+              <Icon name={item.icon} size={16} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className={styles.body} role="tabpanel" id={`control-panel-${tab}`} aria-labelledby={`control-tab-${tab}`} key={tab}>
+          {tab === 'scenario' && <ScenarioTab />}
+          {tab === 'route' && <RouteTab />}
+          {tab === 'analysis' && <AnalysisTab />}
+          {tab === 'layers' && <LayersTab />}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------ scenario */
+
+function ScenarioTab() {
   const cityData = useSimulationStore((state) => state.cityData);
   const route = useSimulationStore((state) => state.route);
-  const isLoading = useSimulationStore((state) => state.isLoading);
-  const backendOnline = useSimulationStore((state) => state.backendOnline);
-  const error = useSimulationStore((state) => state.error);
-  const fetchCityData = useSimulationStore((state) => state.fetchCityData);
-  const calculateRoute = useSimulationStore((state) => state.calculateRoute);
-  const clearRoute = useSimulationStore((state) => state.clearRoute);
-  const substationLoads = useSimulationStore((state) => state.substationLoads);
-  const overloadedSubstations = useSimulationStore((state) => state.overloadedSubstations);
-  const cascadedSubstations = useSimulationStore((state) => state.cascadedSubstations);
-  const showBuildings = useSimulationStore((state) => state.showBuildings);
-  const setShowBuildings = useSimulationStore((state) => state.setShowBuildings);
-  const showPowerLines = useSimulationStore((state) => state.showPowerLines);
-  const setShowPowerLines = useSimulationStore((state) => state.setShowPowerLines);
-  const showSubstations = useSimulationStore((state) => state.showSubstations);
-  const setShowSubstations = useSimulationStore((state) => state.setShowSubstations);
-  const showIntersections = useSimulationStore((state) => state.showIntersections);
-  const setShowIntersections = useSimulationStore((state) => state.setShowIntersections);
-  const showRoadNames = useSimulationStore((state) => state.showRoadNames);
-  const setShowRoadNames = useSimulationStore((state) => state.setShowRoadNames);
-  const travelMode = useSimulationStore((state) => state.travelMode);
-  const setTravelMode = useSimulationStore((state) => state.setTravelMode);
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const setFloodLevel = useSimulationStore((state) => state.setFloodLevel);
+  const applyScenario = useSimulationStore((state) => state.applyScenario);
+  const observations = useSimulationStore((state) => state.observations);
+  const syncFloodToGage = useSimulationStore((state) => state.syncFloodToGage);
   const evacuees = useSimulationStore((state) => state.evacuees);
   const setEvacuees = useSimulationStore((state) => state.setEvacuees);
-  const destinationId = useSimulationStore((state) => state.destinationId);
-  const setDestination = useSimulationStore((state) => state.setDestination);
-  const corridorComparison = useSimulationStore((state) => state.corridorComparison);
-  const isochrone = useSimulationStore((state) => state.isochrone);
-  const isochroneVisible = useSimulationStore((state) => state.isochroneVisible);
-  const setIsochroneVisible = useSimulationStore((state) => state.setIsochroneVisible);
-  const refreshIsochrone = useSimulationStore((state) => state.refreshIsochrone);
+  const failedSubstations = useSimulationStore((state) => state.failedSubstations);
+  const toggleSubstation = useSimulationStore((state) => state.toggleSubstation);
+  const substationLoads = useSimulationStore((state) => state.substationLoads);
   const snapshots = useSimulationStore((state) => state.snapshots);
   const activeSnapshotId = useSimulationStore((state) => state.activeSnapshotId);
   const saveSnapshot = useSimulationStore((state) => state.saveSnapshot);
   const applySnapshot = useSimulationStore((state) => state.applySnapshot);
   const deleteSnapshot = useSimulationStore((state) => state.deleteSnapshot);
-  const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
-  const setFlyToRoadKey = useSimulationStore((state) => state.setFlyToRoadKey);
-  const addLog = useSimulationStore((state) => state.addLog);
-  const applyScenario = useSimulationStore((state) => state.applyScenario);
-  const mapFilterMode = useSimulationStore((state) => state.mapFilterMode);
-  const setMapFilterMode = useSimulationStore((state) => state.setMapFilterMode);
-  const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
+  const [snapshotLabel, setSnapshotLabel] = useState('');
 
-  const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
-  // Map dots, the origin dropdown and the search index all agree on which
-  // junctions are real: degree >= 3 intersections plus exits and shelter
-  // junctions, with duplicated corners merged.
-  const logicalNodeIds = useMemo(() => (cityData ? logicalJunctions(cityData).ids : new Set<number>()), [cityData]);
-  // Node id -> intersection name, for naming the recommended exit in plain
-  // language instead of "Exit node 606".
-  const nodeNameById = useMemo(
-    () => new Map(nodes.map((node) => [node.id, node.intersection_name])),
-    [nodes],
-  );
-  const substations = cityData?.substations ?? [];
-  const riskLevel = route?.risk_level ?? 'LOW';
-  const riskColor = RISK_COLORS[riskLevel];
-  const floodedCount = route?.flooded_nodes.length ?? nodes.filter((node) => node.elevation <= floodLevel * 1.7).length;
-  const activeSnapshot = snapshots.find((snap) => snap.id === activeSnapshotId) ?? null;
-  // Under evacuation demand the headline ETA is the congested figure; at zero
-  // demand the BPR multiplier is exactly 1.0, so they are identical.
-  const demandActive = evacuees > 0;
-  const effectiveEta = route?.success
-    ? (demandActive && route.congested_eta_minutes > 0 ? route.congested_eta_minutes : route.eta_minutes)
-    : null;
-  const congestionPct = route?.success && demandActive && route.eta_minutes > 0
-    ? Math.max(0, Math.round((route.congested_eta_minutes / route.eta_minutes - 1) * 100))
-    : null;
-  const shelters = cityData?.shelters ?? [];
-
-  // Street search: indexes road segments and junctions once per dataset, then
-  // answers prefix/substring queries client-side with zero latency.
-  const searchIndex = useMemo(() => {
-    const streets: SearchHit[] = [];
-    const seenRoads = new Map<string, SearchHit>();
-    const edges = cityData?.edges ?? [];
-    const nodeNames = new Map(nodes.map((node) => [node.id, node.intersection_name]));
-    edges.forEach((edge) => {
-      if (!edge.road_name || edge.road_name === 'Unnamed street') return;
-      const key = `${Math.min(edge.source, edge.target)}-${Math.max(edge.source, edge.target)}`;
-      const existing = seenRoads.get(key);
-      if (existing) return;
-      const sub = nodeNames.get(edge.source) ?? '?';
-      const dst = nodeNames.get(edge.target) ?? '?';
-      const hit: SearchHit = {
-        key,
-        label: edge.road_name,
-        sublabel: `${sub} → ${dst}`,
-        kind: 'street',
-        roadKey: key,
-      };
-      seenRoads.set(key, hit);
-      streets.push(hit);
-    });
-    const junctions: SearchHit[] = nodes
-      .filter((node) => logicalNodeIds.has(node.id))
-      .map((node) => ({
-        key: `node-${node.id}`,
-        label: node.intersection_name,
-        sublabel: `Intersection · node ${node.id}`,
-        kind: 'intersection' as const,
-        nodeId: node.id,
-      }));
-    return { streets, junctions };
-  }, [cityData, nodes, logicalNodeIds]);
-
-  const [searchOpen, setSearchOpen] = useState(false);
-  const searchBoxRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!searchOpen) return;
-    const onClickAway = (event: MouseEvent) => {
-      if (searchBoxRef.current && !searchBoxRef.current.contains(event.target as Node)) setSearchOpen(false);
-    };
-    document.addEventListener('mousedown', onClickAway);
-    return () => document.removeEventListener('mousedown', onClickAway);
-  }, [searchOpen]);
-
-  const query = searchInput.trim().toLowerCase();
-  const searchHits: SearchHit[] = useMemo(() => {
-    if (query.length < 2) return [];
-    const startsWith = (value: string) => value.toLowerCase().startsWith(query);
-    const includes = (value: string) => value.toLowerCase().includes(query);
-    const scored = [...searchIndex.streets, ...searchIndex.junctions]
-      .map((hit) => ({ hit, rank: startsWith(hit.label) ? 0 : includes(hit.label) ? 1 : 2 }))
-      .filter((entry) => entry.rank < 2)
-      .sort((a, b) => a.rank - b.rank || a.hit.label.localeCompare(b.hit.label));
-    return scored.slice(0, 7).map((entry) => entry.hit);
-  }, [query, searchIndex]);
-
-  const gotoSearchHit = (hit: SearchHit) => {
-    setSearchOpen(false);
-    if (hit.kind === 'street' && hit.roadKey) {
-      setFlyToRoadKey(hit.roadKey);
-      addLog(`Map focused on ${hit.label}.`);
-    } else if (hit.kind === 'intersection' && hit.nodeId !== undefined) {
-      setOriginNode(hit.nodeId);
-      setFlyToNodeId(hit.nodeId);
-      addLog(`Origin set to ${hit.label}.`);
-    }
-    setSearchInput('');
-  };
+  const surface = waterSurfaceM(cityData, floodLevel);
+  const liveLevel = observations?.equivalent_flood_level ?? null;
+  const activeSnapshot = snapshots.find((snap) => snap.id === activeSnapshotId);
+  const currentEta = route?.success ? (evacuees > 0 ? route.congested_eta_minutes : route.eta_minutes) : null;
 
   return (
     <>
-      <button className={`${styles.collapseTab} ${showTab ? styles.tabVisible : ''}`} onClick={() => setCollapsed(false)} aria-expanded={false} aria-hidden={!showTab} tabIndex={showTab ? 0 : -1}>
-        Scenario controls
-      </button>
-      <aside className={`${styles.panel} ${collapsed ? styles.panelHidden : ''}`} aria-label="Route planning controls" aria-hidden={collapsed}>
-      <div className={styles.panelHeader}>
-        <div>
-          <p className={styles.kicker}>Route planning desk</p>
-          <h2>Scenario controls</h2>
-        </div>
-        <div className={styles.headerRight}>
-          <span className={`${styles.connection} ${backendOnline ? styles.connectionOnline : ''}`}><i />{backendOnline ? 'API live' : 'Local'}</span>
-          <button className={styles.collapseButton} onClick={() => setCollapsed(true)} aria-label="Hide controls">&rsaquo;</button>
-        </div>
-      </div>
-
-      {error && <div className={styles.errorBanner}>{error}</div>}
-      {!backendOnline && <div className={styles.notice}><span>Local solver is active.</span><button onClick={fetchCityData}>Retry API</button></div>}
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Load a scenario</h3></div><span className={styles.sectionHint}>Auto-solves</span></div>
-        <div className={styles.scenarioGrid}>
-          <button onClick={() => applyScenario('clear')} className={styles.scenarioButton}><b>Clear</b><span>Normal grid</span></button>
-          <button onClick={() => applyScenario('flood')} className={styles.scenarioButton}><b>Bayou rise</b><span>Flood stress</span></button>
-          <button onClick={() => applyScenario('cascade')} className={styles.scenarioButton}><b>Feeder loss</b><span>Utility cascade</span></button>
-          <button onClick={() => applyScenario('heatwave')} className={styles.scenarioButton}><b>Heat peak</b><span>Transmission strain</span></button>
-        </div>
-      </section>
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Water surface</h3></div><strong className={styles.value}>{floodLevel.toFixed(1)}<small>/ 10</small></strong></div>
-        <input aria-label="Flood scenario level" className={styles.slider} type="range" min="0" max="10" step="0.1" value={floodLevel} onChange={(event) => setFloodLevel(Number(event.target.value))} style={{ '--fill': `${floodLevel * 10}%` } as CSSProperties} />
-        <div className={styles.sliderLabels}><span>Dry</span><span>Modeled rise {(floodLevel * 1.7).toFixed(1)} m</span><span>Severe</span></div>
-      </section>
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Choose origin</h3></div><span className={styles.sectionHint}>Click map or select</span></div>
-        <div className={styles.modeSegment} role="radiogroup" aria-label="Travel mode">
-          {([['vehicle', 'Vehicle', 'response vehicle'], ['foot', 'On foot', 'evacuation on foot'], ['ems', 'EMS', 'priority medical run']] as const).map(([mode, label, hint]) => (
-            <button key={mode} role="radio" aria-checked={travelMode === mode} title={hint}
-              className={`${styles.modeSegmentBtn} ${travelMode === mode ? styles.modeSegmentActive : ''}`}
-              onClick={() => setTravelMode(mode)}>{label}</button>
+      <Section title="Start from a preset">
+        <div className={styles.presetGrid}>
+          {PRESETS.map((preset) => (
+            <button key={preset.id} className={styles.preset} onClick={() => applyScenario(preset.id)}>
+              <strong>{preset.title}</strong>
+              <span>{preset.detail(waterSurfaceM(cityData, preset.level))}</span>
+            </button>
           ))}
         </div>
-        <select className={styles.select} aria-label="Origin intersection" value={originNode} onChange={(event) => setOriginNode(Number(event.target.value))}>
-          {nodes.filter((node) => logicalNodeIds.has(node.id) || node.id === originNode).map((node) => {
-            const isFlooded = node.elevation <= floodLevel * 1.7;
-            return <option key={node.id} value={node.id} disabled={isFlooded}>{`Node ${node.id}: ${node.intersection_name}${isFlooded ? ', flooded' : ''}`}</option>;
-          })}
-        </select>
-        <div className={styles.searchRow} ref={searchBoxRef}>
-          <input className={styles.searchInput} type="text" placeholder="Search streets or intersections…" value={searchInput}
-            onChange={(event) => { setSearchInput(event.target.value); setSearchOpen(true); }}
-            onFocus={() => setSearchOpen(true)}
-            onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }}
-            aria-label="Search streets or intersections" role="combobox" aria-expanded={searchOpen && searchHits.length > 0} aria-controls="map-search-results" />
-          {searchOpen && searchHits.length > 0 && (
-            <div className={styles.searchResults} id="map-search-results" role="listbox">
-              {searchHits.map((hit) => (
-                <button key={`${hit.kind}-${hit.key}`} role="option" aria-selected={false} className={styles.searchResult} onClick={() => gotoSearchHit(hit)}>
-                  <span className={styles.searchResultKind}>{hit.kind === 'street' ? 'ST' : 'JCT'}</span>
-                  <span className={styles.searchResultBody}><strong>{hit.label}</strong><small>{hit.sublabel}</small></span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <button className={styles.solveButton} onClick={() => void calculateRoute()} disabled={isLoading || !cityData}><span>{isLoading ? 'Recalculating corridor…' : 'Recalculate safe route'}</span><b>↗</b></button>
-      </section>
+      </Section>
 
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Evacuation demand</h3></div><span className={styles.sectionHint}>{demandActive ? 'Congestion on' : 'Free flow'}</span></div>
-        <input aria-label="Evacuating population" className={styles.slider} type="range" min="0" max="100000" step="1000" value={evacuees} onChange={(event) => setEvacuees(Number(event.target.value))} style={{ '--fill': `${Math.min(100, evacuees / 1000)}%` } as CSSProperties} />
-        <div className={styles.sliderLabels}><span>0</span><span>{evacuees.toLocaleString()}{evacuees ? ' people' : ' people leaving'}</span><span>100k</span></div>
-        <div className={styles.demandPresets}>
-          {([[0, 'None'], [10000, '10k'], [25000, '25k'], [50000, '50k'], [100000, '100k']] as const).map(([value, label]) => (
-            <button key={value} className={evacuees === value ? styles.demandPresetActive : ''} onClick={() => setEvacuees(value)} aria-pressed={evacuees === value}>{label}</button>
-          ))}
+      <Section title="Water surface" aside={`level ${floodLevel.toFixed(1)}`}>
+        <div className={styles.bigValue}>
+          <strong>{surface.toFixed(2)}<small>m</small></strong>
+          <span>{(surface * FEET).toFixed(1)} ft NAVD88</span>
         </div>
-        {congestionPct !== null && (
-          <p className={styles.congestionNote}>Local travel times run <b>~{congestionPct}% longer</b> than free flow with {evacuees.toLocaleString()} people on the network.</p>
-        )}
-      </section>
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Utility interruptions</h3></div><span className={styles.sectionHint}>{failedSubstations.length} manual</span></div>
-        <div className={styles.substationList}>
-          {substations.map((sub) => {
-            const manualFailed = failedSubstations.includes(sub.id);
-            const cascaded = cascadedSubstations.includes(sub.id);
-            const failed = manualFailed || cascaded;
-            const overloaded = overloadedSubstations.includes(sub.id);
-            const load = substationLoads[sub.id] ?? sub.base_load_mw;
-            const percentage = failed ? 0 : Math.min(100, Math.round((load / sub.capacity_mw) * 100));
-            const status = failed ? (cascaded ? 'CASCADE' : 'OFFLINE') : overloaded ? 'OVERLOAD' : 'ONLINE';
-            return <div className={styles.substationRow} key={sub.id}>
-              <div className={styles.substationTop}><span className={`${styles.statusDot} ${failed ? styles.statusFailed : overloaded ? styles.statusWarn : styles.statusGood}`} /><div className={styles.substationName}><strong>{sub.name.replace(' Substation', '')}</strong><span>{status}, {failed ? '0' : load.toFixed(0)} / {sub.capacity_mw} MW</span></div><button className={`${styles.statusButton} ${failed ? styles.statusButtonOff : ''}`} onClick={() => toggleSubstation(sub.id)} disabled={cascaded}>{manualFailed ? 'Restore' : cascaded ? 'Locked' : 'Fail'}</button></div>
-              <div className={styles.loadTrack}><i className={failed ? styles.loadFailed : overloaded ? styles.loadWarn : ''} style={{ width: `${percentage}%` }} /></div>
-            </div>;
-          })}
+        <input
+          aria-label="Scenario water surface level"
+          aria-valuetext={`${surface.toFixed(2)} metres NAVD88`}
+          className={`${styles.slider} ${styles.sliderWater}`}
+          type="range"
+          min="0"
+          max="10"
+          step="0.1"
+          value={floodLevel}
+          onChange={(event) => setFloodLevel(Number(event.target.value))}
+          style={{ '--fill': `${floodLevel * 10}%`, '--live': liveLevel !== null ? `${liveLevel * 10}%` : '-100%' } as CSSProperties}
+        />
+        <div className={styles.scale} aria-hidden="true">
+          {[0, 2.5, 5, 7.5, 10].map((level) => <span key={level}>{waterSurfaceM(cityData, level).toFixed(0)} m</span>)}
         </div>
-      </section>
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Map layers</h3></div><span className={styles.sectionHint}>Toggle visibility</span></div>
-        <div className={styles.toggleGrid}>
-          <label><input type="checkbox" checked={showBuildings} onChange={(event) => setShowBuildings(event.target.checked)} /><span>Block footprints</span></label>
-          <label><input type="checkbox" checked={showRoadNames} onChange={(event) => setShowRoadNames(event.target.checked)} /><span>Road labels</span></label>
-          <label><input type="checkbox" checked={showIntersections} onChange={(event) => setShowIntersections(event.target.checked)} /><span>Intersections</span></label>
-          <label><input type="checkbox" checked={showSubstations} onChange={(event) => setShowSubstations(event.target.checked)} /><span>Substations</span></label>
-          <label><input type="checkbox" checked={showPowerLines} onChange={(event) => setShowPowerLines(event.target.checked)} /><span>Utility links</span></label>
-        </div>
-        <div className={styles.modeRow}><span>Map treatment</span><div>{(['nominal', 'radar', 'thermal'] as const).map((mode) => <button key={mode} className={mapFilterMode === mode ? styles.modeActive : ''} onClick={() => setMapFilterMode(mode)}>{mode}</button>)}</div></div>
-        <div className={styles.presetRow}><button onClick={() => setFlyToCoords({ lon: -95.3698, lat: 29.7604, elev: 5200, heading: 0, pitch: -88 })}>District overview</button><button onClick={() => setFlyToCoords({ lon: -95.375, lat: 29.755, elev: 1500, heading: 0, pitch: -80 })}>Street detail</button></div>
-      </section>
-
-      <section className={styles.routeSummary}>
-        <div className={styles.routeSummaryTop}><div><p className={styles.kicker}>Current recommendation</p><h3 style={{ color: riskColor }}>{route?.success ? 'PASSABLE CORRIDOR' : route ? 'NO PASSABLE ROUTE' : 'AWAITING ASSESSMENT'}</h3></div><span className={styles.riskMark} style={{ color: riskColor }}>{route ? riskLevel : '-'}</span></div>
-        <div className={styles.summaryGrid}><span><b>{effectiveEta !== null ? `${effectiveEta.toFixed(1)} min` : '-'}</b><small>{demandActive && effectiveEta !== null ? `with demand · ${route!.eta_minutes.toFixed(1)} free` : 'estimated time'}</small></span><span><b>{route?.success ? formatDistance(route.distance_m) : '-'}</b><small>street distance</small></span><span><b>{floodedCount}</b><small>flooded nodes</small></span><span><b>{route?.blocked_edges.length ?? 0}</b><small>closures</small></span></div>
-        {route?.corridor_capacity && route.corridor_capacity.people_per_hour > 0 && (
-          <div className={styles.capacityStrip}>
-            <span><b>{route.corridor_capacity.people_per_hour.toLocaleString()}</b><small>people/hour</small></span>
-            <span><b>~{route.corridor_capacity.clearance_minutes.toFixed(0)}</b><small>min clearance</small></span>
-            <span><b className={styles.capacityRoad}>{route.corridor_capacity.limiting_road}</b><small>bottleneck</small></span>
+        <p className={styles.note}>
+          {(route?.flooded_nodes.length ?? 0).toLocaleString()} junctions under water
+          {route?.flooded_substations.length ? `, ${route.flooded_substations.length} substation${route.flooded_substations.length > 1 ? 's' : ''} flooded` : ''}.
+        </p>
+        {liveLevel !== null && observations && (
+          <div className={styles.liveRow}>
+            <span><i className={styles.liveDot} />Today {observations.gage_water_surface_m?.toFixed(2)} m at USGS {cityData?.flood_model?.gage.site}</span>
+            <button className={styles.textButton} onClick={syncFloodToGage}>Use live reading</button>
           </div>
         )}
-        {route?.success && <div className={styles.stepList}>{route.route_steps.slice(0, 4).map((step, index) => <div className={styles.stepRow} key={`${step.from_node}-${step.to_node}`}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{step.instruction}</strong><small>{formatDistance(step.distance_m)}, {Math.round(step.duration_s / 60)} min</small></div></div>)}</div>}
-        {route?.success && <p className={styles.destination}>{route.destination_name
-          ? `${route.destination_name} (${route.destination_kind === 'medical' ? 'medical facility' : 'shelter'}). ${route.message}`
-          : `Exit via ${nodeNameById.get(route.dest_node) ?? `node ${route.dest_node}`}. ${route.message}`}</p>}
-        {route && <button className={styles.clearButton} onClick={clearRoute}>Clear route overlay</button>}
-      </section>
+      </Section>
 
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Destinations</h3></div><span className={styles.sectionHint}>{shelters.length} real facilities</span></div>
-        <div className={styles.destinationList}>
-          {shelters.map((shelter) => {
-            const active = destinationId === shelter.id;
-            const routed = Boolean(route?.success && route.destination_name === shelter.name);
-            const kindLabel = shelter.kind === 'medical' ? 'MED' : 'SHELTER';
+      <Section title="Evacuation demand" aside={evacuees ? `${evacuees.toLocaleString()} people` : 'free flow'}>
+        <input
+          aria-label="Evacuating population"
+          className={styles.slider}
+          type="range"
+          min="0"
+          max="100000"
+          step="1000"
+          value={evacuees}
+          onChange={(event) => setEvacuees(Number(event.target.value))}
+          style={{ '--fill': `${Math.min(100, evacuees / 1000)}%` } as CSSProperties}
+        />
+        <div className={styles.chips}>
+          {([[0, 'None'], [10000, '10k'], [25000, '25k'], [50000, '50k'], [100000, '100k']] as const).map(([value, label]) => (
+            <button key={value} className={evacuees === value ? styles.chipActive : ''} aria-pressed={evacuees === value} onClick={() => setEvacuees(value)}>{label}</button>
+          ))}
+        </div>
+        {route?.success && evacuees > 0 && (
+          <p className={styles.callout}>
+            Travel runs <b>{route.congestion_factor.toFixed(2)}×</b> slower than free flow. Clearing everyone through every dry exit takes about <b>{route.corridor_capacity?.clearance_minutes.toFixed(0)} min</b>.
+          </p>
+        )}
+      </Section>
+
+      <Section title="Substations" aside={`${failedSubstations.length} manual outage${failedSubstations.length === 1 ? '' : 's'}`}>
+        <ul className={styles.rows}>
+          {(cityData?.substations ?? []).map((sub) => {
+            const manual = failedSubstations.includes(sub.id);
+            const flooded = route?.flooded_substations.includes(sub.id) ?? false;
+            const cascaded = route?.cascaded_substations.includes(sub.id) ?? false;
+            const overloaded = route?.overloaded_substations.includes(sub.id) ?? false;
+            const offline = manual || flooded || cascaded;
+            const load = offline ? 0 : substationLoads[sub.id] ?? sub.base_load_mw;
+            const status = manual ? 'Manual outage' : flooded ? 'Flooded' : cascaded ? 'Cascade trip' : overloaded ? 'Overloaded' : 'In service';
+            const tone = offline ? styles.toneCritical : overloaded ? styles.toneWatch : styles.toneSafe;
             return (
-              <button key={shelter.id} aria-pressed={active}
-                className={`${styles.destinationRow} ${active ? styles.destinationActive : ''}`}
-                onClick={() => setDestination(active ? null : shelter.id)}>
-                <span className={`${styles.destinationKind} ${shelter.kind === 'medical' ? styles.destinationKindMedical : ''}`}>{kindLabel}</span>
-                <span className={styles.destinationBody}>
-                  <strong>{shelter.name}</strong>
-                  <small>{shelter.note} · {shelter.capacity.toLocaleString()} capacity</small>
+              <li key={sub.id} className={styles.subRow}>
+                <span className={`${styles.dot} ${tone}`} />
+                <span className={styles.rowBody}>
+                  <strong>{sub.name.replace(' Substation', '')}</strong>
+                  <small>{status}, {load.toFixed(0)} of {sub.capacity_mw} MW</small>
+                  <span className={styles.meter}><i className={tone} style={{ transform: `scaleX(${Math.min(1, load / sub.capacity_mw)})` }} /></span>
                 </span>
-                <span className={styles.destinationEta}>
-                  {routed && effectiveEta !== null ? `${effectiveEta.toFixed(1)} min` : active ? '…' : ''}
+                <button className={styles.smallButton} onClick={() => toggleSubstation(sub.id)} disabled={(flooded || cascaded) && !manual}>
+                  {manual ? 'Restore' : flooded || cascaded ? 'Locked' : 'Fail'}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </Section>
+
+      <Section title="Snapshots" aside={`${snapshots.length} saved on this device`}>
+        <form className={styles.inline} onSubmit={(event) => { event.preventDefault(); saveSnapshot(snapshotLabel); setSnapshotLabel(''); }}>
+          <input className={styles.input} maxLength={40} placeholder="Name this scenario" value={snapshotLabel} onChange={(event) => setSnapshotLabel(event.target.value)} aria-label="Snapshot name" />
+          <button className={styles.smallButton} type="submit">Save</button>
+        </form>
+        {snapshots.length > 0 && (
+          <ul className={styles.rows}>
+            {snapshots.map((snap) => (
+              <li key={snap.id} className={`${styles.snapRow} ${activeSnapshotId === snap.id ? styles.rowActive : ''}`}>
+                <span className={styles.rowBody}>
+                  <strong>{snap.label}</strong>
+                  <small>{snap.travelMode}, level {snap.floodLevel.toFixed(1)}{snap.closures.length ? `, ${snap.closures.length} closures` : ''}, {snap.outcome.success ? `${snap.outcome.eta_minutes.toFixed(1)} min` : 'no route'}</small>
                 </span>
+                <button className={styles.smallButton} onClick={() => applySnapshot(snap.id)}>Restore</button>
+                <button className={styles.iconButton} onClick={() => deleteSnapshot(snap.id)} aria-label={`Delete ${snap.label}`}><Icon name="close" size={14} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {activeSnapshot && route && (
+          <div className={styles.diff}>
+            <span>Compared with <b>{activeSnapshot.label}</b></span>
+            <div>
+              <span><small>Now</small><b>{currentEta !== null ? `${currentEta.toFixed(1)} min` : 'no route'}</b></span>
+              <span><small>Saved</small><b>{activeSnapshot.outcome.success ? `${activeSnapshot.outcome.eta_minutes.toFixed(1)} min` : 'no route'}</b></span>
+              <span>
+                <small>Change</small>
+                <b className={currentEta !== null && activeSnapshot.outcome.success && currentEta <= activeSnapshot.outcome.eta_minutes ? styles.better : styles.worse}>
+                  {currentEta !== null && activeSnapshot.outcome.success ? `${(currentEta - activeSnapshot.outcome.eta_minutes >= 0 ? '+' : '')}${(currentEta - activeSnapshot.outcome.eta_minutes).toFixed(1)} min` : '-'}
+                </b>
+              </span>
+            </div>
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
+/* --------------------------------------------------------------- route */
+
+function RouteTab() {
+  const cityData = useSimulationStore((state) => state.cityData);
+  const route = useSimulationStore((state) => state.route);
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const originNode = useSimulationStore((state) => state.originNode);
+  const setOriginNode = useSimulationStore((state) => state.setOriginNode);
+  const travelMode = useSimulationStore((state) => state.travelMode);
+  const setTravelMode = useSimulationStore((state) => state.setTravelMode);
+  const destinationId = useSimulationStore((state) => state.destinationId);
+  const setDestination = useSimulationStore((state) => state.setDestination);
+  const closures = useSimulationStore((state) => state.closures);
+  const closureMode = useSimulationStore((state) => state.closureMode);
+  const setClosureMode = useSimulationStore((state) => state.setClosureMode);
+  const toggleClosure = useSimulationStore((state) => state.toggleClosure);
+  const clearClosures = useSimulationStore((state) => state.clearClosures);
+  const evacuees = useSimulationStore((state) => state.evacuees);
+  const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
+  const setFlyToRoadKey = useSimulationStore((state) => state.setFlyToRoadKey);
+
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [activeHit, setActiveHit] = useState(0);
+
+  const surface = waterSurfaceM(cityData, floodLevel);
+  const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
+  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const junctionIds = useMemo(() => (cityData ? logicalJunctions(cityData).ids : new Set<number>()), [cityData]);
+  const core = useMemo(() => (cityData ? vehicleCore(cityData) : new Set<number>()), [cityData]);
+  const origin = nodesById.get(originNode);
+  const edgesByKey = useMemo(() => new Map((cityData?.edges ?? []).map((edge) => [`${Math.min(edge.source, edge.target)}-${Math.max(edge.source, edge.target)}`, edge])), [cityData]);
+
+  const originOptions = useMemo(() => nodes
+    .filter((node) => (junctionIds.has(node.id) && !node.elevated) || node.id === originNode)
+    .sort((a, b) => a.intersection_name.localeCompare(b.intersection_name)), [nodes, junctionIds, originNode]);
+
+  const searchIndex = useMemo(() => {
+    const seen = new Set<string>();
+    const hits: SearchHit[] = [];
+    (cityData?.edges ?? []).forEach((edge) => {
+      if (!edge.road_name || edge.road_name === 'Unnamed street') return;
+      const key = `${Math.min(edge.source, edge.target)}-${Math.max(edge.source, edge.target)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      hits.push({ key, kind: 'street', label: edge.road_name, detail: `${nodesById.get(edge.source)?.intersection_name ?? edge.source} to ${nodesById.get(edge.target)?.intersection_name ?? edge.target}`, roadKey: key });
+    });
+    nodes.filter((node) => junctionIds.has(node.id)).forEach((node) => {
+      hits.push({ key: `node-${node.id}`, kind: 'junction', label: node.intersection_name, detail: `Junction, ground ${node.elevation.toFixed(1)} m`, nodeId: node.id });
+    });
+    return hits;
+  }, [cityData, nodes, nodesById, junctionIds]);
+
+  const results = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle.length < 2) return [];
+    return searchIndex
+      .map((hit) => ({ hit, rank: hit.label.toLowerCase().startsWith(needle) ? 0 : hit.label.toLowerCase().includes(needle) ? 1 : 2 }))
+      .filter((entry) => entry.rank < 2)
+      .sort((a, b) => a.rank - b.rank || (a.hit.kind === 'junction' ? -1 : 1) || a.hit.label.localeCompare(b.hit.label))
+      .slice(0, 8)
+      .map((entry) => entry.hit);
+  }, [query, searchIndex]);
+
+  const choose = (hit: SearchHit) => {
+    setOpen(false);
+    setQuery('');
+    if (hit.kind === 'junction' && hit.nodeId !== undefined) {
+      setOriginNode(hit.nodeId);
+      setFlyToNodeId(hit.nodeId);
+    } else if (hit.roadKey) {
+      setFlyToRoadKey(hit.roadKey);
+    }
+  };
+
+  const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); setActiveHit((value) => Math.min(results.length - 1, value + 1)); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActiveHit((value) => Math.max(0, value - 1)); }
+    else if (event.key === 'Enter' && results[activeHit]) { event.preventDefault(); choose(results[activeHit]); }
+    else if (event.key === 'Escape') setOpen(false);
+  };
+
+  const eta = route?.success ? (evacuees > 0 ? route.congested_eta_minutes : route.eta_minutes) : null;
+  const originDry = origin ? floodStage(origin) > surface : false;
+  const pocket = origin && travelMode !== 'foot' && !core.has(origin.id);
+
+  return (
+    <>
+      <Section title="Travel mode">
+        <div className={styles.segment} role="radiogroup" aria-label="Travel mode" style={{ '--seg': ['vehicle', 'foot', 'ems'].indexOf(travelMode), '--count': 3 } as CSSProperties}>
+          <span className={styles.segmentThumb} aria-hidden="true" />
+          {([['vehicle', 'Vehicle'], ['foot', 'On foot'], ['ems', 'EMS']] as const).map(([mode, label]) => (
+            <button key={mode} role="radio" aria-checked={travelMode === mode} className={travelMode === mode ? styles.segmentActive : ''} onClick={() => setTravelMode(mode)}>{label}</button>
+          ))}
+        </div>
+        <p className={styles.note}>{travelMode === 'foot' ? 'Walking pace on sidewalks in both directions of one-way streets.' : travelMode === 'ems' ? 'Faster than posted limits, strong preference for arterials; obeys one-way rules.' : 'Posted speed limits and one-way rules, mild preference for arterials.'}</p>
+      </Section>
+
+      <Section title="Origin" aside={origin ? `ground ${origin.elevation.toFixed(1)} m` : undefined}>
+        <div className={styles.search}>
+          <Icon name="search" size={15} />
+          <input
+            className={styles.input}
+            type="search"
+            placeholder="Search a street or junction"
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setOpen(true); setActiveHit(0); }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 120)}
+            onKeyDown={onSearchKey}
+            role="combobox"
+            aria-expanded={open && results.length > 0}
+            aria-controls="origin-search-results"
+            aria-activedescendant={open && results[activeHit] ? `search-hit-${activeHit}` : undefined}
+            aria-label="Search streets and junctions"
+          />
+          {open && results.length > 0 && (
+            <ul className={styles.results} id="origin-search-results" role="listbox">
+              {results.map((hit, index) => (
+                <li key={hit.key} id={`search-hit-${index}`} role="option" aria-selected={index === activeHit}>
+                  <button className={index === activeHit ? styles.resultActive : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(hit)}>
+                    <span className={styles.resultKind}>{hit.kind === 'street' ? 'Street' : 'Start'}</span>
+                    <span className={styles.rowBody}><strong>{hit.label}</strong><small>{hit.detail}</small></span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <select className={styles.select} aria-label="Origin junction" value={originNode} onChange={(event) => setOriginNode(Number(event.target.value))}>
+          {originOptions.map((node) => {
+            const flooded = floodStage(node) <= surface;
+            return <option key={node.id} value={node.id} disabled={flooded}>{node.intersection_name}{flooded ? ' (under water)' : ''}</option>;
+          })}
+        </select>
+        {origin && (
+          <p className={`${styles.note} ${!originDry || pocket ? styles.noteWarn : ''}`}>
+            {!originDry
+              ? 'This junction is under the modeled water. Pick a dry one.'
+              : pocket
+                ? 'One-way pocket: vehicles cannot legally leave this junction. Pick a through street or switch to on foot.'
+                : `Floods when the water reaches ${floodStage(origin).toFixed(2)} m${origin.elevated ? ' (bridge deck)' : ''}, ${(floodStage(origin) - surface).toFixed(1)} m above the current surface.`}
+          </p>
+        )}
+      </Section>
+
+      <Section title="Destination">
+        <div className={styles.options} role="radiogroup" aria-label="Destination">
+          <button role="radio" aria-checked={!destinationId} className={`${styles.option} ${!destinationId ? styles.optionActive : ''}`} onClick={() => setDestination(null)}>
+            <span className={`${styles.kind} ${styles.kindExit}`}>Exit</span>
+            <span className={styles.rowBody}><strong>Safest perimeter exit</strong><small>Chooses among {cityData?.safe_exits.length ?? 4} exits</small></span>
+          </button>
+          {(cityData?.shelters ?? []).map((shelter) => {
+            const node = nodesById.get(shelter.node);
+            const flooded = node ? floodStage(node) <= surface : false;
+            const active = destinationId === shelter.id;
+            return (
+              <button key={shelter.id} role="radio" aria-checked={active} disabled={flooded && !active} className={`${styles.option} ${active ? styles.optionActive : ''}`} onClick={() => setDestination(shelter.id)}>
+                <span className={`${styles.kind} ${shelter.kind === 'medical' ? styles.kindMedical : styles.kindShelter}`}>{shelter.kind === 'medical' ? 'Medical' : 'Shelter'}</span>
+                <span className={styles.rowBody}><strong>{shelter.name}</strong><small>{flooded ? 'Approach under water' : `${shelter.capacity.toLocaleString()} capacity`}</small></span>
+                {active && route?.success && eta !== null && <span className={styles.rowValue}>{eta.toFixed(1)} min</span>}
               </button>
             );
           })}
         </div>
-        <p className={styles.destinationHint}>Click a destination to route there instead of the perimeter exits; click again to clear. Medical facilities route in any mode, but EMS honors priority.</p>
-      </section>
+      </Section>
 
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Exit corridors</h3></div><span className={styles.sectionHint}>{corridorComparison?.corridors.length ?? 0} · best first</span></div>
-        <div className={styles.corridorList}>
-          {(corridorComparison?.corridors ?? []).map((corridor, index) => {
-            const isChosen = route?.success && route.dest_node === corridor.exit_node;
-            const isFastest = index === 0;
-            return <button key={corridor.exit_node} title="Fly to this exit on the map" aria-label={`Fly to ${corridor.exit_name}`}
-              className={`${styles.corridorRow} ${isChosen ? styles.corridorChosen : ''}`}
-              onClick={() => setFlyToNodeId(corridor.exit_node)}>
-              <span className={`${styles.corridorRank} ${isFastest ? styles.corridorRankBest : ''}`}>{String(index + 1).padStart(2, '0')}</span>
-              <span className={styles.corridorBody}><strong>{corridor.exit_name}</strong><small>{formatDistance(corridor.distance_m)} · {corridor.hazard_count} hazard{corridor.hazard_count === 1 ? '' : 's'} · {corridor.people_per_hour.toLocaleString()} ppl/hr</small></span>
-              <span className={styles.corridorEta}>
-                {demandActive && corridor.congested_eta_minutes > 0 ? corridor.congested_eta_minutes.toFixed(1) : corridor.eta_minutes.toFixed(1)}
-                <small>{demandActive && corridor.congested_eta_minutes > 0 ? `${corridor.eta_minutes.toFixed(1)} free` : 'min'}</small>
-              </span>
-            </button>;
-          })}
-          {!corridorComparison && <p className={styles.corridorEmpty}>Load a scenario to rank every perimeter exit.</p>}
-        </div>
-      </section>
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Reachability</h3></div><span className={styles.sectionHint}>{isochroneVisible ? 'on map' : 'hidden'}</span></div>
-        <div className={styles.isochroneRow}>
-          <button className={`${styles.isochroneToggle} ${isochroneVisible ? styles.isochroneOn : ''}`} onClick={() => { const next = !isochroneVisible; setIsochroneVisible(next); if (next) void refreshIsochrone(); }}>
-            {isochroneVisible ? 'Hide reachability rings' : 'Show reachability rings'}
-          </button>
-          {isochroneVisible && isochrone && (
-            <div className={styles.isochroneLegend}>
-              {isochrone.rings.map((ring, index) => <span key={ring.minutes}><i data-ring={index} />{ring.minutes} min · {ring.node_count}</span>)}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className={styles.controlSection}>
-        <div className={styles.sectionHeading}><div><h3>Scenario snapshots</h3></div><span className={styles.sectionHint}>{snapshots.length} stored locally</span></div>
-        <div className={styles.snapshotRow}>
-          <input className={styles.snapshotInput} type="text" maxLength={28} placeholder="Name this scenario…" value={snapshotLabel} onChange={(event) => setSnapshotLabel(event.target.value)} aria-label="Snapshot name" />
-          <button className={styles.smallButton} onClick={() => { saveSnapshot(snapshotLabel); setSnapshotLabel(''); }}>Save</button>
-        </div>
-        {snapshots.length > 0 && (
-          <div className={styles.snapshotList}>
-            {snapshots.map((snap) => {
-              const isA = activeSnapshotId === snap.id;
-              return <div key={snap.id} className={`${styles.snapshotItem} ${isA ? styles.snapshotActive : ''}`}>
-                <div className={styles.snapshotInfo}><strong>{snap.label}</strong><small>{snap.travelMode} · flood {snap.floodLevel.toFixed(1)} · {snap.outcome.success ? `${snap.outcome.eta_minutes.toFixed(1)} min` : 'no route'}</small></div>
-                <div className={styles.snapshotActions}>
-                  <button className={styles.snapshotBtn} onClick={() => applySnapshot(snap.id)}>Restore</button>
-                  <button className={`${styles.snapshotBtn} ${styles.snapshotDelete}`} onClick={() => deleteSnapshot(snap.id)} aria-label={`Delete ${snap.label}`}>✕</button>
-                </div>
-              </div>;
+      <Section title="Road closures" aside={`${closures.length} active`}>
+        <Switch checked={closureMode} onChange={setClosureMode} label="Close streets on the map" detail="Click a street to close it, click again to reopen (C)" />
+        {closures.length > 0 && (
+          <ul className={styles.rows}>
+            {closures.map(([u, v]) => {
+              const key = `${Math.min(u, v)}-${Math.max(u, v)}`;
+              const edge = edgesByKey.get(key);
+              return (
+                <li key={key} className={styles.closureRow}>
+                  <Icon name="barrier" size={15} />
+                  <span className={styles.rowBody}>
+                    <button className={styles.linkish} onClick={() => setFlyToRoadKey(key)}>{edge?.road_name && edge.road_name !== 'Unnamed street' ? edge.road_name : 'Street segment'}</button>
+                    <small>{nodesById.get(u)?.intersection_name} to {nodesById.get(v)?.intersection_name}</small>
+                  </span>
+                  <button className={styles.smallButton} onClick={() => toggleClosure(u, v)}>Reopen</button>
+                </li>
+              );
             })}
-          </div>
+          </ul>
         )}
-        {activeSnapshot && activeSnapshotId !== null && route && (
-          <div className={styles.snapshotDiff}>
-            <p className={styles.snapshotDiffTitle}>vs saved snapshot</p>
-            <div className={styles.snapshotDiffGrid}>
-              <span><b className={route.success && route.eta_minutes <= activeSnapshot.outcome.eta_minutes ? styles.diffBetter : styles.diffWorse}>{route.success ? `${route.eta_minutes.toFixed(1)}m` : 'fail'}</b><small>now</small></span>
-              <span><b>{activeSnapshot.outcome.success ? `${activeSnapshot.outcome.eta_minutes.toFixed(1)}m` : 'fail'}</b><small>saved</small></span>
-              <span><b className={route.success === activeSnapshot.outcome.success && route.risk_level === activeSnapshot.outcome.risk_level ? styles.diffBetter : styles.diffWorse}>{route.risk_level}</b><small>risk shift</small></span>
+        {closures.length > 1 && <button className={styles.textButton} onClick={clearClosures}>Reopen all</button>}
+      </Section>
+
+      <Section title="Recommendation" aside={route?.risk_level ? `risk ${route.risk_level.toLowerCase()}` : undefined}>
+        {route?.success ? (
+          <>
+            <div className={styles.summary}>
+              <span><b>{eta?.toFixed(1)}</b><small>min{evacuees > 0 ? ' with demand' : ''}</small></span>
+              <span><b>{formatDistance(route.distance_m)}</b><small>street distance</small></span>
+              <span><b>{(route.corridor_capacity?.people_per_hour ?? 0).toLocaleString()}</b><small>people per hour</small></span>
+              <span><b>{route.blocked_edges.length}</b><small>segments under water</small></span>
             </div>
+            <ol className={styles.steps}>
+              {route.route_steps.slice(0, 5).map((step, index) => (
+                <li key={`${step.from_node}-${index}`}><span>{index + 1}</span><div><strong>{step.instruction}</strong><small>{formatDistance(step.distance_m)}</small></div></li>
+              ))}
+            </ol>
+            {route.route_steps.length > 5 && <p className={styles.note}>{route.route_steps.length - 5} more steps in the route audit.</p>}
+          </>
+        ) : (
+          <p className={`${styles.note} ${styles.noteWarn}`}>{route?.message ?? 'Waiting for the first assessment.'}</p>
+        )}
+      </Section>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------ analysis */
+
+function AnalysisTab() {
+  const cityData = useSimulationStore((state) => state.cityData);
+  const route = useSimulationStore((state) => state.route);
+  const corridorComparison = useSimulationStore((state) => state.corridorComparison);
+  const triggerPoints = useSimulationStore((state) => state.triggerPoints);
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const evacuees = useSimulationStore((state) => state.evacuees);
+  const isochrone = useSimulationStore((state) => state.isochrone);
+  const isochroneVisible = useSimulationStore((state) => state.isochroneVisible);
+  const setIsochroneVisible = useSimulationStore((state) => state.setIsochroneVisible);
+  const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
+  const surface = waterSurfaceM(cityData, floodLevel);
+
+  return (
+    <>
+      <Section title="Exit corridors" aside="safest first">
+        {!corridorComparison?.corridors.length ? (
+          <p className={`${styles.note} ${styles.noteWarn}`}>No perimeter exit is reachable from this origin.</p>
+        ) : (
+          <ol className={styles.rank}>
+            {corridorComparison.corridors.map((corridor, index) => (
+              <li key={corridor.exit_node}>
+                <button className={route?.success && route.dest_node === corridor.exit_node ? styles.rankChosen : ''} onClick={() => setFlyToNodeId(corridor.exit_node)}>
+                  <span className={styles.rankIndex}>{index + 1}</span>
+                  <span className={styles.rowBody}><strong>{corridor.exit_name}</strong><small>{formatDistance(corridor.distance_m)}, {corridor.people_per_hour.toLocaleString()}/h, {corridor.hazard_count} hazard segment{corridor.hazard_count === 1 ? '' : 's'}</small></span>
+                  <span className={styles.rowValue}>{(evacuees > 0 ? corridor.congested_eta_minutes : corridor.eta_minutes).toFixed(1)}<small>min</small></span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Section>
+
+      <Section title="Trigger points" aside="cut-off water surface">
+        {!triggerPoints?.targets.length ? (
+          <p className={styles.note}>Trigger points appear once an origin is set.</p>
+        ) : (
+          <ul className={styles.rows}>
+            {triggerPoints.targets.map((target) => {
+              const margin = target.threshold_m - surface;
+              const tone = margin <= 0 ? styles.toneCritical : margin < 1 ? styles.toneWatch : styles.toneSafe;
+              return (
+                <li key={`${target.kind}-${target.id}`} className={styles.triggerRow}>
+                  <span className={`${styles.diamond} ${tone}`} />
+                  <span className={styles.rowBody}>
+                    <button className={styles.linkish} onClick={() => setFlyToNodeId(target.limited_by === 'corridor' ? target.bottleneck_node : target.node)}>{target.name}</button>
+                    <small>{target.limited_by === 'corridor' ? `${target.bottleneck_road} floods first` : target.limited_by === 'origin' ? 'Origin floods first' : 'Its own approach floods first'}</small>
+                  </span>
+                  <span className={styles.rowValue}>{target.threshold_m.toFixed(1)}<small>{margin <= 0 ? 'cut off' : `+${margin.toFixed(1)} m`}</small></span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Reachability" aside={isochroneVisible ? 'on the map' : undefined}>
+        <Switch checked={isochroneVisible} onChange={setIsochroneVisible} label="Show streets reachable in time" detail="Real travel time from the origin, slowed by demand" />
+        {isochroneVisible && isochrone && (
+          <div className={styles.rings}>
+            {isochrone.rings.map((ring, index) => (
+              <span key={ring.minutes} style={{ '--ring': index } as CSSProperties}><i />{ring.minutes} min<small>{ring.node_count} junctions</small></span>
+            ))}
+            {isochrone.congestion_factor > 1 && <p className={styles.note}>Demand slows every street {isochrone.congestion_factor.toFixed(2)}×.</p>}
           </div>
         )}
-      </section>
-      </aside>
+      </Section>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------- layers */
+
+function LayersTab() {
+  const basemap = useSimulationStore((state) => state.basemap);
+  const setBasemap = useSimulationStore((state) => state.setBasemap);
+  const showBuildings = useSimulationStore((state) => state.showBuildings);
+  const setShowBuildings = useSimulationStore((state) => state.setShowBuildings);
+  const showWaterways = useSimulationStore((state) => state.showWaterways);
+  const setShowWaterways = useSimulationStore((state) => state.setShowWaterways);
+  const showIntersections = useSimulationStore((state) => state.showIntersections);
+  const setShowIntersections = useSimulationStore((state) => state.setShowIntersections);
+  const showRoadNames = useSimulationStore((state) => state.showRoadNames);
+  const setShowRoadNames = useSimulationStore((state) => state.setShowRoadNames);
+  const showSubstations = useSimulationStore((state) => state.showSubstations);
+  const setShowSubstations = useSimulationStore((state) => state.setShowSubstations);
+  const showPowerLines = useSimulationStore((state) => state.showPowerLines);
+  const setShowPowerLines = useSimulationStore((state) => state.setShowPowerLines);
+  const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
+  const cityData = useSimulationStore((state) => state.cityData);
+  const options: Array<[Basemap, string]> = [['dark', 'Dark'], ['light', 'Light'], ['aerial', 'Aerial']];
+
+  return (
+    <>
+      <Section title="Basemap">
+        <div className={styles.segment} role="radiogroup" aria-label="Basemap" style={{ '--seg': options.findIndex(([id]) => id === basemap), '--count': 3 } as CSSProperties}>
+          <span className={styles.segmentThumb} aria-hidden="true" />
+          {options.map(([id, label]) => (
+            <button key={id} role="radio" aria-checked={basemap === id} disabled={id === 'aerial' && !HAS_ION} className={basemap === id ? styles.segmentActive : ''} onClick={() => setBasemap(id)} title={id === 'aerial' && !HAS_ION ? 'Needs a Cesium ion token' : undefined}>{label}</button>
+          ))}
+        </div>
+        <p className={styles.note}>Light suits daylight rooms and printouts. Aerial imagery helps confirm what is on the ground.</p>
+      </Section>
+
+      <Section title="Layers">
+        <div className={styles.switches}>
+          <Switch checked={showBuildings} onChange={setShowBuildings} label="Buildings" detail="Tinted blue when flooded, dimmed without power" />
+          <Switch checked={showWaterways} onChange={setShowWaterways} label="Bayou centerlines" />
+          <Switch checked={showIntersections} onChange={setShowIntersections} label="Junction dots" detail="Click one to start from it" />
+          <Switch checked={showRoadNames} onChange={setShowRoadNames} label="Street names" />
+          <Switch checked={showSubstations} onChange={setShowSubstations} label="Substations" />
+          <Switch checked={showPowerLines} onChange={setShowPowerLines} label="Transmission links" />
+        </div>
+      </Section>
+
+      <Section title="Camera">
+        <div className={styles.cameraGrid}>
+          <button className={styles.preset} onClick={() => setFlyToCoords({ lon: cityData?.center_lon ?? -95.3698, lat: cityData?.center_lat ?? 29.7604, elev: 5600, heading: 0, pitch: -89 })}>
+            <strong>District</strong><span>Top-down overview</span>
+          </button>
+          <button className={styles.preset} onClick={() => setFlyToCoords({ lon: (cityData?.center_lon ?? -95.3698) + 0.004, lat: (cityData?.center_lat ?? 29.7604) - 0.03, elev: 2600, heading: -18, pitch: -38 })}>
+            <strong>Skyline</strong><span>Tilted 3D from the south</span>
+          </button>
+        </div>
+      </Section>
     </>
   );
 }
