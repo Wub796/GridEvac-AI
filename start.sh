@@ -1,65 +1,65 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# start.sh - GridEvac AI · Houston, TX
-# Starts both the FastAPI backend (port 8000) and Next.js frontend (port 3000)
+# start.sh - GridEvac · Houston, TX
+# Starts the FastAPI backend (port 8000) and the Next.js frontend (port 3000).
 # Usage: bash start.sh
 # ─────────────────────────────────────────────────────────────────────────────
 
-set -e
+set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
+for tool in python3 npm; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "❌ $tool is required but not installed."; exit 1; }
+done
+
 echo ""
-echo "┌────────────────────────────────────────────────┐"
-echo "│   ⚡  GridEvac AI  -  Houston, TX              │"
-echo "│   Emergency Evacuation Routing System          │"
-echo "└────────────────────────────────────────────────┘"
+echo "  GridEvac · Houston evacuation routing"
 echo ""
 
 # ── Backend ───────────────────────────────────────────────────────────────────
 VENV="$ROOT/backend/.venv"
-
+STAMP="$VENV/.requirements.sha"
 if [ ! -d "$VENV" ]; then
   echo "🐍 Creating Python virtual environment..."
   python3 -m venv "$VENV"
 fi
+REQ_HASH="$(shasum "$ROOT/backend/requirements.txt" | cut -d' ' -f1)"
+if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$REQ_HASH" ]; then
+  echo "📦 Installing Python dependencies..."
+  "$VENV/bin/pip" install -q --upgrade pip
+  "$VENV/bin/pip" install -q -r "$ROOT/backend/requirements.txt"
+  echo "$REQ_HASH" > "$STAMP"
+fi
 
-echo "📦 Installing Python dependencies..."
-"$VENV/bin/pip" install -q --upgrade pip
-"$VENV/bin/pip" install -q -r "$ROOT/backend/requirements.txt"
-
-echo "📡 Starting FastAPI backend on http://localhost:8000 ..."
-cd "$ROOT/backend"
-"$VENV/bin/uvicorn" main:app --reload --port 8000 &
-BACKEND_PID=$!
-cd "$ROOT"
-
-# Brief pause so backend can start before frontend tries to connect
-sleep 2
+if ! "$VENV/bin/python" "$ROOT/tools/sync_api_mirror.py" --check >/dev/null; then
+  echo "⚠️  frontend/api is out of date with backend/. Run: python3 tools/sync_api_mirror.py"
+fi
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
-echo "🌐 Starting Next.js frontend on http://localhost:3000 ..."
-cd "$ROOT/frontend"
-npm run dev &
-FRONTEND_PID=$!
-cd "$ROOT"
+if [ ! -d "$ROOT/frontend/node_modules" ]; then
+  echo "📦 Installing frontend dependencies..."
+  (cd "$ROOT/frontend" && npm ci)
+fi
 
-echo ""
-echo "✅  Both servers are running:"
-echo "    Frontend  →  http://localhost:3000"
-echo "    Backend   →  http://localhost:8000"
-echo "    API docs  →  http://localhost:8000/docs"
-echo ""
-echo "    Press Ctrl+C to stop."
-echo ""
-
-# ── Cleanup ───────────────────────────────────────────────────────────────────
 cleanup() {
   echo ""
-  echo "🛑 Shutting down GridEvac AI..."
-  kill "$BACKEND_PID"  2>/dev/null || true
-  kill "$FRONTEND_PID" 2>/dev/null || true
-  exit 0
+  echo "🛑 Shutting down GridEvac..."
+  kill "${BACKEND_PID:-}" "${FRONTEND_PID:-}" 2>/dev/null || true
 }
-trap cleanup SIGINT SIGTERM
+trap cleanup EXIT INT TERM
 
-wait
+echo "📡 Backend  → http://localhost:8000 (docs at /docs)"
+(cd "$ROOT/backend" && exec "$VENV/bin/uvicorn" main:app --reload --port 8000) &
+BACKEND_PID=$!
+
+echo "🌐 Frontend → http://localhost:3000"
+(cd "$ROOT/frontend" && exec npm run dev) &
+FRONTEND_PID=$!
+
+echo ""
+echo "Press Ctrl+C to stop both servers."
+# Exit (and stop the other server) as soon as either process ends.
+# Polling instead of `wait -n`, which macOS's bash 3.2 does not support.
+while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do
+  sleep 1
+done

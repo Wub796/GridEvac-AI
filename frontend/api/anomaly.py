@@ -58,6 +58,44 @@ _MODEL.fit(_TRAINING_DATA)
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+def rule_severity(flooded_fraction: float, offline_substations: int, overloaded_substations: int, cascade_probability: float) -> float:
+    """Transparent severity floor from physical conditions an operator can verify.
+
+    Shared line for line with frontend/lib/solver.ts so the offline solver
+    reports the same risk band for the same scenario.
+    """
+    score = 0.05
+    if flooded_fraction >= 0.25:
+        score = max(score, 0.82)
+    elif flooded_fraction >= 0.10:
+        score = max(score, 0.62)
+    elif flooded_fraction >= 0.02:
+        score = max(score, 0.36)
+    if offline_substations >= 3:
+        score = max(score, 0.80)
+    elif offline_substations == 2:
+        score = max(score, 0.60)
+    elif offline_substations == 1:
+        score = max(score, 0.34)
+    if overloaded_substations >= 2:
+        score = max(score, 0.62)
+    elif overloaded_substations == 1:
+        score = max(score, 0.36)
+    if cascade_probability > 0.4:
+        score = max(score, 0.88)
+    return score
+
+
+def risk_level(score: float) -> str:
+    if score < 0.30:
+        return "LOW"
+    if score < 0.55:
+        return "MEDIUM"
+    if score < 0.78:
+        return "HIGH"
+    return "CRITICAL"
+
+
 def detect_anomaly(
     flood_level: float,
     failed_count: int,
@@ -67,9 +105,15 @@ def detect_anomaly(
     cascade_probability: float,
     usgs_gage_height: float,
     surface_temp: float,
+    flooded_fraction: float = 0.0,
 ) -> Tuple[float, str]:
     """
-    Score incoming dynamic 9-D telemetry against the normal grid training envelope.
+    Score incoming 9-D telemetry against the normal grid training envelope.
+
+    The model's decision function is 0 at its anomaly boundary and about
+    +0.11 for typical normal telemetry; it maps to 0.30 (the MEDIUM line) at
+    the boundary and falls toward 0 for normal readings. The result never
+    drops below the rule-based severity floor.
     """
     concurrent = 1.0 if (flood_level > 1.8 and (failed_count > 0 or overload_count > 0)) else 0.0
 
@@ -85,22 +129,7 @@ def detect_anomaly(
         surface_temp,
     ]])
 
-    raw = float(_MODEL.score_samples(features)[0])
-    score = float(np.clip((-raw - 0.08) / 0.65, 0.0, 1.0))
-
-    # Safety override for critical cascading states or major outages
-    if cascade_probability > 0.4 or overload_count >= 2:
-        score = max(score, 0.88)
-    elif failed_count >= 3:
-        score = max(score, 0.78)
-
-    if score < 0.30:
-        risk = "LOW"
-    elif score < 0.55:
-        risk = "MEDIUM"
-    elif score < 0.78:
-        risk = "HIGH"
-    else:
-        risk = "CRITICAL"
-
-    return score, risk
+    decision = float(_MODEL.decision_function(features)[0])
+    model_score = float(np.clip(0.30 - decision * 2.6, 0.0, 1.0))
+    score = max(model_score, rule_severity(flooded_fraction, failed_count, overload_count, cascade_probability))
+    return score, risk_level(score)

@@ -15,14 +15,31 @@ const METERS_PER_DEG_LAT = 111320;
  * and the returned position is the cluster centroid so the dot sits in the
  * middle of the intersection rather than on one corner.
  */
-export function logicalJunctions(
-  cityData: CityData,
-  extraExitIds: Iterable<number> = []
-): {
+type LogicalJunctions = {
   ids: Set<number>;
   /** Winner node id -> centroid position of its corner cluster. */
   positions: Map<number, { lat: number; lon: number }>;
-} {
+};
+
+const junctionCache = new WeakMap<CityData, Map<string, LogicalJunctions>>();
+
+/** Cached: clustering is quadratic in candidates and many views ask for it. */
+export function logicalJunctions(cityData: CityData, extraExitIds: Iterable<number> = []): LogicalJunctions {
+  const extras = Array.from(extraExitIds).sort((a, b) => a - b);
+  const key = extras.join(',');
+  let perCity = junctionCache.get(cityData);
+  if (!perCity) {
+    perCity = new Map();
+    junctionCache.set(cityData, perCity);
+  }
+  const cached = perCity.get(key);
+  if (cached) return cached;
+  const result = computeLogicalJunctions(cityData, extras);
+  perCity.set(key, result);
+  return result;
+}
+
+function computeLogicalJunctions(cityData: CityData, extraExitIds: number[]): LogicalJunctions {
   const junctionDegrees = new Map<number, number>();
   cityData.edges.forEach((edge) => {
     junctionDegrees.set(edge.source, (junctionDegrees.get(edge.source) ?? 0) + 1);
