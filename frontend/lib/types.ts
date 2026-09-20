@@ -79,6 +79,102 @@ export interface ShelterData {
   note: string;
 }
 
+/** A place the operator picked themselves: a junction plus whatever they call it. */
+export interface CustomDestination {
+  node: number;
+  lat: number;
+  lon: number;
+  label: string;
+  /** How the place was chosen, so the panel can explain the snap. */
+  source: 'map' | 'search' | 'coords' | 'link';
+  /** Distance from the requested point to the junction actually routed to. */
+  snapDistanceM: number;
+}
+
+/** One active NWS watch, warning, or advisory over the district. */
+export interface WeatherAlert {
+  id: string;
+  event: string;
+  hazard: 'flood' | 'wind' | 'ice' | 'fog' | 'heat' | 'other' | string;
+  severity: string;
+  weight: number;
+  urgency: string;
+  certainty: string;
+  headline: string;
+  instruction: string;
+  sender: string;
+  onset: string;
+  ends: string;
+}
+
+/** The weather snapshot a condition-aware route is computed from. */
+export interface WeatherSnapshot {
+  status: 'live' | 'unavailable';
+  observed_at: string | null;
+  rain_rate_mm_h: number;
+  rain_1h_mm: number;
+  rain_6h_mm: number;
+  rain_24h_mm: number;
+  rain_6h_forecast_mm: number;
+  peak_rate_6h_mm_h: number;
+  wind_speed_mph: number;
+  wind_gust_mph: number;
+  temperature_f: number;
+  weather_code: number;
+  source: string;
+}
+
+export interface ConditionAdvisory {
+  kind: 'ponding' | 'surface' | 'wind' | 'ice' | 'fog' | 'heat' | 'clear' | 'feed' | string;
+  severity: string;
+  message: string;
+  affected: number;
+}
+
+/**
+ * The live roadway as it affects routing: standing water per junction, the
+ * speed each mode actually achieves, and why.
+ */
+export interface RoadConditions {
+  status: 'live' | 'unavailable';
+  observed_at: string | null;
+  fetched_at: string;
+  weather_code: number;
+  weather_label: string;
+  temperature_f: number;
+  rain_rate_mm_h: number;
+  rain_1h_mm: number;
+  rain_6h_mm: number;
+  rain_24h_mm: number;
+  rain_6h_forecast_mm: number;
+  peak_rate_6h_mm_h: number;
+  intensity_mm_h: number;
+  wind_speed_mph: number;
+  wind_gust_mph: number;
+  river_surface_m: number | null;
+  wetness: number;
+  alerts: WeatherAlert[];
+  /** Junction id -> standing water depth in metres (string keys over JSON). */
+  ponding_depth_m: Record<string, number>;
+  ponded_nodes: number[];
+  wetted_nodes: number;
+  deepest_ponding_m: number;
+  impassable: Record<string, number[]>;
+  speed_factors: Record<string, number>;
+  advisories: ConditionAdvisory[];
+  sources: Record<string, string>;
+  travel_mode: string;
+  clearance_m: number | null;
+  speed_factor: number;
+  bridge_speed_factor: number;
+  impassable_nodes: number[];
+}
+
+export interface ConditionsResponse {
+  conditions: RoadConditions;
+  feeds: Record<string, boolean>;
+}
+
 export interface FloodModel {
   method: string;
   /** Water surface at scenario level 0, m NAVD88. */
@@ -166,7 +262,17 @@ export interface RouteResponse {
   congested_eta_minutes: number;
   congestion_factor: number;
   destination_name: string;
-  destination_kind: '' | 'shelter' | 'medical';
+  destination_kind: '' | 'shelter' | 'medical' | 'custom';
+  /** Free-flow ETA for this path on dry, unobstructed pavement. */
+  dry_eta_minutes: number;
+  /** Seconds this route costs because of live road conditions. */
+  weather_delay_s: number;
+  /** Segments on this route still holding visible standing water. */
+  route_ponded_segments: number;
+  /** Live conditions applied to this route, when conditions routing is on. */
+  road_conditions: RoadConditions | null;
+  /** Segments with both ends too deep for this mode to cross. */
+  ponded_edges: [number, number][];
 }
 
 export type TravelMode = 'vehicle' | 'foot' | 'ems';
@@ -178,6 +284,13 @@ export interface SimulationParams {
   travel_mode?: TravelMode;
   evacuees?: number;
   destination?: string | null;
+  /** The operator's own destination junction, overriding `destination`. */
+  destination_node?: number | null;
+  destination_label?: string;
+  /** Route on live rainfall, wind, ice and heat rather than dry pavement. */
+  use_live_conditions?: boolean;
+  /** A snapshot the browser measured, replayed instead of re-fetched. */
+  conditions?: { weather: WeatherSnapshot; alerts: WeatherAlert[]; gage_surface_m: number | null } | null;
   closed_edges?: [number, number][];
 }
 
@@ -192,6 +305,16 @@ export interface CorridorInfo {
   path_length: number;
   people_per_hour: number;
   congested_eta_minutes: number;
+  /** Segments along this corridor holding visible standing water. */
+  ponded_segments: number;
+  max_ponding_m: number;
+}
+
+/** An exit that is no longer an option, and why. */
+export interface UnusableExit {
+  exit_node: number;
+  exit_name: string;
+  reason: string;
 }
 
 export interface CorridorCapacity {
@@ -204,8 +327,10 @@ export interface CorridorComparisonResponse {
   origin: number;
   travel_mode: TravelMode;
   corridors: CorridorInfo[];
+  unusable_exits: UnusableExit[];
   flooded_nodes: number[];
   blackout_nodes: number[];
+  road_conditions: RoadConditions | null;
 }
 
 export interface IsochroneRing {
@@ -221,6 +346,7 @@ export interface IsochroneResponse {
   flooded_nodes: number[];
   blackout_nodes: number[];
   congestion_factor: number;
+  road_conditions: RoadConditions | null;
 }
 
 export interface TriggerTarget {

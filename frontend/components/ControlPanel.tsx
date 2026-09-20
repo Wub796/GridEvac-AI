@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import Icon, { type IconName } from '@/components/Icon';
 import { useSimulationStore, type Basemap, type ScenarioPreset } from '@/hooks/useSimulation';
 import { formatDistance } from '@/lib/exports';
-import { logicalJunctions } from '@/lib/network';
+import { logicalJunctions, nearestJunction } from '@/lib/network';
 import { floodStage, vehicleCore, waterSurfaceM } from '@/lib/solver';
 import styles from './ControlPanel.module.css';
 
@@ -34,6 +34,191 @@ interface SearchHit {
   kind: 'street' | 'junction';
   nodeId?: number;
   roadKey?: string;
+}
+
+interface DestHit {
+  key: string;
+  kind: 'junction' | 'street' | 'coords';
+  label: string;
+  detail: string;
+  nodeId?: number;
+  roadKey?: string;
+  lat?: number;
+  lon?: number;
+}
+
+/**
+ * The operator's own destination.
+ *
+ * A route has to end at a street junction, so a place is resolved in one of
+ * three ways: pick a junction by name, name a street and take the end of it
+ * farther from the start, paste a coordinate, or drop a pin on the map. The
+ * panel always reports how far the requested point sat from the junction it
+ * was snapped to, so nobody is misled about where the route finishes.
+ */
+function DestinationPicker() {
+  const cityData = useSimulationStore((state) => state.cityData);
+  const originNode = useSimulationStore((state) => state.originNode);
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const customDestination = useSimulationStore((state) => state.customDestination);
+  const setCustomDestination = useSimulationStore((state) => state.setCustomDestination);
+  const clearCustomDestination = useSimulationStore((state) => state.clearCustomDestination);
+  const pinMode = useSimulationStore((state) => state.pinMode);
+  const setPinMode = useSimulationStore((state) => state.setPinMode);
+  const setFlyToNodeId = useSimulationStore((state) => state.setFlyToNodeId);
+  const route = useSimulationStore((state) => state.route);
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [activeHit, setActiveHit] = useState(0);
+
+  const surface = waterSurfaceM(cityData, floodLevel);
+  const nodes = useMemo(() => cityData?.nodes ?? [], [cityData]);
+  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const junctionIds = useMemo(() => (cityData ? logicalJunctions(cityData).ids : new Set<number>()), [cityData]);
+
+  const index = useMemo(() => {
+    const hits: DestHit[] = [];
+    nodes.filter((node) => junctionIds.has(node.id)).forEach((node) => {
+      hits.push({ key: `n-${node.id}`, kind: 'junction', label: node.intersection_name, detail: `Junction · ground ${node.elevation.toFixed(1)} m`, nodeId: node.id });
+    });
+    const seen = new Set<string>();
+    (cityData?.edges ?? []).forEach((edge) => {
+      if (!edge.road_name || edge.road_name === 'Unnamed street') return;
+      const key = `${Math.min(edge.source, edge.target)}-${Math.max(edge.source, edge.target)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      hits.push({ key: `r-${key}`, kind: 'street', label: edge.road_name, detail: `Street · ${nodesById.get(edge.source)?.intersection_name ?? edge.source} to ${nodesById.get(edge.target)?.intersection_name ?? edge.target}`, roadKey: key });
+    });
+    return hits;
+  }, [cityData, nodes, nodesById, junctionIds]);
+
+  // "29.7604, -95.3698" anywhere in the query is offered as a destination.
+  const coords = useMemo(() => {
+    const match = query.match(/(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
+    if (!match) return null;
+    const lat = Number(match[1]);
+    const lon = Number(match[2]);
+    return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon } : null;
+  }, [query]);
+
+  const results = useMemo<DestHit[]>(() => {
+    const needle = query.trim().toLowerCase();
+    const found = needle.length < 2 || coords
+      ? []
+      : index
+        .map((hit) => ({ hit, rank: hit.label.toLowerCase().startsWith(needle) ? 0 : hit.label.toLowerCase().includes(needle) ? 1 : 2 }))
+        .filter((entry) => entry.rank < 2)
+        .sort((a, b) => a.rank - b.rank || a.hit.label.localeCompare(b.hit.label))
+        .slice(0, 7)
+        .map((entry) => entry.hit);
+    return coords
+      ? [{ key: `c-${coords.lat}-${coords.lon}`, kind: 'coords', label: `${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}`, detail: 'Use these coordinates', lat: coords.lat, lon: coords.lon }, ...found]
+      : found;
+  }, [query, index, coords]);
+
+  const place = (destination: Parameters<typeof setCustomDestination>[0]) => {
+    setCustomDestination(destination);
+    if (destination) setFlyToNodeId(destination.node);
+  };
+
+  const choose = (hit: DestHit) => {
+    if (!cityData) return;
+    let lat = hit.lat;
+    let lon = hit.lon;
+    let node = hit.nodeId !== undefined ? nodesById.get(hit.nodeId) : undefined;
+    if (hit.kind === 'street' && hit.roadKey) {
+      const [a, b] = hit.roadKey.split('-').map(Number);
+      const first = nodesById.get(a);
+      const second = nodesById.get(b);
+      const origin = nodesById.get(originNode);
+      if (first && second) {
+        // Either end of the street; take the one farther from the start.
+        const originLat = origin?.lat ?? cityData.center_lat;
+        const originLon = origin?.lon ?? cityData.center_lon;
+        const far = (originLat - first.lat) ** 2 + (originLon - first.lon) ** 2 > (originLat - second.lat) ** 2 + (originLon - second.lon) ** 2 ? first : second;
+        node = far;
+      }
+    }
+    if (lat === undefined || lon === undefined) {
+      if (!node) return;
+      lat = node.lat;
+      lon = node.lon;
+    }
+    const match = nearestJunction(cityData, lat, lon);
+    if (!match) return;
+    const label = hit.kind === 'coords' ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : node ? node.intersection_name : hit.label;
+    place({ node: match.node.id, lat: match.node.lat, lon: match.node.lon, label, source: hit.kind === 'coords' ? 'coords' : 'search', snapDistanceM: match.distanceM });
+    setOpen(false);
+    setQuery('');
+  };
+
+  const onKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); setActiveHit((value) => Math.min(results.length - 1, value + 1)); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActiveHit((value) => Math.max(0, value - 1)); }
+    else if (event.key === 'Enter') { event.preventDefault(); if (results[activeHit]) choose(results[activeHit]); }
+    else if (event.key === 'Escape') setOpen(false);
+  };
+
+  const snapped = customDestination && customDestination.snapDistanceM >= 25;
+  const destinationNode = customDestination ? nodesById.get(customDestination.node) : undefined;
+  const destinationWet = destinationNode ? floodStage(destinationNode) <= surface : false;
+
+  return (
+    <Section title="Your own destination" aside={customDestination ? 'set' : undefined}>
+      {customDestination ? (
+        <div className={styles.customDestination}>
+          <Icon name="arrive" size={16} />
+          <div className={styles.rowBody}>
+            <strong>{customDestination.label}</strong>
+            <small>
+              {destinationNode?.intersection_name ?? `junction ${customDestination.node}`}
+              {snapped ? ` · ${Math.round(customDestination.snapDistanceM)} m from the requested point` : ''}
+            </small>
+          </div>
+          {route?.success && route.destination_kind === 'custom' && <span className={styles.rowValue}>{route.eta_minutes.toFixed(1)} min</span>}
+          <button className={styles.smallButton} onClick={clearCustomDestination}>Clear</button>
+        </div>
+      ) : (
+        <p className={styles.note}>Route somewhere of your own choosing instead of a shelter or perimeter exit.</p>
+      )}
+      {destinationWet && <p className={`${styles.note} ${styles.noteWarn}`}>That junction is wet at this water level. Pick another, or lower the flood level.</p>}
+
+      <div className={styles.search}>
+        <Icon name="pin" size={15} />
+        <input
+          className={styles.input}
+          type="search"
+          placeholder="Junction, street, or 29.7604, -95.3698"
+          value={query}
+          onChange={(event) => { setQuery(event.target.value); setOpen(true); setActiveHit(0); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 120)}
+          onKeyDown={onKey}
+          role="combobox"
+          aria-expanded={open && results.length > 0}
+          aria-controls="destination-results"
+          aria-activedescendant={open && results[activeHit] ? `destination-hit-${activeHit}` : undefined}
+          aria-label="Search for a destination"
+        />
+        {open && results.length > 0 && (
+          <ul className={styles.results} id="destination-results" role="listbox">
+            {results.map((hit, index_) => (
+              <li key={hit.key} id={`destination-hit-${index_}`} role="option" aria-selected={index_ === activeHit}>
+                <button className={index_ === activeHit ? styles.resultActive : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(hit)}>
+                  <span className={styles.resultKind}>{hit.kind === 'street' ? 'Street' : hit.kind === 'coords' ? 'Coords' : 'Go to'}</span>
+                  <span className={styles.rowBody}><strong>{hit.label}</strong><small>{hit.detail}</small></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <button className={pinMode ? styles.locateButtonActive : styles.locateButton} onClick={() => setPinMode(!pinMode)} aria-pressed={pinMode}>
+        <Icon name="pin" size={16} />{pinMode ? 'Click the map to place it' : 'Drop a pin on the map'}
+      </button>
+      {pinMode && <p className={styles.note}>Every junction stays clickable; the next map click becomes the destination (Esc cancels).</p>}
+    </Section>
+  );
 }
 
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
@@ -500,6 +685,8 @@ function RouteTab() {
         </div>
       </Section>
 
+      <DestinationPicker />
+
       <Section title="Road closures" aside={`${closures.length} active`}>
         <Switch checked={closureMode} onChange={setClosureMode} label="Close streets on the map" detail="Click a street to close it, click again to reopen (C)" />
         {closures.length > 0 && (
@@ -637,6 +824,9 @@ function LayersTab() {
   const setShowSubstations = useSimulationStore((state) => state.setShowSubstations);
   const showPowerLines = useSimulationStore((state) => state.showPowerLines);
   const setShowPowerLines = useSimulationStore((state) => state.setShowPowerLines);
+  const showPonding = useSimulationStore((state) => state.showPonding);
+  const setShowPonding = useSimulationStore((state) => state.setShowPonding);
+  const conditions = useSimulationStore((state) => state.conditions);
   const setFlyToCoords = useSimulationStore((state) => state.setFlyToCoords);
   const cityData = useSimulationStore((state) => state.cityData);
   const options: Array<[Basemap, string]> = [['dark', 'Dark'], ['light', 'Light'], ['aerial', 'Aerial']];
@@ -657,6 +847,12 @@ function LayersTab() {
         <div className={styles.switches}>
           <Switch checked={showBuildings} onChange={setShowBuildings} label="Buildings" detail="Tinted blue when flooded, dimmed without power" />
           <Switch checked={showWaterways} onChange={setShowWaterways} label="Bayou centerlines" />
+          <Switch
+            checked={showPonding}
+            onChange={setShowPonding}
+            label="Standing water"
+            detail={conditions && conditions.ponded_nodes.length > 0 ? `${conditions.ponded_nodes.length} junctions holding water right now` : 'Nothing standing at the moment'}
+          />
           <Switch checked={showIntersections} onChange={setShowIntersections} label="Junction dots" detail="Click one to start from it" />
           <Switch checked={showRoadNames} onChange={setShowRoadNames} label="Street names" />
           <Switch checked={showSubstations} onChange={setShowSubstations} label="Substations" />

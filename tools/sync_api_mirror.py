@@ -16,7 +16,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND = os.path.join(ROOT, "backend")
 MIRROR = os.path.join(ROOT, "frontend", "api")
-MIRRORED = ["main.py", "models.py", "routing.py", "city_graph.py", "anomaly.py", os.path.join("data", "houston_network.json")]
+MIRRORED = ["main.py", "models.py", "routing.py", "city_graph.py", "anomaly.py", "conditions.py", os.path.join("data", "houston_network.json")]
 PUBLIC_NETWORK = os.path.join(ROOT, "frontend", "public", "data", "houston_network.json")
 
 

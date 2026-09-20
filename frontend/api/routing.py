@@ -6,9 +6,16 @@ Two quantities are kept apart on every street segment:
   speed plus physical delays (dark traffic signals, slowing through water on
   a flooded approach). ETAs, step durations, and reachability use it.
 * routing cost - travel time adjusted by mode preferences for road classes
-  plus safety penalties (flooded approaches, blackout districts, energized
-  lines overhead). The solver minimizes cost so it prefers the safer
-  corridor, but a penalty is never reported to the operator as minutes.
+  plus safety penalties (flooded approaches, standing water, blackout
+  districts, energized lines overhead). The solver minimizes cost so it
+  prefers the safer corridor, but a penalty is never reported to the
+  operator as minutes.
+
+River flooding is a scenario input (the operator's water level) while
+rainfall ponding, wet friction, crosswind and ice arrive as live road
+conditions. Both narrow the network the same way - a segment with both ends
+under water is gone - and both are reported separately so an operator always
+knows whether a closure is the modeled river or this morning's storm.
 
 Every function here is deterministic: identical inputs give identical
 outputs, so a saved scenario can be re-run and audited later.
@@ -33,6 +40,7 @@ from city_graph import (
     flood_stage,
     water_surface_m,
 )
+from conditions import mode_roadway
 
 # Bureau of Public Roads congestion curve (standard traffic theory):
 # t = t0 * (1 + alpha * (V/C)^beta), V = evacuating demand per hour, C =
@@ -334,6 +342,14 @@ def _hazard_edge_sets(flow: Dict) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, 
     return dead_edges, overloaded_edges
 
 
+def ponding_at(u: int, v: int, roadway: Optional[Dict]) -> float:
+    """Standing water on a segment: the deeper of its two junctions governs."""
+    if not roadway:
+        return 0.0
+    ponding = roadway["ponding"]
+    return max(ponding.get(u, 0.0), ponding.get(v, 0.0))
+
+
 def _build_weighted_graph(
     flooded: Set[int],
     blackout: Set[int],
@@ -341,19 +357,33 @@ def _build_weighted_graph(
     overloaded_edges: Set[Tuple[int, int]],
     mode_cfg: Dict,
     closures: Set[Tuple[int, int]],
-) -> Tuple[nx.Graph, List[List[int]], List[List[int]]]:
+    roadway: Optional[Dict] = None,
+) -> Tuple[nx.Graph, List[List[int]], List[List[int]], List[List[int]]]:
     """Weighted street graph with `time_s` (travel time) and `weight` (cost).
 
     Vehicle modes get a directed graph that honours one-way streets; on foot
-    every segment is walkable both ways. Segments with both ends under
-    water, and operator closures, are left out.
+    every segment is walkable both ways. Segments with both ends under river
+    water, both ends under more standing water than the mode can cross, and
+    operator closures, are left out.
+
+    Live roadway conditions enter twice: as a speed factor on every segment
+    (wet friction, visibility, ice, and crosswind on exposed decks) and as a
+    depth-scaled delay plus safety cost on any segment holding water, so the
+    solver will spend a little extra distance to stay on the dry street.
     """
     directed = mode_cfg.get("directed", False)
     graph: nx.Graph = nx.DiGraph() if directed else nx.Graph()
     graph.add_nodes_from(_G.nodes)
     blocked_edges: List[List[int]] = []
     closed_edges: List[List[int]] = []
+    ponded_edges: List[List[int]] = []
+    impassable = roadway["impassable"] if roadway else frozenset()
     for u, v, base in _G.edges(data=True):
+        # A handful of baked segments start and end at the same junction. They
+        # are not traversable, so they are not reported as blocked, closed, or
+        # holding water either - the offline solver skips them identically.
+        if u == v:
+            continue
         key = edge_key(u, v)
         if key in closures:
             closed_edges.append([u, v])
@@ -361,12 +391,25 @@ def _build_weighted_graph(
         if u in flooded and v in flooded:
             blocked_edges.append([u, v])
             continue
+        if u in impassable and v in impassable:
+            ponded_edges.append([u, v])
+            continue
         data = dict(base)
         seconds = _base_seconds(data, mode_cfg)
+        if roadway:
+            elevated = bool(_NODES[u].get("elevated")) and bool(_NODES[v].get("elevated"))
+            factor = roadway["bridge_factor"] if elevated else roadway["speed_factor"]
+            seconds /= max(0.15, factor)
         cost = seconds * mode_cfg["preference"].get(data.get("road_class", "local"), 1.0)
         if u in flooded or v in flooded:
             seconds += mode_cfg["flood_delay_s"]
             cost += mode_cfg["flood_penalty_s"]
+        if roadway:
+            depth = ponding_at(u, v, roadway)
+            if depth > 0:
+                ratio = min(1.0, depth / roadway["clearance_m"])
+                seconds += roadway["ponding_delay_s"] * (ratio ** roadway["delay_exponent"])
+                cost += roadway["ponding_penalty_s"] * (ratio ** roadway["cost_exponent"])
         if u in blackout or v in blackout:
             seconds += mode_cfg["blackout_delay_s"]
             cost *= mode_cfg["blackout_cost_mult"]
@@ -378,7 +421,7 @@ def _build_weighted_graph(
         data["weight"] = cost
         for a, b in (allowed_arcs(u, v, base) if directed else [(u, v)]):
             graph.add_edge(a, b, **data)
-    return graph, blocked_edges, closed_edges
+    return graph, blocked_edges, closed_edges, ponded_edges
 
 
 def allowed_arcs(u: int, v: int, data: Dict) -> List[Tuple[int, int]]:
@@ -566,13 +609,22 @@ def _path_distance_m(path: List[int], graph: nx.Graph) -> float:
     return sum(float(graph.get_edge_data(u, v).get("distance_m", 0.0)) for u, v in zip(path, path[1:]))
 
 
-def _scenario(flood_level: float, failed_substations: List[int], travel_mode: str, closed_edges) -> Dict:
+def _scenario(
+    flood_level: float,
+    failed_substations: List[int],
+    travel_mode: str,
+    closed_edges,
+    conditions: Optional[Dict] = None,
+) -> Dict:
     flooded = get_flooded_nodes(flood_level)
     flow = simulate_power_flow(failed_substations, flooded)
     mode_cfg = mode_config(travel_mode)
     closures = normalize_closures(closed_edges)
     dead_edges, overloaded_edges = _hazard_edge_sets(flow)
-    graph, blocked, closed = _build_weighted_graph(flooded, flow["blackout_nodes"], dead_edges, overloaded_edges, mode_cfg, closures)
+    roadway = mode_roadway(conditions, travel_mode)
+    graph, blocked, closed, ponded = _build_weighted_graph(
+        flooded, flow["blackout_nodes"], dead_edges, overloaded_edges, mode_cfg, closures, roadway,
+    )
     return {
         "flooded": flooded,
         "flow": flow,
@@ -580,9 +632,54 @@ def _scenario(flood_level: float, failed_substations: List[int], travel_mode: st
         "graph": graph,
         "blocked_edges": blocked,
         "closed_edges": closed,
+        "ponded_blocked_edges": ponded,
         "dead_edges": dead_edges,
+        "roadway": roadway,
+        "conditions": conditions,
+        "travel_mode": travel_mode,
         "water_surface_m": round(water_surface_m(flood_level), 2),
     }
+
+
+def usable_exits(flooded: Set[int], roadway: Dict) -> List[int]:
+    """Perimeter exits a traveller can actually use right now.
+
+    An exit whose own junction is under river water or holding water deeper
+    than the mode can cross is not an evacuation route, whatever the road
+    leading to it looks like.
+    """
+    return [
+        exit_node for exit_node in SAFE_EXITS
+        if exit_node in _NODES and exit_node not in flooded and exit_node not in roadway["impassable"]
+    ]
+
+
+def road_conditions_report(conditions: Optional[Dict], roadway: Dict, travel_mode: str) -> Optional[Dict]:
+    """The condition model as used for this mode, for the operator to audit."""
+    if not conditions:
+        return None
+    report = dict(conditions)
+    report["travel_mode"] = travel_mode
+    report["clearance_m"] = None if roadway["clearance_m"] == float("inf") else roadway["clearance_m"]
+    report["speed_factor"] = roadway["speed_factor"]
+    report["bridge_speed_factor"] = roadway["bridge_factor"]
+    report["impassable_nodes"] = sorted(roadway["impassable"])
+    return report
+
+
+def _isolation_message(scenario: Dict, target: str) -> str:
+    """Name the actual obstacle, so a failed route is diagnosable."""
+    causes: List[str] = []
+    if scenario["blocked_edges"]:
+        causes.append("river flooding")
+    if scenario["ponded_blocked_edges"]:
+        causes.append("standing water")
+    if scenario["closed_edges"]:
+        causes.append("operator closures")
+    if scenario["flow"]["blackout_nodes"] and not causes:
+        causes.append("utility hazards")
+    detail = ", ".join(causes) if causes else "floodwater"
+    return f"No passable route to {target}. {detail.capitalize()} have isolated this start point."
 
 
 def _failure(message: str, scenario: Dict) -> Dict:
@@ -599,10 +696,36 @@ def _failure(message: str, scenario: Dict) -> Dict:
         "blackout_nodes": sorted(scenario["flow"]["blackout_nodes"]),
         "blocked_edges": scenario["blocked_edges"],
         "closed_edges": scenario["closed_edges"],
+        "ponded_edges": scenario["ponded_blocked_edges"],
         "dest_node": -1,
         "power_flow": scenario["flow"],
         "water_surface_m": scenario["water_surface_m"],
+        "dry_eta_minutes": 0.0,
+        "weather_delay_s": 0.0,
+        "route_ponded_segments": 0,
+        # A route that failed because of the weather still has to show which
+        # conditions it failed against, or the operator cannot act on it.
+        "road_conditions": road_conditions_report(scenario["conditions"], scenario["roadway"], scenario["travel_mode"]),
     }
+
+
+def _dry_seconds(path: List[int], graph: nx.Graph, mode_cfg: Dict) -> float:
+    """Free-flow time over a path on a dry, unobstructed street.
+
+    The gap between this and the reported ETA is exactly what today's
+    roadway - standing water, wet friction, wind on the decks - is costing.
+    """
+    return sum(
+        _base_seconds(graph.get_edge_data(u, v) or {}, mode_cfg)
+        for u, v in zip(path, path[1:])
+    )
+
+
+def _route_ponded_segments(path: List[int], roadway: Dict) -> int:
+    return sum(
+        1 for u, v in zip(path, path[1:])
+        if ponding_at(u, v, roadway) >= roadway["visible_m"]
+    )
 
 
 def compute_route(
@@ -613,38 +736,67 @@ def compute_route(
     evacuees: int = 0,
     destination: Optional[str] = None,
     closed_edges: Optional[Iterable[Iterable[int]]] = None,
+    conditions: Optional[Dict] = None,
+    destination_node: Optional[int] = None,
+    destination_label: str = "",
 ) -> Dict:
-    """Least-cost route to the best dry perimeter exit, or to a named
-    shelter / medical destination when one is requested.
+    """Least-cost route to the best usable perimeter exit, a named shelter or
+    medical facility, or an operator's own destination junction.
 
-    When evacuees > 0 the free-flow ETA is inflated with the BPR congestion
-    curve against the district's total corridor throughput, so the operator
-    sees the difference between "one car" and "everyone leaving at once".
+    Live road conditions (rainfall ponding, wet friction, crosswind, ice) are
+    applied to travel time as well as to routing cost, so the ETA reflects
+    today's roadway and the corridor choice avoids water rather than merely
+    costing it. When evacuees > 0 the ETA is further inflated with the BPR
+    congestion curve against the district's total corridor throughput, so the
+    operator sees "one car" and "everyone leaving at once" as separate numbers.
     """
-    scenario = _scenario(flood_level, failed_substations, travel_mode, closed_edges)
+    scenario = _scenario(flood_level, failed_substations, travel_mode, closed_edges, conditions)
     flooded, graph, mode_cfg = scenario["flooded"], scenario["graph"], scenario["mode_cfg"]
+    roadway = scenario["roadway"]
+    impassable = roadway["impassable"]
 
     if origin not in _NODES:
         return _failure("Origin intersection is outside the operations district.", scenario)
     if origin in flooded:
         return _failure("Starting intersection is flooded. Select a dry origin on higher ground.", scenario)
+    if origin in impassable:
+        return _failure(
+            f"Your starting intersection is holding standing water. Pick a start on higher ground, "
+            f"or switch to a mode that can cross it.",
+            scenario,
+        )
 
-    shelter = None
-    if destination:
+    target_node: Optional[int] = None
+    target_name = ""
+    target_kind = ""
+    if destination_node is not None:
+        if destination_node not in _NODES:
+            return _failure("That destination is outside the operations district.", scenario)
+        if destination_node == origin:
+            return _failure("That destination is the starting junction. Pick a different place to head for.", scenario)
+        target_node = int(destination_node)
+        target_name = destination_label or (_NODES[target_node].get("intersection_name") or f"node {target_node}")
+        target_kind = "custom"
+    elif destination:
         shelter = next((s for s in SHELTERS if s["id"] == destination), None)
         if shelter is None:
             return _failure(f"Destination \"{destination}\" is not a known shelter or medical facility.", scenario)
-        if shelter["node"] in flooded:
-            return _failure(f"No passable route to {shelter['name']}: its street approach is flooded.", scenario)
+        target_node, target_name, target_kind = shelter["node"], shelter["name"], shelter["kind"]
 
-    # One single-source Dijkstra prices every junction; exits and shelters
-    # are then read off the same result.
+    if target_node is not None:
+        if target_node in flooded:
+            return _failure(f"No passable route to {target_name}: its street approach is flooded.", scenario)
+        if target_node in impassable:
+            return _failure(f"No passable route to {target_name}: its street approach is holding standing water.", scenario)
+
+    # One single-source Dijkstra prices every junction; exits, shelters, and
+    # the operator's own destination are read off the same result.
     distances, paths = nx.single_source_dijkstra(graph, source=origin, weight="weight")
-    dry_exits = [e for e in SAFE_EXITS if e in _NODES and e not in flooded]
+    dry_exits = usable_exits(flooded, roadway)
     best_exit, best_cost = -1, math.inf
-    if shelter is not None:
-        if shelter["node"] in distances:
-            best_exit, best_cost = shelter["node"], distances[shelter["node"]]
+    if target_node is not None:
+        if target_node in distances:
+            best_exit, best_cost = target_node, distances[target_node]
     else:
         for exit_node in dry_exits:
             cost = distances.get(exit_node)
@@ -654,12 +806,15 @@ def compute_route(
     if best_exit < 0:
         if mode_cfg.get("directed") and origin not in _VEHICLE_CORE:
             return _failure(ONE_WAY_POCKET_MESSAGE, scenario)
-        target = shelter["name"] if shelter is not None else "any dry perimeter exit"
-        return _failure(f"No passable route to {target}. Floodwater, closures, and utility hazards have isolated this start point.", scenario)
+        target = target_name if target_node is not None else "any dry perimeter exit"
+        return _failure(_isolation_message(scenario, target), scenario)
 
     best_path = paths[best_exit]
     route_steps = build_route_steps(best_path, graph)
-    eta_minutes = _path_time_s(best_path, graph) / 60.0
+    # Round once, here: the delay the operator is shown has to add up against
+    # the minutes printed next to it.
+    eta_minutes = round(_path_time_s(best_path, graph) / 60.0, 1)
+    dry_minutes = round(_dry_seconds(best_path, graph, mode_cfg) / 60.0, 1)
     capacity = corridor_capacity(best_path, graph, mode_cfg)
 
     throughput = _district_throughput(paths, graph, dry_exits, mode_cfg)
@@ -667,12 +822,12 @@ def compute_route(
     if evacuees > 0 and throughput > 0:
         capacity["clearance_minutes"] = round(evacuees / throughput * 60.0, 1)
 
-    if shelter is not None:
-        destination_label = shelter["name"]
+    if target_node is not None:
+        resolved_label = target_name
     else:
         quadrant = EXIT_NAMES.get(str(best_exit), "Exit")
         intersection = _NODES[best_exit].get("intersection_name") or f"Node {best_exit}"
-        destination_label = f"{quadrant} ({intersection})"
+        resolved_label = f"{quadrant} ({intersection})"
 
     return {
         "success": True,
@@ -680,18 +835,23 @@ def compute_route(
         "path_coords": _path_coords(best_path, graph),
         "total_nodes": len(best_path),
         "distance_m": round(_path_distance_m(best_path, graph), 1),
-        "eta_minutes": round(eta_minutes, 1),
+        "eta_minutes": eta_minutes,
+        "dry_eta_minutes": dry_minutes,
+        "weather_delay_s": round(max(0.0, eta_minutes - dry_minutes) * 60.0, 1),
+        "route_ponded_segments": _route_ponded_segments(best_path, roadway),
+        "road_conditions": road_conditions_report(conditions, roadway, travel_mode),
         "route_steps": route_steps,
         "corridor_capacity": capacity,
         "congested_eta_minutes": round(eta_minutes * factor, 1),
         "congestion_factor": round(factor, 3),
-        "destination_name": shelter["name"] if shelter is not None else "",
-        "destination_kind": shelter["kind"] if shelter is not None else "",
-        "message": f"Safest street corridor mapped to {destination_label} in {len(route_steps)} road segments.",
+        "destination_name": target_name if target_node is not None else "",
+        "destination_kind": target_kind,
+        "message": f"Safest street corridor mapped to {resolved_label} in {len(route_steps)} road segments.",
         "flooded_nodes": sorted(flooded),
         "blackout_nodes": sorted(scenario["flow"]["blackout_nodes"]),
         "blocked_edges": scenario["blocked_edges"],
         "closed_edges": scenario["closed_edges"],
+        "ponded_edges": scenario["ponded_blocked_edges"],
         "dest_node": best_exit,
         "power_flow": scenario["flow"],
         "water_surface_m": scenario["water_surface_m"],
@@ -705,23 +865,35 @@ def compare_exit_corridors(
     travel_mode: str = "vehicle",
     evacuees: int = 0,
     closed_edges: Optional[Iterable[Iterable[int]]] = None,
+    conditions: Optional[Dict] = None,
 ) -> Dict:
-    """Rank every dry perimeter exit from one origin, safest first.
+    """Rank every usable perimeter exit from one origin, safest first.
 
     Operators rarely care about the single best exit; they want to know how
     much worse the second-best is. Corridors are ordered by routing cost (the
-    same order the recommendation uses) and report real travel time.
+    same order the recommendation uses) and report real travel time, the
+    standing water along the way, and every exit that is no longer an option.
     """
-    scenario = _scenario(flood_level, failed_substations, travel_mode, closed_edges)
+    scenario = _scenario(flood_level, failed_substations, travel_mode, closed_edges, conditions)
     flooded, graph, mode_cfg = scenario["flooded"], scenario["graph"], scenario["mode_cfg"]
+    roadway = scenario["roadway"]
     blackout, dead_edges = scenario["flow"]["blackout_nodes"], scenario["dead_edges"]
     corridors: List[Dict] = []
-    if origin in _NODES and origin not in flooded:
+    unusable: List[Dict] = []
+    if origin in _NODES and origin not in flooded and origin not in roadway["impassable"]:
+        usable = set(usable_exits(flooded, roadway))
         distances, paths = nx.single_source_dijkstra(graph, source=origin, weight="weight")
-        for exit_node in (e for e in SAFE_EXITS if e in _NODES and e not in flooded):
+        for exit_node in (e for e in SAFE_EXITS if e in _NODES):
+            if exit_node not in usable:
+                reason = "river flooding" if exit_node in flooded else "standing water"
+                unusable.append({"exit_node": exit_node, "reason": reason})
+                continue
             if exit_node not in distances:
                 continue
             path = paths[exit_node]
+            ponding = 0.0
+            for u, v in zip(path, path[1:]):
+                ponding = max(ponding, ponding_at(u, v, roadway))
             corridors.append({
                 "exit_node": exit_node,
                 "exit_name": f"{EXIT_NAMES.get(str(exit_node), 'Exit')} at {_NODES[exit_node].get('intersection_name') or f'node {exit_node}'}",
@@ -734,6 +906,8 @@ def compare_exit_corridors(
                 ),
                 "path_length": len(path),
                 "people_per_hour": corridor_capacity(path, graph, mode_cfg)["people_per_hour"],
+                "ponded_segments": _route_ponded_segments(path, roadway),
+                "max_ponding_m": round(ponding, 3),
             })
     corridors.sort(key=lambda corridor: (corridor["cost_minutes"], corridor["eta_minutes"]))
 
@@ -742,7 +916,13 @@ def compare_exit_corridors(
     factor = bpr_multiplier(evacuees / EVACUATION_WINDOW_H, sum(c["people_per_hour"] for c in corridors))
     for corridor in corridors:
         corridor["congested_eta_minutes"] = round(corridor["eta_minutes"] * factor, 1)
-    return {"corridors": corridors, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout)}
+    return {
+        "corridors": corridors,
+        "unusable_exits": unusable,
+        "flooded_nodes": sorted(flooded),
+        "blackout_nodes": sorted(blackout),
+        "road_conditions": road_conditions_report(conditions, roadway, travel_mode),
+    }
 
 
 def compute_isochrone(
@@ -753,21 +933,25 @@ def compute_isochrone(
     minutes: Optional[List[float]] = None,
     evacuees: int = 0,
     closed_edges: Optional[Iterable[Iterable[int]]] = None,
+    conditions: Optional[Dict] = None,
 ) -> Dict:
     """Street-network reachability: junctions reachable within N minutes.
 
     Uses real travel time over passable streets, so "5 minutes on foot"
     means the same thing as a 5-minute foot ETA. Under evacuation demand
-    every segment slows by the BPR factor, so the rings shrink.
+    every segment slows by the BPR factor so the rings shrink; under rain and
+    wind they shrink again, which is the honest answer to "how far can I get
+    from here right now".
     """
     minutes = sorted(minutes or [2, 4, 6, 8])
-    scenario = _scenario(flood_level, failed_substations, travel_mode, closed_edges)
+    scenario = _scenario(flood_level, failed_substations, travel_mode, closed_edges, conditions)
     flooded, graph, mode_cfg = scenario["flooded"], scenario["graph"], scenario["mode_cfg"]
+    roadway = scenario["roadway"]
     blackout = scenario["flow"]["blackout_nodes"]
-    if origin not in _NODES or origin in flooded:
-        return {"origin": origin, "rings": [], "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout), "congestion_factor": 1.0}
+    if origin not in _NODES or origin in flooded or origin in roadway["impassable"]:
+        return {"origin": origin, "rings": [], "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout), "congestion_factor": 1.0, "road_conditions": road_conditions_report(conditions, roadway, travel_mode)}
 
-    dry_exits = [e for e in SAFE_EXITS if e in _NODES and e not in flooded]
+    dry_exits = usable_exits(flooded, roadway)
     _, paths = nx.single_source_dijkstra(graph, source=origin, weight="weight")
     factor = bpr_multiplier(evacuees / EVACUATION_WINDOW_H, _district_throughput(paths, graph, dry_exits, mode_cfg))
     limits = [m * 60.0 / factor for m in minutes]
@@ -776,7 +960,14 @@ def compute_isochrone(
     for label, limit in zip(minutes, limits):
         nodes = sorted(node_id for node_id, seconds in reach.items() if seconds <= limit)
         rings.append({"minutes": round(float(label), 1), "node_count": len(nodes), "nodes": nodes})
-    return {"origin": origin, "rings": rings, "flooded_nodes": sorted(flooded), "blackout_nodes": sorted(blackout), "congestion_factor": round(factor, 2)}
+    return {
+        "origin": origin,
+        "rings": rings,
+        "flooded_nodes": sorted(flooded),
+        "blackout_nodes": sorted(blackout),
+        "congestion_factor": round(factor, 2),
+        "road_conditions": road_conditions_report(conditions, roadway, travel_mode),
+    }
 
 
 def compute_trigger_points(origin: int, travel_mode: str = "vehicle", closed_edges: Optional[Iterable[Iterable[int]]] = None) -> Dict:

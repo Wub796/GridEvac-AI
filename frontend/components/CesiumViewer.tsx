@@ -5,7 +5,8 @@ import type * as CesiumType from 'cesium';
 import Icon from '@/components/Icon';
 import { useSimulationStore, type Basemap } from '@/hooks/useSimulation';
 import { nearestNode } from '@/lib/exposure';
-import { logicalJunctions } from '@/lib/network';
+import { logicalJunctions, nearestJunction } from '@/lib/network';
+import { PONDING_VISIBLE_M } from '@/lib/conditions';
 import { edgeKey, edgePoints, floodStage, waterSurfaceM } from '@/lib/solver';
 import { loadTerrain, sample, terrainBounds, type TerrainGrid } from '@/lib/terrain';
 import type { CityData, EdgeData, SubstationData } from '@/lib/types';
@@ -23,6 +24,8 @@ const CESIUM_CDNS = [
 ];
 const CESIUM_TOKEN = (process.env.NEXT_PUBLIC_CESIUM_TOKEN ?? '').trim();
 // CARTO basemaps need a free key appended as `key`; attribution stays visible.
+/** Deepest-first cap on drawn standing water: enough to read, cheap to draw. */
+const MAX_PONDING_SEGMENTS = 500;
 const CARTO_KEY = (process.env.NEXT_PUBLIC_CARTO_API_KEY ?? '').trim();
 const cartoUrl = (style: string) => `https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}.png${CARTO_KEY ? `?key=${encodeURIComponent(CARTO_KEY)}` : ''}`;
 
@@ -37,6 +40,8 @@ const COLOR = {
   utility: '#d8c56e',
   shelter: '#f3d58a',
   medical: '#ff9d8a',
+  /** The operator's own destination: distinct from every facility colour. */
+  custom: '#c9a6ff',
   park: '#2f7d5b',
   // Periwinkle for "you": distinct from water cyan and route orange.
   user: '#8b96ff',
@@ -87,6 +92,9 @@ interface Layers {
   substations: Map<number, { entities: any[]; beacon: any; sub: SubstationData }>;
   transmission: any[];
   shelters: Map<string, { marker: any; halo: any }>;
+  /** Segments currently holding standing water, and junctions too deep to cross. */
+  ponding: any[];
+  customDestination: any[];
   flood: any;
   floodCanvases: HTMLCanvasElement[];
   floodFlip: number;
@@ -255,7 +263,7 @@ export default function CesiumViewer() {
   const [terrain, setTerrain] = useState<TerrainGrid | null>(null);
   const layers = useRef<Layers>({
     roads: new Map(), nodes: new Map(), pickNodes: [], halos: [], buildings: [], parks: [], labels: [], waterways: [],
-    substations: new Map(), transmission: [], shelters: new Map(), flood: null, floodCanvases: [], floodFlip: 0, floodSurface: Number.NaN,
+    substations: new Map(), transmission: [], shelters: new Map(), ponding: [], customDestination: [], flood: null, floodCanvases: [], floodFlip: 0, floodSurface: Number.NaN,
     blackout: [], isochrone: [], route: [], routeWidth: 0, closures: [], triggers: [], highlight: [], endpoints: [], user: [],
     rendered: false, visible: true, introPlayed: false, basemap: 'dark', fonts: { sans: 'sans-serif', mono: 'monospace' },
   });
@@ -274,6 +282,13 @@ export default function CesiumViewer() {
   const basemap = useSimulationStore((state) => state.basemap);
   const originNode = useSimulationStore((state) => state.originNode);
   const destinationId = useSimulationStore((state) => state.destinationId);
+  const customDestination = useSimulationStore((state) => state.customDestination);
+  const conditions = useSimulationStore((state) => state.conditions);
+  const useLiveConditions = useSimulationStore((state) => state.useLiveConditions);
+  const showPonding = useSimulationStore((state) => state.showPonding);
+  const pinMode = useSimulationStore((state) => state.pinMode);
+  const setPinMode = useSimulationStore((state) => state.setPinMode);
+  const travelMode = useSimulationStore((state) => state.travelMode);
   const closures = useSimulationStore((state) => state.closures);
   const closureMode = useSimulationStore((state) => state.closureMode);
   const isochrone = useSimulationStore((state) => state.isochrone);
@@ -378,6 +393,27 @@ export default function CesiumViewer() {
         const city = state.cityData;
         if (!city) return;
         const ids = idsAt(event.position);
+        // An armed pin wins over everything: the operator asked for that spot.
+        if (state.pinMode) {
+          const cartesian = viewer.camera.pickEllipsoid(event.position, viewer.scene.globe.ellipsoid);
+          const cartographic = cartesian ? Cesium.Cartographic.fromCartesian(cartesian) : null;
+          if (!cartographic) return;
+          const match = nearestJunction(city, Cesium.Math.toDegrees(cartographic.latitude), Cesium.Math.toDegrees(cartographic.longitude));
+          if (!match) {
+            state.addLog('That point is outside the mapped street network.', 'warning');
+            return;
+          }
+          state.setCustomDestination({
+            node: match.node.id,
+            lat: match.node.lat,
+            lon: match.node.lon,
+            label: match.node.intersection_name || `junction ${match.node.id}`,
+            source: 'map',
+            snapDistanceM: match.distanceM,
+          });
+          state.setPinMode(false);
+          return;
+        }
         if (state.closureMode) {
           const match = ids.map((id) => /^(?:road|closure)-(\d+)-(\d+)/.exec(id)).find(Boolean);
           if (match) state.toggleClosure(Number(match[1]), Number(match[2]));
@@ -386,6 +422,11 @@ export default function CesiumViewer() {
         const shelterId = ids.map((id) => /^shelter-(.+)$/.exec(id)?.[1]).find((id) => id && city.shelters?.some((shelter) => shelter.id === id));
         if (shelterId) {
           state.setDestination(state.destinationId === shelterId ? null : shelterId);
+          return;
+        }
+        // Clicking the destination pin you placed clears it again.
+        if (ids.some((id) => /^custom-\d+$/.test(id))) {
+          state.clearCustomDestination();
           return;
         }
         const exits = new Set(city.safe_exits);
@@ -571,7 +612,7 @@ export default function CesiumViewer() {
       fresh.nodes.clear();
       fresh.substations.clear();
       fresh.shelters.clear();
-      Object.assign(fresh, { pickNodes: [], halos: [], buildings: [], parks: [], labels: [], waterways: [], transmission: [], flood: null, blackout: [], isochrone: [], route: [], closures: [], triggers: [], highlight: [], endpoints: [], user: [], rendered: false, introPlayed: false, floodSurface: Number.NaN });
+      Object.assign(fresh, { pickNodes: [], halos: [], buildings: [], parks: [], labels: [], waterways: [], transmission: [], ponding: [], customDestination: [], flood: null, blackout: [], isochrone: [], route: [], closures: [], triggers: [], highlight: [], endpoints: [], user: [], rendered: false, introPlayed: false, floodSurface: Number.NaN });
       setReady(false);
     };
   }, []);
@@ -1086,6 +1127,104 @@ export default function CesiumViewer() {
     requestFrame(viewer);
   }, [ready, cityData, route, highlightedStep]);
 
+  /* ----------------------------------- live standing water + destination */
+  /**
+   * Where today's rain is standing on the street.
+   *
+   * Only the segments deep enough to change a decision are drawn, deepest
+   * first and hard-capped, because during a downpour nearly every street in
+   * the district holds some water and drawing all of it would both hide the
+   * route and cost frames. Junctions too deep for the current travel mode get
+   * a ring, since those are the places a route cannot pass at all.
+   */
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const store = layers.current;
+    if (!ready || !viewer || !cityData || !store.rendered) return;
+    store.ponding.forEach((entity) => viewer.entities.remove(entity));
+    store.ponding = [];
+    const depths = conditions?.ponding_depth_m ?? {};
+    if (!showPonding || !conditions || Object.keys(depths).length === 0) {
+      requestFrame(viewer);
+      return;
+    }
+    const depthAt = (id: number) => depths[String(id)] ?? 0;
+    const segments: Array<{ a: number; b: number; depth: number }> = [];
+    store.roads.forEach((record) => {
+      const depth = Math.max(depthAt(record.edge.source), depthAt(record.edge.target));
+      if (depth >= PONDING_VISIBLE_M) segments.push({ a: record.edge.source, b: record.edge.target, depth });
+    });
+    segments.sort((a, b) => b.depth - a.depth);
+    const nodes = new Map(cityData.nodes.map((node) => [node.id, node]));
+    segments.slice(0, MAX_PONDING_SEGMENTS).forEach(({ a, b, depth }) => {
+      const record = store.roads.get(edgeKey(a, b));
+      if (!record) return;
+      // Deeper water is drawn thicker and brighter, so the eye lands on the
+      // worst of it first.
+      const weight = Math.min(1, depth / 0.3);
+      const coordinates = edgePoints(nodes, a, b, record.edge).flatMap(([lat, lon]) => [lon, lat]);
+      store.ponding.push(viewer.entities.add({
+        id: `ponding-${edgeKey(a, b)}`,
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(coordinates),
+          width: 3 + 4 * weight,
+          clampToGround: true,
+          zIndex: 1,
+          material: css(COLOR.water, 0.35 + 0.5 * weight),
+        },
+      }));
+    });
+    (conditions.impassable?.[travelMode] ?? []).forEach((id) => {
+      const node = nodes.get(id);
+      if (!node) return;
+      store.ponding.push(viewer.entities.add({
+        id: `impassable-${id}`,
+        position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat),
+        point: { pixelSize: 7, color: css(COLOR.water, 0.95), outlineColor: css(COLOR.ground), outlineWidth: 1.5 },
+      }));
+    });
+    requestFrame(viewer);
+  }, [ready, cityData, conditions, showPonding, travelMode, basemap]);
+
+  /* The operator's own destination, drawn apart from the shelters. */
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const store = layers.current;
+    if (!ready || !viewer || !cityData) return;
+    store.customDestination.forEach((entity) => viewer.entities.remove(entity));
+    store.customDestination = [];
+    if (!customDestination) {
+      requestFrame(viewer);
+      return;
+    }
+    const lat = customDestination.lat;
+    const lon = customDestination.lon;
+    store.customDestination.push(
+      viewer.entities.add({
+        id: `custom-halo-${customDestination.node}`,
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        point: { pixelSize: 30, color: css(COLOR.custom, 0.18), outlineColor: css(COLOR.custom, 0.4), outlineWidth: 1 },
+      }),
+      viewer.entities.add({
+        id: `custom-${customDestination.node}`,
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        point: { pixelSize: 15, color: css(COLOR.custom), outlineColor: css(COLOR.ground), outlineWidth: 2.5, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND },
+        label: {
+          text: customDestination.label,
+          font: `600 12px ${store.fonts.sans}`,
+          fillColor: css(COLOR.ink),
+          outlineColor: css(COLOR.ground),
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -22),
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3200),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      }),
+    );
+    requestFrame(viewer);
+  }, [ready, cityData, customDestination]);
+
   /* ------------------------------------------------ shelters + substations */
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -1237,8 +1376,17 @@ export default function CesiumViewer() {
         </button>
       </div>
 
-      {closureMode ? (
+      {pinMode ? (
+        <div className="map-overlay map-hint" role="status">
+          Click the map to place your destination. Esc cancels.
+          <button className="map-hint-close" onClick={() => setPinMode(false)} aria-label="Cancel the destination pin"><Icon name="close" size={14} /></button>
+        </div>
+      ) : closureMode ? (
         <div className="map-overlay map-hint" role="status">Click a street to close it, or a closure to reopen it. Press Esc when done.</div>
+      ) : conditions && useLiveConditions && (route?.weather_delay_s ?? 0) >= 30 ? (
+        <div className="map-overlay map-hint map-hint--conditions" role="status">
+          Routed on {conditions.weather_label}: this corridor costs {((route?.weather_delay_s ?? 0) / 60).toFixed(1)} min more than a dry one.
+        </div>
       ) : locationMessage && locationStatus !== 'located' ? (
         <div className="map-overlay map-hint map-hint--info" role="status">
           <span>{locationMessage}</span>
@@ -1249,10 +1397,12 @@ export default function CesiumViewer() {
       <div className="map-overlay map-legend" aria-label="Legend">
         <span><i className="lg lg-route" />Route</span>
         <span><i className="lg lg-water" />Water</span>
+        {conditions && conditions.ponded_nodes.length > 0 && <span><i className="lg lg-ponding" />Standing water</span>}
         <span><i className="lg lg-closed" />Closed</span>
         <span><i className="lg lg-exit" />Exit</span>
         <span><i className="lg lg-shelter" />Shelter</span>
         <span><i className="lg lg-medical" />Medical</span>
+        {customDestination && <span><i className="lg lg-custom" />Your destination</span>}
         <span><i className="lg lg-trigger" />Trigger point</span>
         {userLocation && <span><i className="lg lg-you" />You</span>}
       </div>

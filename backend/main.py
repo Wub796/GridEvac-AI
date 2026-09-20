@@ -12,10 +12,11 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response
 
 from models import (
-    BlockData, CityResponse, CorridorCapacity, CorridorComparisonResponse, CorridorInfo, EdgeData,
-    FloodModel, FloodZoneResponse, IsochroneResponse, IsochroneRing, NodeData, Observation,
-    ObservationsResponse, ParkData, RouteCoord, RouteResponse, RouteStep, ShelterData, SimulationRequest,
-    SubstationData, TransmissionLink, TravelMode, TriggerPointsResponse, WaterwayData,
+    BlockData, CityResponse, ConditionInput, ConditionAdvisory, ConditionsResponse, CorridorCapacity,
+    CorridorComparisonResponse, CorridorInfo, EdgeData, FloodModel, FloodZoneResponse, IsochroneResponse,
+    IsochroneRing, NodeData, Observation, ObservationsResponse, ParkData, RoadConditions, RouteCoord,
+    RouteResponse, RouteStep, ShelterData, SimulationRequest, SubstationData, TransmissionLink, TravelMode,
+    TriggerPointsResponse, UnusableExit, WaterwayData, WeatherAlertInput,
 )
 from city_graph import (
     _BLOCKS, _G, _NODES, _SUBSTATIONS, CENTER_LAT, CENTER_LON, EXIT_NAMES, FLOOD_MODEL, META, PARKS,
@@ -23,11 +24,12 @@ from city_graph import (
 )
 from routing import (
     _LINK_EDGES, compare_exit_corridors, compute_isochrone, compute_route, compute_trigger_points,
-    get_flooded_nodes,
+    get_flooded_nodes, road_conditions_report, usable_exits,
 )
+from conditions import build_conditions, live_conditions, unavailable_weather, weather_status
 from anomaly import detect_anomaly
 
-API_VERSION = "1.2.0"
+API_VERSION = "1.3.0"
 FEET_PER_METER = 3.28084
 
 app = FastAPI(
@@ -215,6 +217,67 @@ def _cached(name: str, fetcher):
     return value
 
 
+def _condition_input(conditions: Optional[ConditionInput]) -> Optional[Dict]:
+    """A client-measured snapshot, in the shape `conditions.build_conditions` wants."""
+    if conditions is None:
+        return None
+    weather = conditions.weather.model_dump()
+    weather.setdefault("source", "Client-reported conditions")
+    return {
+        "weather": weather,
+        "alerts": [alert.model_dump() for alert in conditions.alerts],
+        "gage_surface_m": conditions.gage_surface_m,
+    }
+
+
+def _resolve_conditions(request: SimulationRequest) -> Optional[Dict]:
+    """Live roadway for this request, or None when the operator wants dry pavement.
+
+    A snapshot sent with the request wins: it is what the operator's own
+    browser measured, so the server's answer matches the browser's offline
+    fallback and a shared link replays identically.
+    """
+    if not request.use_live_conditions and request.conditions is None:
+        return None
+    snapshot = _condition_input(request.conditions)
+    if snapshot is not None:
+        return build_conditions(_NODES.values(), snapshot["weather"], snapshot["alerts"], snapshot["gage_surface_m"])
+    observations_ = _cached("usgs", _usgs_observations)
+    gage_surface = None
+    if observations_["gage_height"].status == "live" and observations_["gage_height"].value is not None:
+        datum_ft = float(FLOOD_MODEL.get("gage", {}).get("datum_navd88_ft", 0.0))
+        gage_surface = round((observations_["gage_height"].value + datum_ft) / FEET_PER_METER, 2)
+    return live_conditions(_NODES.values(), CENTER_LAT, CENTER_LON, gage_surface)
+
+
+def _road_conditions(value: Optional[Dict]) -> Optional[RoadConditions]:
+    return RoadConditions(**value) if value else None
+
+
+def _condition_advisories(value: Optional[Dict]) -> List[ConditionAdvisory]:
+    if not value:
+        return []
+    return [ConditionAdvisory(**advisory) for advisory in value.get("advisories", [])]
+
+
+@app.get("/api/conditions", response_model=ConditionsResponse)
+async def conditions_endpoint():
+    """Live roadway conditions for the district, cached for five minutes.
+
+    Rainfall ponding depth per junction, the wet/wind/ice/heat speed factors
+    each travel mode carries, and every active NWS warning - the inputs the
+    router turns into a conditions-based evacuation route. Public, key-free
+    feeds; the browser reads the same services directly when it can.
+    """
+    usgs = _cached("usgs", _usgs_observations)
+    gage_surface = None
+    if usgs["gage_height"].status == "live" and usgs["gage_height"].value is not None:
+        datum_ft = float(FLOOD_MODEL.get("gage", {}).get("datum_navd88_ft", 0.0))
+        gage_surface = round((usgs["gage_height"].value + datum_ft) / FEET_PER_METER, 2)
+    live = live_conditions(_NODES.values(), CENTER_LAT, CENTER_LON, gage_surface)
+    return ConditionsResponse(conditions=RoadConditions(**live), feeds=weather_status())
+
+
 @app.get("/api/observations", response_model=ObservationsResponse)
 async def observations():
     """Live Buffalo Bayou gage and air temperature, cached for five minutes.
@@ -253,6 +316,9 @@ async def calculate_route(req: SimulationRequest):
         evacuees=req.evacuees,
         destination=req.destination,
         closed_edges=req.closed_edges,
+        conditions=_resolve_conditions(req),
+        destination_node=req.destination_node,
+        destination_label=req.destination_label,
     )
     flow = result["power_flow"]
     offline = set(flow["offline_substations"])
@@ -327,6 +393,11 @@ async def calculate_route(req: SimulationRequest):
         congestion_factor=result.get("congestion_factor", 1.0),
         destination_name=result.get("destination_name", ""),
         destination_kind=result.get("destination_kind", ""),
+        dry_eta_minutes=result.get("dry_eta_minutes", 0.0),
+        weather_delay_s=result.get("weather_delay_s", 0.0),
+        route_ponded_segments=result.get("route_ponded_segments", 0),
+        road_conditions=_road_conditions(result.get("road_conditions")),
+        ponded_edges=result.get("ponded_edges", []),
     )
 
 
@@ -338,15 +409,33 @@ async def compare_corridors(
     travel_mode: TravelMode = Query(default="vehicle"),
     evacuees: int = Query(default=0, ge=0, le=200_000),
     closed_edges: str = Query(default=""),
+    use_live_conditions: bool = Query(default=False),
 ):
     failed = _parse_int_list(failed_substations, "failed_substations")
-    result = compare_exit_corridors(origin, flood_level, failed, travel_mode, evacuees, _parse_closures(closed_edges))
+    conditions = _resolve_conditions(SimulationRequest(
+        origin_node=origin, flood_level=flood_level, failed_substations=failed,
+        travel_mode=travel_mode, evacuees=evacuees, closed_edges=_parse_closures(closed_edges),
+        use_live_conditions=use_live_conditions,
+    )) if use_live_conditions else None
+    result = compare_exit_corridors(origin, flood_level, failed, travel_mode, evacuees, _parse_closures(closed_edges), conditions)
     return CorridorComparisonResponse(
         origin=origin,
         travel_mode=travel_mode,
         corridors=[CorridorInfo(**corridor) for corridor in result["corridors"]],
+        unusable_exits=[
+            UnusableExit(
+                exit_node=item["exit_node"],
+                exit_name=(
+                    f"{EXIT_NAMES.get(str(item['exit_node']), 'Exit')} at "
+                    f"{_NODES[item['exit_node']].get('intersection_name') or 'node %d' % item['exit_node']}"
+                ),
+                reason=item["reason"],
+            )
+            for item in result.get("unusable_exits", [])
+        ],
         flooded_nodes=result["flooded_nodes"],
         blackout_nodes=result["blackout_nodes"],
+        road_conditions=_road_conditions(result.get("road_conditions")),
     )
 
 
@@ -359,6 +448,7 @@ async def isochrone(
     minutes: str = Query(default="2,4,6,8"),
     evacuees: int = Query(default=0, ge=0, le=200_000),
     closed_edges: str = Query(default=""),
+    use_live_conditions: bool = Query(default=False),
 ):
     failed = _parse_int_list(failed_substations, "failed_substations")
     try:
@@ -367,7 +457,15 @@ async def isochrone(
         raise HTTPException(status_code=422, detail="minutes must be a comma-separated list of numbers")
     if not ring_minutes or len(ring_minutes) > 8 or any(m <= 0 or m > 180 for m in ring_minutes):
         raise HTTPException(status_code=422, detail="minutes needs 1-8 values between 0 and 180")
-    result = compute_isochrone(origin, flood_level, failed, travel_mode, ring_minutes, evacuees, _parse_closures(closed_edges))
+    conditions = None
+    if use_live_conditions:
+        usgs = _cached("usgs", _usgs_observations)
+        gage_surface = None
+        if usgs["gage_height"].status == "live" and usgs["gage_height"].value is not None:
+            datum_ft = float(FLOOD_MODEL.get("gage", {}).get("datum_navd88_ft", 0.0))
+            gage_surface = round((usgs["gage_height"].value + datum_ft) / FEET_PER_METER, 2)
+        conditions = live_conditions(_NODES.values(), CENTER_LAT, CENTER_LON, gage_surface)
+    result = compute_isochrone(origin, flood_level, failed, travel_mode, ring_minutes, evacuees, _parse_closures(closed_edges), conditions)
     return IsochroneResponse(
         origin=origin,
         travel_mode=travel_mode,
@@ -375,6 +473,7 @@ async def isochrone(
         flooded_nodes=result["flooded_nodes"],
         blackout_nodes=result["blackout_nodes"],
         congestion_factor=result.get("congestion_factor", 1.0),
+        road_conditions=_road_conditions(result.get("road_conditions")),
     )
 
 

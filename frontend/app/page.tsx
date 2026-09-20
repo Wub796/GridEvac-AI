@@ -7,6 +7,7 @@ import { ExposureCard, Readings, RecommendationCard, SheltersCard } from '@/comp
 import ControlPanel from '@/components/ControlPanel';
 import ExportMenu, { type ExportKind } from '@/components/ExportMenu';
 import Icon from '@/components/Icon';
+import ConditionsPanel from '@/components/ConditionsPanel';
 import LiveConditions from '@/components/LiveConditions';
 import LocationPrompt from '@/components/LocationPrompt';
 import NetworkCanvas from '@/components/NetworkCanvas';
@@ -219,8 +220,13 @@ export default function HomePage() {
       } else if (event.key.toLowerCase() === 'c' && state.cityData) {
         state.setClosureMode(!state.closureMode);
         if (!state.closureMode) navigate('map');
-      } else if (event.key === 'Escape' && state.closureMode) {
-        state.setClosureMode(false);
+      } else if (event.key.toLowerCase() === 'd' && state.cityData) {
+        // Arm the destination pin: the next map click chooses where to route.
+        state.setPinMode(!state.pinMode);
+        if (!state.pinMode) navigate('map');
+      } else if (event.key === 'Escape') {
+        if (state.pinMode) state.setPinMode(false);
+        else if (state.closureMode) state.setClosureMode(false);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -269,8 +275,11 @@ export default function HomePage() {
             <Readings />
             <div className="briefing-grid">
               <LiveConditions />
-              <ExposureCard exposure={exposure} />
+              <ConditionsPanel />
               <SheltersCard exposure={exposure} />
+            </div>
+            <div className="briefing-grid briefing-grid--wide">
+              <ExposureCard exposure={exposure} />
             </div>
           </section>
 
@@ -278,7 +287,7 @@ export default function HomePage() {
             <header className="section-head">
               <div>
                 <h2 id="planner-title">Route planner</h2>
-                <p>Click a dry junction to start from it. With <strong>Close streets</strong> on, click a street to block it. Hover the turn list in the audit to light up each stretch of road.</p>
+                <p>Click a dry junction to start from it. Press <strong>D</strong> (or use the Route tab) to drop your own destination, and turn on <strong>conditions</strong> to route around today&rsquo;s standing water instead of a dry street. With <strong>Close streets</strong> on, click a street to block it. Hover the turn list in the audit to light up each stretch of road.</p>
               </div>
             </header>
             <div className="map-stage" ref={mapStageRef}>
@@ -307,7 +316,7 @@ export default function HomePage() {
               <MethodNotes />
             </div>
             <footer className="page-foot">
-              <p>Street, building, and waterway data © OpenStreetMap contributors. Elevation: USGS 3DEP. Basemap © CARTO. Live river data: USGS Water Services.</p>
+              <p>Street, building, and waterway data © OpenStreetMap contributors. Elevation: USGS 3DEP. Basemap © CARTO. Live river data: USGS Water Services. Rainfall, wind and forecast: Open-Meteo. Warnings and advisories: National Weather Service (api.weather.gov).</p>
               <p>GridEvac is a planning aid. Confirm conditions on the ground before directing people.</p>
             </footer>
           </section>

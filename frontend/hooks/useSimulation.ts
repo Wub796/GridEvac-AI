@@ -4,6 +4,7 @@ import type { OperatorEvent } from '@/lib/exports';
 import { snapToNetwork, type DeviceFix, type SnapResult } from '@/lib/locate';
 import { logicalJunctions } from '@/lib/network';
 import { fetchObservations } from '@/lib/observations';
+import { conditionInput, fetchConditions } from '@/lib/conditions';
 import {
   ISOCHRONE_MINUTES,
   compareCorridors,
@@ -19,9 +20,11 @@ import type {
   BlockData,
   CityData,
   CorridorComparisonResponse,
+  CustomDestination,
   IsochroneResponse,
   NodeData,
   ObservationsResponse,
+  RoadConditions,
   RouteResponse,
   ShelterData,
   SubstationData,
@@ -98,6 +101,11 @@ type SimulationStore = {
   frequencyHistory: number[];
   events: OperatorEvent[];
   observations: ObservationsResponse | null;
+  /** Live roadway: standing water, wet/wind/ice/heat speed, active warnings. */
+  conditions: RoadConditions | null;
+  conditionsStatus: ConditionsStatus;
+  /** Route on today's rainfall, wind, ice and heat instead of dry pavement. */
+  useLiveConditions: boolean;
   userLocation: UserLocation | null;
   locationStatus: LocationStatus;
   locationMessage: string | null;
@@ -109,6 +117,10 @@ type SimulationStore = {
   showIntersections: boolean;
   showRoadNames: boolean;
   showWaterways: boolean;
+  /** Draw the segments currently holding standing water. */
+  showPonding: boolean;
+  /** The next map click drops a destination pin instead of moving the start. */
+  pinMode: boolean;
   basemap: Basemap;
   flyToNodeId: number | null;
   flyToRoadKey: string | null;
@@ -119,6 +131,8 @@ type SimulationStore = {
   travelMode: TravelMode;
   evacuees: number;
   destinationId: string | null;
+  /** The operator's own destination, when they set one themselves. */
+  customDestination: CustomDestination | null;
   corridorComparison: CorridorComparisonResponse | null;
   isochrone: IsochroneResponse | null;
   isochroneVisible: boolean;
@@ -143,6 +157,8 @@ type SimulationStore = {
   refreshIsochrone: () => Promise<void>;
   refreshObservations: () => Promise<void>;
   syncFloodToGage: () => void;
+  refreshConditions: () => Promise<void>;
+  setUseLiveConditions: (value: boolean) => void;
   locateUser: (options?: { quiet?: boolean }) => Promise<void>;
   setFollowLocation: (value: boolean) => void;
   clearUserLocation: () => void;
@@ -155,6 +171,8 @@ type SimulationStore = {
   setTravelMode: (mode: TravelMode) => void;
   setEvacuees: (value: number) => void;
   setDestination: (id: string | null) => void;
+  setCustomDestination: (destination: CustomDestination | null) => void;
+  clearCustomDestination: () => void;
   toggleClosure: (source: number, target: number) => void;
   clearClosures: () => void;
   setClosureMode: (value: boolean) => void;
@@ -170,6 +188,8 @@ type SimulationStore = {
   setShowIntersections: (value: boolean) => void;
   setShowRoadNames: (value: boolean) => void;
   setShowWaterways: (value: boolean) => void;
+  setShowPonding: (value: boolean) => void;
+  setPinMode: (value: boolean) => void;
   setBasemap: (value: Basemap) => void;
   setIsochroneVisible: (value: boolean) => void;
   setFlyToNodeId: (id: number | null) => void;
@@ -296,6 +316,8 @@ function buildOfflineCityData(network: BakedNetwork): CityData {
   } as CityData);
 }
 
+type ConditionsStatus = 'idle' | 'loading' | 'live' | 'unavailable';
+
 interface SharedScenario {
   origin?: number;
   flood?: number;
@@ -303,6 +325,9 @@ interface SharedScenario {
   failed?: number[];
   evacuees?: number;
   dest?: string;
+  to?: number;
+  toLabel?: string;
+  live?: boolean;
   closed?: Array<[number, number]>;
 }
 
@@ -321,16 +346,25 @@ function readSharedScenario(): SharedScenario {
     failed: params.get('failed')?.split(',').map(Number).filter(Number.isInteger),
     evacuees: number('evacuees'),
     dest: params.get('dest') || undefined,
+    to: number('to'),
+    toLabel: params.get('toLabel') || undefined,
+    live: params.get('live') === '1' ? true : undefined,
     closed: params.get('closed')?.split(',').map((pair) => pair.split('-').map(Number) as [number, number]).filter((pair) => pair.length === 2 && pair.every(Number.isInteger)),
   };
 }
 
-export function scenarioUrl(state: Pick<SimulationStore, 'originNode' | 'floodLevel' | 'travelMode' | 'failedSubstations' | 'evacuees' | 'destinationId' | 'closures'>): string {
+export function scenarioUrl(state: Pick<SimulationStore, 'originNode' | 'floodLevel' | 'travelMode' | 'failedSubstations' | 'evacuees' | 'destinationId' | 'customDestination' | 'closures' | 'useLiveConditions'>): string {
   if (typeof window === 'undefined') return '';
   const params = new URLSearchParams({ origin: String(state.originNode), flood: state.floodLevel.toFixed(2), mode: state.travelMode });
   if (state.failedSubstations.length) params.set('failed', state.failedSubstations.join(','));
   if (state.evacuees > 0) params.set('evacuees', String(state.evacuees));
-  if (state.destinationId) params.set('dest', state.destinationId);
+  if (state.customDestination) {
+    params.set('to', String(state.customDestination.node));
+    if (state.customDestination.label) params.set('toLabel', state.customDestination.label);
+  } else if (state.destinationId) {
+    params.set('dest', state.destinationId);
+  }
+  if (state.useLiveConditions) params.set('live', '1');
   if (state.closures.length) params.set('closed', state.closures.map(([u, v]) => `${u}-${v}`).join(','));
   return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 }
@@ -361,11 +395,37 @@ function writeSnapshots(snapshots: ScenarioSnapshot[]) {
 export const useSimulationStore = create<SimulationStore>((set, get) => {
   const scenarioQuery = (): ScenarioQuery => {
     const state = get();
-    return { origin: state.originNode, floodLevel: state.floodLevel, failed: state.failedSubstations, mode: state.travelMode, evacuees: state.evacuees, closures: state.closures };
+    return {
+      origin: state.originNode,
+      floodLevel: state.floodLevel,
+      failed: state.failedSubstations,
+      mode: state.travelMode,
+      evacuees: state.evacuees,
+      closures: state.closures,
+      useLiveConditions: state.useLiveConditions,
+    };
   };
   const solverInput = () => {
     const state = get();
-    return { origin: state.originNode, floodLevel: state.floodLevel, failedSubstations: state.failedSubstations, travelMode: state.travelMode, evacuees: state.evacuees, destination: state.destinationId, closures: state.closures };
+    return {
+      origin: state.originNode,
+      floodLevel: state.floodLevel,
+      failedSubstations: state.failedSubstations,
+      travelMode: state.travelMode,
+      evacuees: state.evacuees,
+      destination: state.customDestination ? null : state.destinationId,
+      destinationNode: state.customDestination?.node ?? null,
+      destinationLabel: state.customDestination?.label ?? '',
+      // Dry pavement unless the operator has opted into live conditions, and
+      // then only once a snapshot has actually arrived.
+      conditions: state.useLiveConditions ? state.conditions : null,
+      closures: state.closures,
+    };
+  };
+  /** The human destination for logs, whichever way it was chosen. */
+  const destinationLabel = () => {
+    const state = get();
+    return state.customDestination?.label ?? null;
   };
 
   /**
@@ -446,6 +506,9 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     frequencyHistory: Array(24).fill(60),
     events: [],
     observations: null,
+    conditions: null,
+    conditionsStatus: 'idle',
+    useLiveConditions: false,
     userLocation: null,
     locationStatus: 'idle',
     locationMessage: null,
@@ -457,6 +520,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     showIntersections: true,
     showRoadNames: false,
     showWaterways: true,
+    showPonding: true,
+    pinMode: false,
     basemap: 'dark',
     flyToNodeId: null,
     flyToRoadKey: null,
@@ -467,6 +532,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     travelMode: 'vehicle',
     evacuees: 0,
     destinationId: null,
+    customDestination: null,
     corridorComparison: null,
     isochrone: null,
     isochroneVisible: false,
@@ -526,6 +592,18 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
       if (shared.failed) next.failedSubstations = shared.failed.filter((id) => city!.substations.some((sub) => sub.id === id));
       if (shared.evacuees !== undefined) next.evacuees = Math.max(0, Math.min(200_000, Math.round(shared.evacuees)));
       if (shared.dest && city.shelters?.some((shelter) => shelter.id === shared.dest)) next.destinationId = shared.dest;
+      if (shared.live) next.useLiveConditions = true;
+      const sharedTarget = shared.to !== undefined ? nodeById(city, shared.to) : undefined;
+      if (sharedTarget) {
+        next.customDestination = {
+          node: sharedTarget.id,
+          lat: sharedTarget.lat,
+          lon: sharedTarget.lon,
+          label: shared.toLabel || sharedTarget.intersection_name || `junction ${sharedTarget.id}`,
+          source: 'link',
+          snapDistanceM: 0,
+        };
+      }
       if (shared.closed) {
         const known = new Set(city.edges.map((edge) => edgeKey(edge.source, edge.target)));
         next.closures = shared.closed.filter(([u, v]) => known.has(edgeKey(u, v)));
@@ -551,16 +629,25 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
 
     calculateRoute: async () => {
       const requestId = ++routeRequestSerial;
-      const { cityData, backendOnline, originNode, floodLevel, failedSubstations, travelMode, evacuees, destinationId, closures } = get();
+      const { cityData, backendOnline, originNode, floodLevel, failedSubstations, travelMode, evacuees, destinationId, closures, customDestination, useLiveConditions, conditions } = get();
       if (!cityData) return;
       set({ isLoading: true, error: null });
       let online = backendOnline;
       let response: RouteResponse;
+      // Send the snapshot this browser measured, so the API's answer matches
+      // the offline solver's and a shared link replays identically. With no
+      // snapshot yet, ask for dry pavement rather than letting the API fetch
+      // its own conditions and disagree with the offline solver: the snapshot
+      // arrives in seconds and re-solves from there.
+      const metrics = useLiveConditions ? conditionInput(conditions, get().observations?.gage_water_surface_m ?? null) : null;
       if (online) {
         try {
           response = normalizeRoute(await api.calculateRoute({
             origin_node: originNode, flood_level: floodLevel, failed_substations: failedSubstations,
-            travel_mode: travelMode, evacuees, destination: destinationId, closed_edges: closures,
+            travel_mode: travelMode, evacuees, destination: customDestination ? null : destinationId,
+            destination_node: customDestination?.node ?? null, destination_label: customDestination?.label ?? '',
+            use_live_conditions: useLiveConditions && Boolean(metrics), conditions: metrics,
+            closed_edges: closures,
           }));
         } catch {
           online = false;
@@ -583,12 +670,17 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
         floodedSubstations: response.flooded_substations,
         highlightedStep: null,
       });
-      const destination = response.destination_name
+      const destination = destinationLabel()
+        || response.destination_name
         || cityData.exit_names?.[String(response.dest_node)]
         || nodeById(cityData, response.dest_node)?.intersection_name
         || `node ${response.dest_node}`;
+      const weather = response.road_conditions;
+      const weatherNote = weather && response.weather_delay_s >= 30
+        ? ` Live conditions add ${(response.weather_delay_s / 60).toFixed(1)} min over a dry street (${weather.weather_label}, ${weather.wind_gust_mph.toFixed(0)} mph gusts).`
+        : '';
       get().addLog(response.success
-        ? `Route solved (${TRAVEL_MODE_LABELS[travelMode]}): ${formatDistance(response.distance_m)} to ${destination}, ${response.eta_minutes.toFixed(1)} min.`
+        ? `Route solved (${TRAVEL_MODE_LABELS[travelMode]}): ${formatDistance(response.distance_m)} to ${destination}, ${response.eta_minutes.toFixed(1)} min.${weatherNote}`
         : `No passable corridor: ${response.message}`, response.success ? 'result' : 'warning');
       response.flooded_substations.forEach((id) => {
         if (!get().floodedSubstations.includes(id)) return;
@@ -648,6 +740,41 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
           ? `USGS ${cityData.flood_model?.gage.site ?? '08074000'} reports ${gage.value?.toFixed(2)} ft (${observations.gage_water_surface_m?.toFixed(2)} m NAVD88).`
           : 'Live river gage unavailable; scenario values are modeled only.', gage.status === 'live' ? 'system' : 'warning');
       }
+      void get().refreshConditions();
+    },
+
+    refreshConditions: async () => {
+      const { cityData, backendOnline, conditionsStatus } = get();
+      if (!cityData) return;
+      if (conditionsStatus === 'idle') set({ conditionsStatus: 'loading' });
+      const conditions = await fetchConditions(cityData, get().observations?.gage_water_surface_m ?? null, backendOnline);
+      const previous = get().conditions;
+      set({ conditions, conditionsStatus: conditions.status === 'live' ? 'live' : 'unavailable' });
+      if (previous) return;
+      // Conditions routing was switched on (or restored from a link) before the
+      // snapshot existed, so the route solved against dry pavement. Re-solve now
+      // that the real roadway is known.
+      if (get().useLiveConditions) queueRouteCalculation(get, 'conditions', 'Live conditions loaded; re-solving against today\u2019s roadway.');
+      const ponded = conditions.ponded_nodes.length;
+      get().addLog(conditions.status === 'live'
+        ? ponded > 0
+          ? `Live roadway: ${conditions.weather_label}, ${conditions.rain_rate_mm_h.toFixed(1)} mm/h rain, ${ponded} junctions holding water (deepest ${conditions.deepest_ponding_m.toFixed(2)} m).`
+          : `Live roadway: ${conditions.weather_label}, ${conditions.rain_rate_mm_h.toFixed(1)} mm/h rain, ${conditions.wind_gust_mph.toFixed(0)} mph gusts, no standing water.`
+        : 'Live weather feed unreachable; condition-based routing will assume dry pavement.',
+      conditions.status === 'live' ? 'system' : 'warning');
+      (conditions.alerts ?? []).slice(0, 3).forEach((alert) => {
+        get().addLog(`${alert.sender}: ${alert.event} (${alert.severity})${alert.headline ? ` - ${alert.headline}` : ''}.`, 'warning');
+      });
+    },
+
+    setUseLiveConditions: (value) => {
+      const { conditionsStatus } = get();
+      set({ useLiveConditions: value, activeSnapshotId: null });
+      if (value && conditionsStatus !== 'loading' && !get().conditions) void get().refreshConditions();
+      queueRouteCalculation(get, 'conditions', value
+        ? 'Condition-based routing on: routes now avoid standing water and account for today\u2019s rainfall, wind and visibility.'
+        : 'Condition-based routing off: back to dry-pavement routing.');
+      void get().refreshAnalysis();
     },
 
     syncFloodToGage: () => {
@@ -796,9 +923,25 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
       queueRouteCalculation(get, 'demand', next === 0 ? 'Evacuation demand cleared: free-flow travel times.' : `Evacuation demand: ${next.toLocaleString()} people leaving within the hour.`);
     },
 
+    setCustomDestination: (destination) => {
+      set({ customDestination: destination, destinationId: null, activeSnapshotId: null });
+      if (!destination) {
+        queueRouteCalculation(get, 'destination', 'Custom destination cleared; routing to the safest perimeter exit again.');
+        return;
+      }
+      const place = destination.label || `junction ${destination.node}`;
+      get().addLog(`Destination set: ${place}${destination.snapDistanceM >= 25 ? `, ${formatDistance(destination.snapDistanceM)} from the nearest junction` : ''}.`, 'action');
+      queueRouteCalculation(get, 'destination', `Routing to ${place}.`);
+    },
+
+    clearCustomDestination: () => {
+      if (!get().customDestination) return;
+      get().setCustomDestination(null);
+    },
+
     setDestination: (id) => {
       const shelter = get().cityData?.shelters?.find((item) => item.id === id);
-      set({ destinationId: shelter ? shelter.id : null, activeSnapshotId: null });
+      set({ destinationId: shelter ? shelter.id : null, customDestination: null, activeSnapshotId: null });
       queueRouteCalculation(get, 'destination', shelter
         ? `Destination set: ${shelter.name} (${shelter.kind === 'medical' ? 'medical facility' : 'shelter'}, capacity ${shelter.capacity.toLocaleString()}).`
         : 'Destination cleared; routing to the safest dry perimeter exit.');
@@ -897,6 +1040,11 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     setShowIntersections: (value) => set({ showIntersections: value }),
     setShowRoadNames: (value) => set({ showRoadNames: value }),
     setShowWaterways: (value) => set({ showWaterways: value }),
+    setShowPonding: (value) => set({ showPonding: value }),
+    setPinMode: (value) => {
+      set({ pinMode: value, closureMode: value ? false : get().closureMode });
+      if (value) get().addLog('Destination pin armed: click anywhere on the map to route there.', 'action');
+    },
     setBasemap: (value) => set({ basemap: value }),
     setIsochroneVisible: (value) => {
       set({ isochroneVisible: value });

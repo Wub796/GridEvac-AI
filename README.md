@@ -11,17 +11,24 @@ Evacuation routing for downtown Houston on the real OpenStreetMap street network
 - Operator road closures drawn directly on the map and carried in shared links.
 - Evacuation demand with BPR congestion, district clearance time, and shelter capacity against demand.
 
+**Live road conditions**
+- Rainfall, 6/24-hour accumulation, the coming 6-hour forecast, wind gusts, and every active NWS watch, warning, and advisory for the district, from two public key-free services (Open-Meteo and `api.weather.gov`).
+- Those readings are turned into the two things a roadway actually imposes: how deep water is standing on each junction against the depth each travel mode can cross (NWS "Turn Around Don't Drown": 6 in stalls a car, 12 in floats many), and how much achievable speed drops — wet friction and spray, visibility loss, crosswind on exposed bridge decks, ice, and heat stress on foot.
+- Standing water is modeled from the district's own USGS elevations: bayou-adjacent streets pond first and deepest, high ground with intact drainage clears all but a downpour. An active flood warning raises the assumed intensity even when the local gauge is between cells.
+- Turn on **Route on these conditions** and the route avoids junctions too deep to cross, pays a depth-scaled delay for driving through water, prefers sheltered streets over exposed decks in high wind, and reports the extra minutes the weather costs against a dry street (`dry_eta_minutes`).
+
 **Decisions**
+- Your own destination: drop a pin on the map, search a junction or street by name, or paste a coordinate. A route must end at a junction, so the panel always reports how far the requested point sat from the junction it snapped to.
 - Start from your own location: the device fix is snapped to the nearest mapped street, and the route begins at whichever end of that street you can legally reach fastest (one-way rules for vehicles). The access leg is shown on the map and added to the total time. "Follow my location" re-plans as you move. The location stays in the browser; only the chosen junction reaches the API, and it never appears in shared links or exports.
-- Least-cost route to the safest dry exit or to a named shelter or medical facility. Vehicles obey one-way streets; ETAs are real travel time, while penalties for flooded approaches, blackout districts, and energized lines only decide the order.
+- Least-cost route to the safest usable exit, a named shelter or medical facility, or an operator's own junction. Exits whose own approach is under river water or holding standing water are dropped from the ranking and listed with the reason. Vehicles obey one-way streets; ETAs are real travel time, while penalties for flooded approaches, standing water, blackout districts, and energized lines only decide the order.
 - Turn-by-turn directions with left/right maneuvers computed from street geometry.
-- Exit corridors ranked safest first, with capacity and hazard counts.
+- Exit corridors ranked safest first, with capacity, hazard counts, and the standing water along each one.
 - Trigger points: the exact water surface at which each exit and shelter becomes unreachable, and which street floods first (a widest-path solve over flood stages).
 - Street-network reachability in minutes.
 - Exposure estimate: buildings and daytime occupants in the flood extent or without power.
 
 **Hand-off**
-- Shareable scenario links (origin, water level, mode, outages, demand, destination, closures).
+- Shareable scenario links (origin, water level, mode, outages, demand, destination or pinned point, conditions routing, closures).
 - Situation report laid out after the ICS-201 briefing, GeoJSON package for ArcGIS/QGIS, and a CSV operator event log with UTC and Houston local timestamps.
 - U.S. National Grid (USNG) coordinates under the cursor, for origins, and in exports.
 - Print stylesheet for the briefing and audit.
@@ -33,6 +40,7 @@ GridEvac/
 ├── backend/                     FastAPI service
 │   ├── main.py                  Endpoints, cached city payload, live observations relay
 │   ├── routing.py               Flood model, power flow, routing, corridors, isochrones, trigger points
+│   ├── conditions.py            Live weather and NWS warnings -> standing water and speed factors
 │   ├── city_graph.py            Loads the baked network into NetworkX
 │   ├── anomaly.py               IsolationForest risk score
 │   ├── models.py                Pydantic schemas
@@ -43,6 +51,7 @@ GridEvac/
 │   ├── components/              Map (CesiumJS), control panel, briefing and audit panels
 │   ├── hooks/useSimulation.ts   Zustand store: scenario state, solver orchestration, event log
 │   ├── lib/solver.ts            Offline solver: a line-for-line mirror of backend/routing.py
+│   ├── lib/conditions.ts        Offline road-condition model: mirror of backend/conditions.py, reads both feeds in the browser
 │   ├── lib/terrain.ts           Terrain grid used to draw the flood surface
 │   ├── lib/usng.ts              WGS84 to USNG conversion
 │   ├── lib/exports.ts           Situation report, GeoJSON, CSV
@@ -83,6 +92,7 @@ Optional environment (`frontend/.env.local`, and in Vercel project settings):
 | `GET` | `/api/trigger-points` | Water surface at which each exit and shelter is cut off |
 | `GET` | `/api/flood-zones` | Flooded junctions for a scenario level |
 | `GET` | `/api/observations` | Live USGS gage, discharge, and air temperature (5-minute cache) |
+| `GET` | `/api/conditions` | Live rainfall, gusts, standing water per junction, per-mode speed factors, and active NWS warnings |
 
 Example:
 
@@ -100,6 +110,23 @@ POST /api/calculate-route
 ```
 
 Scenario level `L` maps to a water surface of `datum + L × rise` metres NAVD88 (published in `/api/city` as `flood_model`).
+
+Routing on live conditions. Send `use_live_conditions: true` to have the server fetch the feeds, or include the `conditions` snapshot your own browser measured — the snapshot wins, so the API's answer matches the offline solver's and a shared link replays identically:
+
+```json
+POST /api/calculate-route
+{
+  "flood_level": 0.0,
+  "failed_substations": [],
+  "origin_node": 425,
+  "travel_mode": "vehicle",
+  "use_live_conditions": true,
+  "destination_node": 2019,
+  "destination_label": "Rally point 4"
+}
+```
+
+The response carries `road_conditions` (the model actually used, including which junctions the mode cannot cross), `dry_eta_minutes`, `weather_delay_s`, `route_ponded_segments`, and `ponded_edges`. A route that failed because of the weather still returns the conditions it failed against.
 
 ## Data pipeline
 
@@ -123,7 +150,8 @@ CI runs the same checks on every push and pull request (`.github/workflows/ci.ym
 
 ## Limitations
 
-- The flood model is a single water surface spreading over connected low ground. It does not model rainfall ponding, storm-drain backup, or the channel's downstream slope, and the upstream gage stands in for the whole reach.
+- The flood model is a single water surface spreading over connected low ground. It does not model storm-drain backup, or the channel's downstream slope, and the upstream gage stands in for the whole reach.
+- Rainfall ponding is a drainage-balance proxy, not a hydraulic model: depth follows rainfall intensity against an assumed drainage capacity, scaled by how low a street sits in the district's 3DEP elevation range. It has no sewer network, no flow direction, and no estimate of how fast water is moving. Live feeds can also be unreachable, in which case the app says so and routes as if the pavement were dry rather than silently guessing.
 - Substations, loads, service areas, and transmission links are illustrative, not CenterPoint Energy data.
 - Occupancy estimates assume one person per 25 m² of floor area across the 1,400 largest mapped footprints.
 - Congestion assumes demand loads onto the network within one hour and spreads across every dry exit corridor.

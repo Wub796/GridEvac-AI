@@ -5,7 +5,13 @@
  * Travel time (what a stopwatch reads) and routing cost (time adjusted by
  * road-class preference plus safety penalties) are tracked separately. The
  * solver minimizes cost; ETAs, step durations, and reachability use time.
+ *
+ * River flooding is a scenario input while live rainfall ponding, wet
+ * friction, crosswind and ice arrive as road conditions. Both narrow the
+ * network the same way and are reported separately, so an operator always
+ * knows whether a closure is the modeled river or today's storm.
  */
+import { NEUTRAL_ROADWAY, modeRoadway, type Roadway } from './conditions';
 import type {
   CityData,
   CorridorCapacity,
@@ -15,6 +21,7 @@ import type {
   IsochroneResponse,
   NodeData,
   RiskLevel,
+  RoadConditions,
   RouteCoord,
   RouteResponse,
   RouteStep,
@@ -22,6 +29,7 @@ import type {
   TravelMode,
   TriggerPointsResponse,
   TriggerTarget,
+  UnusableExit,
 } from './types';
 
 /* ------------------------------------------------------------ constants */
@@ -125,10 +133,15 @@ function context(city: CityData): Context {
     neighborOrder.get(edge.source)!.push({ to: edge.target, edge });
     neighborOrder.get(edge.target)!.push({ to: edge.source, edge });
   });
+  // One entry per undirected edge. Self-loops are dropped: the baked network
+  // contains a handful, networkx collapses them the same way, and emitting
+  // one twice (once as source, once as target) silently inflated every edge
+  // list the solver reports.
   const graphEdges: Array<[number, number, EdgeData]> = [];
   const seen = new Set<number>();
   city.nodes.forEach((node) => {
     neighborOrder.get(node.id)!.forEach(({ to, edge }) => {
+      if (to === node.id) return;
       if (!seen.has(to)) graphEdges.push([node.id, to, edge]);
     });
     seen.add(node.id);
@@ -375,8 +388,10 @@ interface Scenario {
   adjacency: Map<number, Arc[]>;
   blockedEdges: Array<[number, number]>;
   closedEdges: Array<[number, number]>;
+  pondedBlockedEdges: Array<[number, number]>;
   deadEdges: Set<string>;
   waterSurface: number;
+  roadway: Roadway;
 }
 
 export interface ScenarioInput {
@@ -384,12 +399,53 @@ export interface ScenarioInput {
   failedSubstations: number[];
   travelMode: TravelMode;
   closures: Array<[number, number]>;
+  /** Live roadway conditions; omitted (or null) means dry pavement. */
+  conditions?: RoadConditions | null;
+}
+
+/** Standing water on a segment: the deeper of its two junctions governs. */
+function pondingAt(u: number, v: number, roadway: Roadway): number {
+  return Math.max(roadway.ponding[u] ?? 0, roadway.ponding[v] ?? 0);
+}
+
+/** Perimeter exits a traveller can actually use right now. */
+function usableExits(city: CityData, ctx: Context, flooded: Set<number>, roadway: Roadway): number[] {
+  return city.safe_exits.filter((exit) =>
+    ctx.nodesById.has(exit) && !flooded.has(exit) && !(roadway.impassable?.has(exit) ?? false));
+}
+
+/** The condition model as used for this mode, for the operator to audit. */
+function roadConditionsReport(conditions: RoadConditions | null | undefined, roadway: Roadway, travelMode: TravelMode): RoadConditions | null {
+  if (!conditions) return null;
+  return {
+    ...conditions,
+    travel_mode: travelMode,
+    clearance_m: roadway.clearanceM === Number.POSITIVE_INFINITY ? null : roadway.clearanceM,
+    speed_factor: roadway.speedFactor,
+    bridge_speed_factor: roadway.bridgeFactor,
+    impassable_nodes: Array.from(roadway.impassable ?? []).sort((a, b) => a - b),
+  };
+}
+
+/** Name the actual obstacle, so a failed route is diagnosable. */
+function isolationMessage(sc: Scenario, target: string): string {
+  const causes: string[] = [];
+  if (sc.blockedEdges.length) causes.push('river flooding');
+  if (sc.pondedBlockedEdges.length) causes.push('standing water');
+  if (sc.closedEdges.length) causes.push('operator closures');
+  if (sc.flow.blackout_nodes.size && causes.length === 0) causes.push('utility hazards');
+  const detail = causes.length ? causes.join(', ') : 'floodwater';
+  return `No passable route to ${target}. ${detail[0].toUpperCase()}${detail.slice(1)} have isolated this start point.`;
 }
 
 function scenario(city: CityData, input: ScenarioInput): Scenario {
   const ctx = context(city);
   const closures = new Set(input.closures.filter(([u, v]) => ctx.edgeByKey.has(edgeKey(u, v))).map(([u, v]) => edgeKey(u, v)));
-  const cacheKey = [input.floodLevel.toFixed(2), [...input.failedSubstations].sort().join(','), input.travelMode, [...closures].sort().join(',')].join('|');
+  const roadway = modeRoadway(input.conditions, input.travelMode);
+  const conditionsKey = input.conditions
+    ? `${input.conditions.status}:${input.conditions.intensity_mm_h}:${input.conditions.wind_gust_mph}:${input.conditions.weather_code}`
+    : 'dry';
+  const cacheKey = [input.floodLevel.toFixed(2), [...input.failedSubstations].sort().join(','), input.travelMode, [...closures].sort().join(','), conditionsKey].join('|');
   const cached = ctx.scenarioCache.get(cacheKey);
   if (cached) return cached;
 
@@ -406,17 +462,35 @@ function scenario(city: CityData, input: ScenarioInput): Scenario {
   const adjacency = new Map<number, Arc[]>();
   const blockedEdges: Array<[number, number]> = [];
   const closedEdges: Array<[number, number]> = [];
+  const pondedBlockedEdges: Array<[number, number]> = [];
   const addArc = (from: number, arc: Arc) => {
     const list = adjacency.get(from);
     if (list) list.push(arc); else adjacency.set(from, [arc]);
   };
+  const nodesById = ctx.nodesById;
   ctx.graphEdges.forEach(([u, v, edge]) => {
     const key = edgeKey(u, v);
     if (closures.has(key)) { closedEdges.push([u, v]); return; }
     if (flooded.has(u) && flooded.has(v)) { blockedEdges.push([u, v]); return; }
+    const impassable = roadway.impassable;
+    if (impassable && impassable.has(u) && impassable.has(v)) { pondedBlockedEdges.push([u, v]); return; }
     let time = edge.distance_m * 2.23694 / Math.max(1, mode.mph(edge.speed_limit_mph));
+    if (input.conditions) {
+      // A deck is exposed to crosswind and freezes first; a street between
+      // buildings is sheltered.
+      const elevated = Boolean(nodesById.get(u)?.elevated) && Boolean(nodesById.get(v)?.elevated);
+      time /= Math.max(0.15, elevated ? roadway.bridgeFactor : roadway.speedFactor);
+    }
     let cost = time * (mode.preference[edge.road_class] ?? 1);
     if (flooded.has(u) || flooded.has(v)) { time += mode.floodDelayS; cost += mode.floodPenaltyS; }
+    if (input.conditions) {
+      const depth = pondingAt(u, v, roadway);
+      if (depth > 0) {
+        const ratio = Math.min(1, depth / roadway.clearanceM);
+        time += roadway.pondingDelayS * ratio ** roadway.delayExponent;
+        cost += roadway.pondingPenaltyS * ratio ** roadway.costExponent;
+      }
+    }
     if (flow.blackout_nodes.has(u) || flow.blackout_nodes.has(v)) { time += mode.blackoutDelayS; cost *= mode.blackoutCostMult; }
     if (deadEdges.has(key)) cost += DEAD_LINE_PENALTY_S;
     else if (overloadedEdges.has(key)) cost += OVERLOADED_LINE_PENALTY_S;
@@ -431,8 +505,10 @@ function scenario(city: CityData, input: ScenarioInput): Scenario {
     adjacency,
     blockedEdges,
     closedEdges,
+    pondedBlockedEdges,
     deadEdges,
     waterSurface: Number(waterSurfaceM(city, Math.round(input.floodLevel * 100) / 100).toFixed(2)),
+    roadway,
   };
   // Route, corridor ranking, and reachability solve the same scenario back to back.
   if (ctx.scenarioCache.size >= 6) ctx.scenarioCache.delete(ctx.scenarioCache.keys().next().value as string);
@@ -691,6 +767,22 @@ export interface RouteInput extends ScenarioInput {
   origin: number;
   evacuees: number;
   destination: string | null;
+  /** The operator's own destination junction, overriding `destination`. */
+  destinationNode?: number | null;
+  destinationLabel?: string;
+}
+
+/** Free-flow seconds over a path on a dry, unobstructed street. */
+function drySeconds(sc: Scenario, path: number[]): number {
+  return path.slice(0, -1).reduce((sum, from, index) => {
+    const edge = arcBetween(sc, from, path[index + 1])!.edge;
+    return sum + edge.distance_m * 2.23694 / Math.max(1, sc.mode.mph(edge.speed_limit_mph));
+  }, 0);
+}
+
+/** Segments on a path still holding visible standing water. */
+function routePondedSegments(sc: Scenario, path: number[]): number {
+  return path.slice(0, -1).filter((from, index) => pondingAt(from, path[index + 1], sc.roadway) >= sc.roadway.visibleM).length;
 }
 
 export function solveRoute(city: CityData, input: RouteInput): RouteResponse {
@@ -722,6 +814,7 @@ export function solveRoute(city: CityData, input: RouteInput): RouteResponse {
     anomaly_score: anomaly,
     risk_level: risk,
   };
+  const conditionsReport = roadConditionsReport(input.conditions, sc.roadway, input.travelMode);
   const failure = (message: string): RouteResponse => ({
     ...base,
     success: false,
@@ -737,25 +830,49 @@ export function solveRoute(city: CityData, input: RouteInput): RouteResponse {
     congestion_factor: 1,
     destination_name: '',
     destination_kind: '',
+    dry_eta_minutes: 0,
+    weather_delay_s: 0,
+    route_ponded_segments: 0,
+    road_conditions: conditionsReport,
+    ponded_edges: sc.pondedBlockedEdges,
     risk_level: 'CRITICAL',
     anomaly_score: Math.max(anomaly, 0.78),
   });
 
   if (!ctx.nodesById.has(input.origin)) return failure('Origin intersection is outside the operations district.');
   if (sc.flooded.has(input.origin)) return failure('Starting intersection is flooded. Select a dry origin on higher ground.');
-  let shelter: ShelterData | null = null;
-  if (input.destination) {
-    shelter = city.shelters?.find((item) => item.id === input.destination) ?? null;
+  if (sc.roadway.impassable?.has(input.origin)) {
+    return failure('Your starting intersection is holding standing water. Pick a start on higher ground, or switch to a mode that can cross it.');
+  }
+
+  let targetNode: number | null = null;
+  let targetName = '';
+  let targetKind: RouteResponse['destination_kind'] = '';
+  if (input.destinationNode !== null && input.destinationNode !== undefined) {
+    if (!ctx.nodesById.has(input.destinationNode)) return failure('That destination is outside the operations district.');
+    if (input.destinationNode === input.origin) return failure('That destination is the starting junction. Pick a different place to head for.');
+    targetNode = input.destinationNode;
+    targetName = input.destinationLabel || ctx.nodesById.get(targetNode)!.intersection_name || `node ${targetNode}`;
+    targetKind = 'custom';
+  } else if (input.destination) {
+    const shelter: ShelterData | null = city.shelters?.find((item) => item.id === input.destination) ?? null;
     if (!shelter) return failure(`Destination "${input.destination}" is not a known shelter or medical facility.`);
-    if (sc.flooded.has(shelter.node)) return failure(`No passable route to ${shelter.name}: its street approach is flooded.`);
+    targetNode = shelter.node;
+    targetName = shelter.name;
+    targetKind = shelter.kind === 'medical' ? 'medical' : 'shelter';
+  }
+
+  if (targetNode !== null) {
+    if (sc.flooded.has(targetNode)) return failure(`No passable route to ${targetName}: its street approach is flooded.`);
+    if (sc.roadway.impassable?.has(targetNode)) return failure(`No passable route to ${targetName}: its street approach is holding standing water.`);
   }
 
   const { distances, previous } = dijkstra(sc.adjacency, input.origin, 'cost');
-  const dryExits = city.safe_exits.filter((exit) => ctx.nodesById.has(exit) && !sc.flooded.has(exit));
+  const dryExits = usableExits(city, ctx, sc.flooded, sc.roadway);
   let bestExit = -1;
   let bestCost = Number.POSITIVE_INFINITY;
-  if (shelter) {
-    if (distances.has(shelter.node)) { bestExit = shelter.node; bestCost = distances.get(shelter.node)!; }
+  if (targetNode !== null) {
+    if (distances.has(targetNode)) { bestExit = targetNode; bestCost = distances.get(targetNode)!; }
   } else {
     dryExits.forEach((exit) => {
       const cost = distances.get(exit);
@@ -766,19 +883,21 @@ export function solveRoute(city: CityData, input: RouteInput): RouteResponse {
     if (sc.mode.directed && !vehicleCore(city).has(input.origin)) {
       return failure('This junction sits in a one-way pocket (a ramp, garage, or loop) with no legal vehicle path out. Start from a nearby through street, or switch to on-foot routing.');
     }
-    return failure(`No passable route to ${shelter ? shelter.name : 'any dry perimeter exit'}. Floodwater, closures, and utility hazards have isolated this start point.`);
+    return failure(isolationMessage(sc, targetNode !== null ? targetName : 'any dry perimeter exit'));
   }
 
   const path = pathTo(previous, input.origin, bestExit);
   const steps = buildRouteSteps(city, sc, path);
-  const etaMinutes = pathSum(sc, path, (arc) => arc.time) / 60;
+  // Round once, here: the delay shown must add up against the minutes shown.
+  const etaMinutes = round(pathSum(sc, path, (arc) => arc.time) / 60, 1);
+  const dryMinutes = round(drySeconds(sc, path) / 60, 1);
   const capacity = corridorCapacity(sc, path);
   const throughput = districtThroughput(sc, previous, input.origin, dryExits, distances);
   const factor = bprMultiplier(input.evacuees / EVACUATION_WINDOW_H, throughput);
   if (input.evacuees > 0 && throughput > 0) capacity.clearance_minutes = round(input.evacuees / throughput * 60, 1);
   const node = ctx.nodesById.get(bestExit)!;
-  const label = shelter
-    ? shelter.name
+  const label = targetNode !== null
+    ? targetName
     : `${ctx.exitNames[String(bestExit)] ?? 'Exit'} (${node.intersection_name || `Node ${bestExit}`})`;
 
   return {
@@ -788,13 +907,18 @@ export function solveRoute(city: CityData, input: RouteInput): RouteResponse {
     path_coords: pathCoords(city, sc, path),
     total_nodes: path.length,
     distance_m: round(pathSum(sc, path, (arc) => arc.edge.distance_m), 1),
-    eta_minutes: round(etaMinutes, 1),
+    eta_minutes: etaMinutes,
+    dry_eta_minutes: dryMinutes,
+    weather_delay_s: round(Math.max(0, etaMinutes - dryMinutes) * 60, 1),
+    route_ponded_segments: routePondedSegments(sc, path),
+    road_conditions: conditionsReport,
+    ponded_edges: sc.pondedBlockedEdges,
     route_steps: steps,
     corridor_capacity: capacity,
     congested_eta_minutes: round(etaMinutes * factor, 1),
     congestion_factor: round(factor, 3),
-    destination_name: shelter?.name ?? '',
-    destination_kind: shelter ? (shelter.kind === 'medical' ? 'medical' : 'shelter') : '',
+    destination_name: targetNode !== null ? targetName : '',
+    destination_kind: targetKind,
     message: `Safest street corridor mapped to ${label} in ${steps.length} road segments.`,
     dest_node: bestExit,
   };
@@ -806,9 +930,17 @@ export function compareCorridors(city: CityData, input: RouteInput): CorridorCom
   const ctx = context(city);
   const sc = scenario(city, input);
   const corridors: CorridorInfo[] = [];
-  if (ctx.nodesById.has(input.origin) && !sc.flooded.has(input.origin)) {
+  const unusable: UnusableExit[] = [];
+  const originUsable = ctx.nodesById.has(input.origin) && !sc.flooded.has(input.origin) && !(sc.roadway.impassable?.has(input.origin) ?? false);
+  if (originUsable) {
+    const usable = new Set(usableExits(city, ctx, sc.flooded, sc.roadway));
     const { distances, previous } = dijkstra(sc.adjacency, input.origin, 'cost');
-    city.safe_exits.filter((exit) => ctx.nodesById.has(exit) && !sc.flooded.has(exit)).forEach((exit) => {
+    city.safe_exits.filter((exit) => ctx.nodesById.has(exit)).forEach((exit) => {
+      const exitName = `${ctx.exitNames[String(exit)] ?? 'Exit'} at ${ctx.nodesById.get(exit)!.intersection_name || `node ${exit}`}`;
+      if (!usable.has(exit)) {
+        unusable.push({ exit_node: exit, exit_name: exitName, reason: sc.flooded.has(exit) ? 'river flooding' : 'standing water' });
+        return;
+      }
       const cost = distances.get(exit);
       if (cost === undefined) return;
       const path = pathTo(previous, input.origin, exit);
@@ -816,9 +948,10 @@ export function compareCorridors(city: CityData, input: RouteInput): CorridorCom
         const v = path[index + 1];
         return sc.deadEdges.has(edgeKey(u, v)) || sc.flow.blackout_nodes.has(u) || sc.flow.blackout_nodes.has(v) || sc.flooded.has(u) || sc.flooded.has(v);
       }).length;
+      const maxPonding = path.slice(0, -1).reduce((deepest, u, index) => Math.max(deepest, pondingAt(u, path[index + 1], sc.roadway)), 0);
       corridors.push({
         exit_node: exit,
-        exit_name: `${ctx.exitNames[String(exit)] ?? 'Exit'} at ${ctx.nodesById.get(exit)!.intersection_name || `node ${exit}`}`,
+        exit_name: exitName,
         eta_minutes: round(pathSum(sc, path, (arc) => arc.time) / 60, 1),
         cost_minutes: round(cost / 60, 1),
         distance_m: round(pathSum(sc, path, (arc) => arc.edge.distance_m), 1),
@@ -826,6 +959,8 @@ export function compareCorridors(city: CityData, input: RouteInput): CorridorCom
         path_length: path.length,
         people_per_hour: corridorCapacity(sc, path).people_per_hour,
         congested_eta_minutes: 0,
+        ponded_segments: routePondedSegments(sc, path),
+        max_ponding_m: round(maxPonding, 3),
       });
     });
   }
@@ -836,8 +971,10 @@ export function compareCorridors(city: CityData, input: RouteInput): CorridorCom
     origin: input.origin,
     travel_mode: input.travelMode,
     corridors,
+    unusable_exits: unusable,
     flooded_nodes: Array.from(sc.flooded).sort((a, b) => a - b),
     blackout_nodes: Array.from(sc.flow.blackout_nodes).sort((a, b) => a - b),
+    road_conditions: roadConditionsReport(input.conditions, sc.roadway, input.travelMode),
   };
 }
 
@@ -849,10 +986,11 @@ export function solveIsochrone(city: CityData, input: RouteInput & { minutes: nu
   const minutes = (input.minutes.length ? input.minutes : ISOCHRONE_MINUTES[input.travelMode]).slice().sort((a, b) => a - b);
   const flooded = Array.from(sc.flooded).sort((a, b) => a - b);
   const blackout = Array.from(sc.flow.blackout_nodes).sort((a, b) => a - b);
-  if (!ctx.nodesById.has(input.origin) || sc.flooded.has(input.origin)) {
-    return { origin: input.origin, travel_mode: input.travelMode, rings: [], flooded_nodes: flooded, blackout_nodes: blackout, congestion_factor: 1 };
+  const report = roadConditionsReport(input.conditions, sc.roadway, input.travelMode);
+  if (!ctx.nodesById.has(input.origin) || sc.flooded.has(input.origin) || sc.roadway.impassable?.has(input.origin)) {
+    return { origin: input.origin, travel_mode: input.travelMode, rings: [], flooded_nodes: flooded, blackout_nodes: blackout, congestion_factor: 1, road_conditions: report };
   }
-  const dryExits = city.safe_exits.filter((exit) => ctx.nodesById.has(exit) && !sc.flooded.has(exit));
+  const dryExits = usableExits(city, ctx, sc.flooded, sc.roadway);
   const byCost = dijkstra(sc.adjacency, input.origin, 'cost');
   const factor = bprMultiplier(input.evacuees / EVACUATION_WINDOW_H, districtThroughput(sc, byCost.previous, input.origin, dryExits, byCost.distances));
   const limits = minutes.map((m) => m * 60 / factor);
@@ -861,7 +999,7 @@ export function solveIsochrone(city: CityData, input: RouteInput & { minutes: nu
     const nodes = Array.from(reach.entries()).filter(([, seconds]) => seconds <= limits[index]).map(([id]) => id).sort((a, b) => a - b);
     return { minutes: round(label, 1), node_count: nodes.length, nodes };
   });
-  return { origin: input.origin, travel_mode: input.travelMode, rings, flooded_nodes: flooded, blackout_nodes: blackout, congestion_factor: round(factor, 2) };
+  return { origin: input.origin, travel_mode: input.travelMode, rings, flooded_nodes: flooded, blackout_nodes: blackout, congestion_factor: round(factor, 2), road_conditions: report };
 }
 
 /* ------------------------------------------------------ trigger points */

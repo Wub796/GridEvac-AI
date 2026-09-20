@@ -5,6 +5,94 @@ from pydantic import BaseModel, Field
 TravelMode = Literal["vehicle", "foot", "ems"]
 
 
+class WeatherAlertInput(BaseModel):
+    """One active NWS watch, warning, or advisory covering the district."""
+    id: str = ""
+    event: str = "Weather alert"
+    hazard: str = Field(default="other", description="flood | wind | ice | fog | heat | other")
+    severity: str = "unknown"
+    weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    urgency: str = ""
+    certainty: str = ""
+    headline: str = ""
+    instruction: str = ""
+    sender: str = ""
+    onset: str = ""
+    ends: str = ""
+
+
+class WeatherInput(BaseModel):
+    """A normalized weather snapshot, so a live-conditions route can be replayed."""
+    status: Literal["live", "unavailable"] = "live"
+    observed_at: Optional[str] = None
+    rain_rate_mm_h: float = 0.0
+    rain_1h_mm: float = 0.0
+    rain_6h_mm: float = 0.0
+    rain_24h_mm: float = 0.0
+    rain_6h_forecast_mm: float = 0.0
+    peak_rate_6h_mm_h: float = 0.0
+    wind_speed_mph: float = 0.0
+    wind_gust_mph: float = 0.0
+    temperature_f: float = 0.0
+    weather_code: int = 0
+    source: str = ""
+
+
+class ConditionInput(BaseModel):
+    """Live conditions measured by the client, for deterministic replay."""
+    weather: WeatherInput = WeatherInput()
+    alerts: List[WeatherAlertInput] = Field(default=[], max_length=50)
+    gage_surface_m: Optional[float] = None
+
+
+class ConditionAdvisory(BaseModel):
+    kind: str
+    severity: str = "nominal"
+    message: str = ""
+    affected: int = 0
+
+
+class RoadConditions(BaseModel):
+    """The live roadway as it affects routing, with its sources and reasoning."""
+    status: Literal["live", "unavailable"] = "unavailable"
+    observed_at: Optional[str] = None
+    fetched_at: str = ""
+    weather_code: int = 0
+    weather_label: str = ""
+    temperature_f: float = 0.0
+    rain_rate_mm_h: float = 0.0
+    rain_1h_mm: float = 0.0
+    rain_6h_mm: float = 0.0
+    rain_24h_mm: float = 0.0
+    rain_6h_forecast_mm: float = 0.0
+    peak_rate_6h_mm_h: float = 0.0
+    intensity_mm_h: float = 0.0
+    wind_speed_mph: float = 0.0
+    wind_gust_mph: float = 0.0
+    river_surface_m: Optional[float] = None
+    wetness: float = 0.0
+    pool: int = 0
+    alerts: List[WeatherAlertInput] = []
+    ponding_depth_m: Dict[str, float] = {}
+    ponded_nodes: List[int] = []
+    wetted_nodes: int = 0
+    deepest_ponding_m: float = 0.0
+    impassable: Dict[str, List[int]] = {}
+    speed_factors: Dict[str, float] = {}
+    advisories: List[ConditionAdvisory] = []
+    sources: Dict[str, str] = {}
+    travel_mode: str = ""
+    clearance_m: Optional[float] = None
+    speed_factor: float = 1.0
+    bridge_speed_factor: float = 1.0
+    impassable_nodes: List[int] = []
+
+
+class ConditionsResponse(BaseModel):
+    conditions: RoadConditions
+    feeds: Dict[str, bool] = {}
+
+
 class SimulationRequest(BaseModel):
     flood_level: float = Field(ge=0.0, le=10.0, description="Scenario level 0-10; water surface = datum + level * rise (m NAVD88)")
     failed_substations: List[int] = Field(default=[], max_length=50, description="IDs of manually failed substations")
@@ -12,6 +100,10 @@ class SimulationRequest(BaseModel):
     travel_mode: TravelMode = Field(default="vehicle", description="vehicle | foot | ems")
     evacuees: int = Field(default=0, ge=0, le=200_000, description="Evacuating population driving road congestion")
     destination: Optional[str] = Field(default=None, max_length=64, description="Shelter/medical id to route to instead of perimeter exits")
+    destination_node: Optional[int] = Field(default=None, ge=0, le=100000, description="Operator's own destination junction, overriding `destination`")
+    destination_label: str = Field(default="", max_length=120, description="Human name for `destination_node`")
+    use_live_conditions: bool = Field(default=False, description="Route on live rainfall, wind, ice and heat instead of dry pavement")
+    conditions: Optional[ConditionInput] = Field(default=None, description="Client-measured conditions; replayed instead of re-fetched")
     closed_edges: List[List[int]] = Field(default=[], max_length=500, description="Operator road closures as [source, target] node pairs")
 
 
@@ -168,6 +260,11 @@ class RouteResponse(BaseModel):
     congestion_factor: float = 1.0
     destination_name: str = ""
     destination_kind: str = ""
+    dry_eta_minutes: float = Field(default=0.0, description="Free-flow ETA for this path on dry, unobstructed pavement")
+    weather_delay_s: float = Field(default=0.0, description="Seconds this route costs because of live road conditions")
+    route_ponded_segments: int = Field(default=0, description="Segments on this route holding visible standing water")
+    road_conditions: Optional[RoadConditions] = Field(default=None, description="Live conditions applied to this route, if any")
+    ponded_edges: List[List[int]] = Field(default=[], description="Segments with both ends too deep to cross in this mode")
 
 
 class CorridorInfo(BaseModel):
@@ -180,14 +277,24 @@ class CorridorInfo(BaseModel):
     path_length: int = 0
     people_per_hour: int = 0
     congested_eta_minutes: float = 0.0
+    ponded_segments: int = 0
+    max_ponding_m: float = 0.0
+
+
+class UnusableExit(BaseModel):
+    exit_node: int
+    exit_name: str = ""
+    reason: str = ""
 
 
 class CorridorComparisonResponse(BaseModel):
     origin: int
     travel_mode: str
     corridors: List[CorridorInfo]
+    unusable_exits: List[UnusableExit] = []
     flooded_nodes: List[int]
     blackout_nodes: List[int]
+    road_conditions: Optional[RoadConditions] = None
 
 
 class IsochroneRing(BaseModel):
@@ -203,6 +310,7 @@ class IsochroneResponse(BaseModel):
     flooded_nodes: List[int]
     blackout_nodes: List[int]
     congestion_factor: float = 1.0
+    road_conditions: Optional[RoadConditions] = None
 
 
 class TriggerTarget(BaseModel):

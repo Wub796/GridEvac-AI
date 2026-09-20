@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   CityData,
+  ConditionsResponse,
   CorridorComparisonResponse,
   IsochroneResponse,
   ObservationsResponse,
@@ -26,6 +27,7 @@ export interface ScenarioQuery {
   mode: TravelMode;
   evacuees: number;
   closures: Array<[number, number]>;
+  useLiveConditions?: boolean;
 }
 
 const closureParam = (closures: Array<[number, number]>) => closures.map(([u, v]) => `${u}-${v}`).join(',');
@@ -37,6 +39,7 @@ const scenarioParams = (query: ScenarioQuery) => ({
   travel_mode: query.mode,
   evacuees: query.evacuees,
   closed_edges: closureParam(query.closures),
+  use_live_conditions: query.useLiveConditions ?? false,
 });
 
 export const api = {
@@ -55,8 +58,18 @@ export const api = {
       travel_mode: params.travel_mode ?? 'vehicle',
       evacuees: params.evacuees ?? 0,
       destination: params.destination ?? null,
+      destination_node: params.destination_node ?? null,
+      destination_label: params.destination_label ?? '',
+      use_live_conditions: params.use_live_conditions ?? false,
+      conditions: params.conditions ?? null,
       closed_edges: params.closed_edges ?? [],
     });
+    return data;
+  },
+
+  /** Live roadway conditions: rainfall ponding, speed factors, active warnings. */
+  conditions: async (): Promise<ConditionsResponse> => {
+    const { data } = await http.get<ConditionsResponse>('/api/conditions', { timeout: 15_000 });
     return data;
   },
 

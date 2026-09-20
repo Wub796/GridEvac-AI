@@ -11,6 +11,7 @@ Exits non-zero if any endpoint fails or returns an incoherent payload.
 import json
 import os
 import sys
+from typing import Optional
 
 import httpx
 
@@ -112,6 +113,117 @@ def main() -> int:
         check("  terminates at shelter node", dest.get("dest_node") == shelters[0]["node"],
               f"{dest.get('dest_node')} vs {shelters[0]['node']}")
 
+    # ---- live road conditions (rainfall ponding, wet/wind/ice/heat) ----
+
+    def weather_snapshot(rate: float, gust: float = 0.0, code: int = 0, alerts: Optional[list] = None) -> dict:
+        """A normalized Open-Meteo/NWS snapshot, so these checks need no network."""
+        return {
+            "weather": {
+                "status": "live", "observed_at": "2026-09-19T21:00",
+                "rain_rate_mm_h": rate, "rain_1h_mm": rate, "rain_6h_mm": rate * 2, "rain_24h_mm": rate * 3,
+                "rain_6h_forecast_mm": rate * 2, "peak_rate_6h_mm_h": rate,
+                "wind_speed_mph": gust * 0.6, "wind_gust_mph": gust,
+                "temperature_f": 84.0, "weather_code": code, "source": "smoke test",
+            },
+            "alerts": alerts or [],
+            "gage_surface_m": None,
+        }
+
+    status, clear = route(client, origin_node=origin)
+    check("  dry route reports its own dry baseline", clear.get("dry_eta_minutes") == clear.get("eta_minutes"),
+          f"{clear.get('dry_eta_minutes')} vs {clear.get('eta_minutes')} min")
+    check("  dry route carries no condition block", clear.get("road_conditions") is None)
+
+    status, wet = route(client, origin_node=origin, use_live_conditions=True, conditions=weather_snapshot(60.0))
+    check("POST /api/calculate-route (60 mm/h rain)", status == 200 and wet.get("success") is True, f"{status}")
+    wet_conditions = wet.get("road_conditions") or {}
+    check("  conditions echoed back", bool(wet_conditions), wet_conditions.get("weather_label", ""))
+    check("  rain slows the roadway", 0 < wet_conditions.get("speed_factor", 1) < 1, f"x{wet_conditions.get('speed_factor')}")
+    check("  rain inflates the ETA above the dry baseline", wet.get("eta_minutes", 0) > wet.get("dry_eta_minutes", 0),
+          f"{wet.get('eta_minutes')} vs {wet.get('dry_eta_minutes')} min")
+    check("  delay attributed to weather", wet.get("weather_delay_s", 0) > 0, f"{wet.get('weather_delay_s')} s")
+    check("  standing water is found", len(wet_conditions.get("ponded_nodes") or []) > 0,
+          f"{len(wet_conditions.get('ponded_nodes') or [])} junctions")
+    check("  segments too deep to cross are reported", len(wet.get("ponded_edges") or []) > 0,
+          f"{len(wet.get('ponded_edges') or [])} segments")
+    check("  route steers around the water it can", wet.get("route_ponded_segments", 0) < len(wet.get("path", [])),
+          f"{wet.get('route_ponded_segments')} of {len(wet.get('path', []))} segments")
+    # The dry baseline is per-path, so a condition-aware detour legitimately
+    # has a different one. What must hold is that the reported weather delay
+    # is exactly the gap between the route and its own dry baseline.
+    gap_seconds = (wet.get("eta_minutes", 0) - wet.get("dry_eta_minutes", 0)) * 60.0
+    check("  weather delay is the gap to the dry baseline",
+          abs(wet.get("weather_delay_s", 0) - gap_seconds) <= 1.5,
+          f"{wet.get('weather_delay_s')} s vs {gap_seconds:.1f} s")
+    check("  the dry baseline is never slower than the conditioned route",
+          wet.get("dry_eta_minutes", 0) <= wet.get("eta_minutes", 0),
+          f"{wet.get('dry_eta_minutes')} vs {wet.get('eta_minutes')} min")
+    ponding_advisory = next((a for a in wet_conditions.get("advisories", []) if a.get("kind") == "ponding"), None)
+    check("  standing water is explained in plain language", ponding_advisory is not None,
+          (ponding_advisory or {}).get("message", "")[:70])
+
+    status, flooded_out = route(client, origin_node=origin, use_live_conditions=True, conditions=weather_snapshot(140.0))
+    check("POST /api/calculate-route (140 mm/h, district-impassable)", status == 200, f"{status}")
+    check("  extreme rainfall leaves no route", flooded_out.get("success") is False, flooded_out.get("message", "")[:70])
+
+    status, warned = route(client, origin_node=origin, use_live_conditions=True, conditions=weather_snapshot(
+        3.0, alerts=[{"event": "Flash Flood Warning", "hazard": "flood", "severity": "severe", "weight": 0.75}]))
+    warned_conditions = warned.get("road_conditions") or {}
+    check("POST /api/calculate-route (flash flood warning)", status == 200, f"{status}")
+    check("  warning raises the assumed rainfall intensity", warned_conditions.get("intensity_mm_h", 0) > 30,
+          f"{warned_conditions.get('intensity_mm_h')} mm/h from a 3 mm/h local gauge")
+    check("  warning is carried through to the operator",
+          bool(warned_conditions.get("alerts")) and warned_conditions["alerts"][0]["event"] == "Flash Flood Warning")
+
+    status, windy = route(client, origin_node=origin, use_live_conditions=True,
+                          conditions=weather_snapshot(0.0, gust=60.0))
+    wind_factors = (windy.get("road_conditions") or {}).get("speed_factors", {})
+    check("POST /api/calculate-route (60 mph gusts)", status == 200, f"{status}")
+    check("  bridge decks slow more than sheltered streets",
+          wind_factors.get("bridge_vehicle", 1) < wind_factors.get("vehicle", 1),
+          f"deck x{wind_factors.get('bridge_vehicle')} vs street x{wind_factors.get('vehicle')}")
+
+    status, icy = route(client, origin_node=origin, use_live_conditions=True, conditions=weather_snapshot(3.0, code=66))
+    check("POST /api/calculate-route (freezing rain)", status == 200, f"{status}")
+    check("  freezing conditions cut speed hardest", (icy.get("road_conditions") or {}).get("speed_factor", 1) <= 0.6,
+          f"x{(icy.get('road_conditions') or {}).get('speed_factor')}")
+
+    status, hot = route(client, origin_node=origin, travel_mode="foot", use_live_conditions=True, conditions=weather_snapshot(
+        0.0, alerts=[{"event": "Excessive Heat Warning", "hazard": "heat", "severity": "severe", "weight": 0.75}]))
+    check("POST /api/calculate-route (heat warning, on foot)", status == 200, f"{status}")
+    check("  heat slows pedestrians only", (hot.get("road_conditions") or {}).get("speed_factor", 1) < 0.9,
+          f"foot x{(hot.get('road_conditions') or {}).get('speed_factor')}")
+    status, hot_drive = route(client, origin_node=origin, use_live_conditions=True, conditions=weather_snapshot(
+        0.0, alerts=[{"event": "Excessive Heat Warning", "hazard": "heat", "severity": "severe", "weight": 0.75}]))
+    check("  heat leaves vehicles alone", abs(hot_drive.get("eta_minutes", 0) - clear.get("eta_minutes", 0)) <= 0.1,
+          f"{hot_drive.get('eta_minutes')} vs {clear.get('eta_minutes')} min")
+
+    # ---- operator's own destination ----
+
+    inner = [n["id"] for n in nodes if n["id"] not in exits and not n.get("elevated") and n["id"] != origin]
+    custom_target = inner[len(inner) // 2]
+    status, custom = route(client, origin_node=origin, destination_node=custom_target, destination_label="Rally point 4")
+    check("POST /api/calculate-route (custom destination)", status == 200 and custom.get("success") is True, f"{status}")
+    check("  route terminates at the operator's junction", custom.get("dest_node") == custom_target,
+          f"{custom.get('dest_node')} vs {custom_target}")
+    check("  custom destination is labelled", custom.get("destination_name") == "Rally point 4", custom.get("destination_name", ""))
+    check("  custom destination is typed", custom.get("destination_kind") == "custom", custom.get("destination_kind", ""))
+    check("  custom route still has turn-by-turn steps", len(custom.get("route_steps", [])) > 0)
+
+    status, same = route(client, origin_node=origin, destination_node=origin)
+    check("  destination at the origin is refused", same.get("success") is False, same.get("message", "")[:60])
+    status, nowhere = route(client, origin_node=origin, destination_node=30000)
+    check("  destination outside the district is refused", nowhere.get("success") is False, nowhere.get("message", "")[:60])
+
+    # ---- corridors under conditions ----
+
+    r = client.get("/api/compare-corridors", params={"origin": origin, "travel_mode": "vehicle", "use_live_conditions": True})
+    check("GET /api/compare-corridors (live conditions)", r.status_code == 200, f"{r.status_code}")
+    live_corridors = r.json() if r.status_code == 200 else {}
+    check("  corridors carry standing-water detail",
+          all("ponded_segments" in c and "max_ponding_m" in c for c in live_corridors.get("corridors", [])))
+    check("  unusable exits are listed", isinstance(live_corridors.get("unusable_exits"), list))
+
     # Closing the first segment of the route forces a different first segment.
     if len(vehicle.get("path", [])) >= 2:
         first = vehicle["path"][:2]
@@ -178,6 +290,15 @@ def main() -> int:
     if os.environ.get("SMOKE_OBSERVATIONS"):
         r = client.get("/api/observations")
         check("GET /api/observations", r.status_code == 200, f"{r.status_code}")
+
+    if os.environ.get("SMOKE_LIVE"):
+        r = client.get("/api/conditions")
+        check("GET /api/conditions", r.status_code == 200, f"{r.status_code}")
+        live = r.json().get("conditions", {}) if r.status_code == 200 else {}
+        check("  live conditions carry a source", bool(live.get("sources", {}).get("weather")), live.get("status", ""))
+        check("  speed factors published for every mode",
+              all(mode in live.get("speed_factors", {}) for mode in ("vehicle", "ems", "foot")))
+        check("  advisories always explain the roadway", len(live.get("advisories", [])) > 0)
 
     print()
     if failures:

@@ -232,6 +232,39 @@
 .locateButton:active:not(:disabled) { transform: scale(0.98); }
 .locateButton[aria-busy='true'] svg { animation: locate-spin 1.2s linear infinite; }
 @keyframes locate-spin { to { transform: rotate(360deg); } }
+.locateButtonActive {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  margin: 8px 0;
+  border: 1px solid var(--signal);
+  border-radius: var(--radius-m);
+  background: var(--signal-soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  animation: pin-pulse 1.8s var(--ease-out) infinite;
+}
+.locateButtonActive svg { color: var(--signal); }
+@keyframes pin-pulse { 50% { box-shadow: 0 0 0 4px rgba(255, 154, 60, 0.14); } }
+/* The chosen destination, shown the way a shelter row is: name, place, ETA. */
+.customDestination {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 154, 60, 0.4);
+  border-radius: var(--radius-m);
+  background: var(--signal-soft);
+}
+.customDestination > svg { color: var(--signal); }
+.customDestination strong { display: block; color: var(--ink); font-size: 12px; }
+.customDestination small { color: var(--ink-3); font-size: 11px; }
 .locateFollow { margin: 4px 0 8px; }
 .search { position: relative; display: flex; align-items: center; margin-top: 8px; }
 .search > svg { position: absolute; left: 11px; color: var(--ink-3); pointer-events: none; }

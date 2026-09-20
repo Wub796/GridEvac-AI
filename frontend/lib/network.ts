@@ -1,6 +1,34 @@
-import type { CityData } from './types';
+import type { CityData, NodeData } from './types';
 
 const METERS_PER_DEG_LAT = 111320;
+
+/** A junction matched to a point on the ground, with how far off it landed. */
+export interface JunctionMatch {
+  node: NodeData;
+  /** Distance from the requested point to the junction, metres. */
+  distanceM: number;
+}
+
+/**
+ * The logical junction nearest a point on the ground.
+ *
+ * Used for destinations the operator supplies themselves - a pin, a pasted
+ * coordinate, a geocoded place - because a route has to end at a street
+ * junction. Candidates are the same logical junctions the map makes
+ * clickable, so a destination is always somewhere a route can actually reach.
+ */
+export function nearestJunction(cityData: CityData, lat: number, lon: number): JunctionMatch | null {
+  const junctions = logicalJunctions(cityData);
+  const cos = Math.cos((lat * Math.PI) / 180);
+  let best: JunctionMatch | null = null;
+  cityData.nodes.forEach((node) => {
+    if (!junctions.ids.has(node.id)) return;
+    const position = junctions.positions.get(node.id) ?? node;
+    const distanceM = Math.hypot((position.lat - lat) * METERS_PER_DEG_LAT, (position.lon - lon) * METERS_PER_DEG_LAT * cos);
+    if (!best || distanceM < best.distanceM) best = { node, distanceM };
+  });
+  return best;
+}
 
 /**
  * The set of nodes that deserve a clickable dot: real street junctions
@@ -23,7 +51,7 @@ type LogicalJunctions = {
 
 const junctionCache = new WeakMap<CityData, Map<string, LogicalJunctions>>();
 
-/** Cached: clustering is quadratic in candidates and many views ask for it. */
+/** Cached: clustering is quadratic in candidates, and many views ask for it. */
 export function logicalJunctions(cityData: CityData, extraExitIds: Iterable<number> = []): LogicalJunctions {
   const extras = Array.from(extraExitIds).sort((a, b) => a - b);
   const key = extras.join(',');

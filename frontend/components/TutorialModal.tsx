@@ -13,6 +13,14 @@ const STEPS: Array<{ title: string; body: ReactNode }> = [
     body: <>Choose <strong>Use my location</strong> to start from the nearest passable street to you, or click a dry junction on the map. Vehicle routes obey one-way streets; on-foot routes use sidewalks in both directions. Your location stays in the browser.</>,
   },
   {
+    title: 'Route on today\u2019s conditions, not a dry street',
+    body: <>The <strong>Today&rsquo;s roadway</strong> panel reads live rainfall, gusts and every active National Weather Service warning. Turn on <strong>Route on these conditions</strong> and the route avoids junctions holding standing water, slows for wet pavement and ice, drops speed on exposed bridge decks in high wind, and inflates on-foot times in extreme heat. The ETA shows the extra minutes today&rsquo;s weather costs against a dry street.</>,
+  },
+  {
+    title: 'Pick your own destination',
+    body: <>Not a shelter? Press <kbd>D</kbd> (or use the Route tab) to drop a pin anywhere on the map, search a junction or street by name, or paste a coordinate. The panel reports how far your point sat from the junction the route actually ends at, so nobody is misled about where it finishes.</>,
+  },
+  {
     title: 'Close streets you know are blocked',
     body: <>Turn on <strong>Close streets</strong> (or press <kbd>C</kbd>) and click any street segment: a stalled truck, downed line, or police barricade. The route re-solves around it. Click again to reopen.</>,
   },
