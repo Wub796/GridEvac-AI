@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     'Evacuation routing for downtown Houston on real USGS terrain and the OpenStreetMap street network. '
     + 'Model Buffalo Bayou flooding, utility outages, and road closures; get passable corridors, trigger points, and exportable situation reports.',
   keywords: ['evacuation', 'Houston', 'flood', 'emergency management', 'routing', 'GIS', 'USNG'],
-  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'GridEvac' },
+  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'GridEvac' },
   formatDetection: { telephone: false },
 };
 
@@ -37,7 +37,7 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
-  themeColor: '#0a1115',
+  themeColor: '#f1ede2',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

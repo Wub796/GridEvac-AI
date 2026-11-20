@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useSimulationStore, type UserLocation } from '@/hooks/useSimulation';
 import { useScrollProgress } from '@/hooks/useScrollProgress';
 import { waterSurfaceM } from '@/lib/solver';
@@ -31,6 +31,42 @@ export default function NetworkCanvas() {
   const floodLevel = useSimulationStore((state) => state.floodLevel);
   const originNode = useSimulationStore((state) => state.originNode);
   const userLocation = useSimulationStore((state) => state.userLocation);
+  const setFloodLevel = useSimulationStore((state) => state.setFloodLevel);
+  const drag = useRef<{ id: number; startY: number; moved: boolean } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+
+  /** The frame is the gauge: its top edge is level 10, its bottom edge is dry. */
+  const levelAt = (frame: HTMLDivElement, clientY: number) => {
+    const rect = frame.getBoundingClientRect();
+    const ratio = 1 - (clientY - rect.top) / rect.height;
+    return Math.round(Math.max(0, Math.min(1, ratio)) * 100) / 10;
+  };
+
+  const startScrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    drag.current = { id: event.pointerId, startY: event.clientY, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setScrubbing(true);
+    setFloodLevel(levelAt(event.currentTarget, event.clientY));
+  };
+
+  const moveScrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    if (Math.abs(event.clientY - active.startY) > 3) active.moved = true;
+    // A finger that drags vertically is scrolling the sheet, not the water.
+    if (event.pointerType !== 'mouse') return;
+    setFloodLevel(levelAt(event.currentTarget, event.clientY));
+  };
+
+  const endScrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const active = drag.current;
+    if (!active || active.id !== event.pointerId) return;
+    // On touch, a tap sets the level where it landed; a drag belongs to the page.
+    if (event.pointerType !== 'mouse' && !active.moved) setFloodLevel(levelAt(event.currentTarget, event.clientY));
+    drag.current = null;
+    setScrubbing(false);
+  };
 
   const engine = useRef({
     terrain: null as TerrainGrid | null,
@@ -400,8 +436,21 @@ export default function NetworkCanvas() {
   const surface = waterSurfaceM(cityData, floodLevel);
   return (
     <figure className="nc" ref={figureRef}>
-      <div className="nc-frame">
-        <canvas ref={canvasRef} className="nc-canvas" role="img" aria-label={`Downtown Houston street network with water at ${surface.toFixed(1)} metres and the recommended corridor`} />
+      <div
+        className="nc-frame"
+        onPointerDown={startScrub}
+        onPointerMove={moveScrub}
+        onPointerUp={endScrub}
+        onPointerCancel={endScrub}
+      >
+        <canvas ref={canvasRef} className="nc-canvas" role="img" aria-label={`Downtown Houston street network with water at ${surface.toFixed(1)} metres and the recommended corridor. Drag, or tap on touch, to set the water level.`} />
+        {scrubbing && (
+          <span className="nc-water" role="status">
+            <b>{floodLevel.toFixed(1)}</b>
+            <span>level / {surface.toFixed(2)} m NAVD88</span>
+          </span>
+        )}
+        <span className="nc-hint" aria-hidden="true">{scrubbing ? 'release to set' : 'drag to raise water'}</span>
       </div>
       <figcaption className="nc-caption">
         {cityData
