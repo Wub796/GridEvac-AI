@@ -99,14 +99,14 @@ The site runs as **two Vercel projects from this repository**, both on the Hobby
 | Frontend | `frontend` | Next.js, auto-detected from `package.json` |
 | API | `backend` | FastAPI, auto-detected from `requirements.txt`; entrypoint `main.py` (`app`) |
 
-1. **API project** — Add New → Project → import this repo → set **Root Directory** to `backend`. No build command or output directory is needed. `backend/.python-version` pins Python 3.12 (pydantic 2.7.1 has no wheels for 3.13+) and `backend/vercel.json` allows 60 s per request, since `/api/conditions` relays live USGS, Open-Meteo and NWS data. Set both CORS variables on **every** environment:
+1. **API project** — Add New → Project → import this repo → set **Root Directory** to `backend` and the **Framework Preset** to **FastAPI**. The preset is what resolves `main.py` as the function entrypoint; on **Other**, `backend/vercel.json`'s `functions` pattern matches nothing and the build fails with `unused_function`. No build command or output directory is needed. `backend/.python-version` pins Python 3.12 (pydantic 2.7.1 has no wheels for 3.13+) and `backend/vercel.json` allows 60 s per request, since `/api/conditions` relays live USGS, Open-Meteo and NWS data. Set both CORS variables on **every** environment:
 
    | Variable | Value |
    |---|---|
    | `GRIDEVAC_CORS_ORIGINS` | `https://grid-evac-ai.vercel.app` |
    | `GRIDEVAC_CORS_ORIGIN_REGEX` | `https://grid-evac-ai-[a-z0-9-]+\.vercel\.app` |
 
-   The regex covers the frontend's per-commit preview aliases, so a preview deployment never needs its own CORS entry. Then `GET https://<api-project>.vercel.app/health` should return 200 and `/docs` should render.
+   The regex covers the frontend's per-commit preview aliases, so a preview deployment never needs its own CORS entry. This repository's API project is `grid-evac-ai-api`, so `GET https://grid-evac-ai-api.vercel.app/health` should return 200 and `/docs` should render.
 2. **Frontend project** — set `NEXT_PUBLIC_API_URL` **per environment** under Settings → Environment Variables. It is inlined into the bundle at build time, so a change only applies to the next build, and Vercel builds each environment separately:
 
    | Vercel environment | `NEXT_PUBLIC_API_URL` | Result |
