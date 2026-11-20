@@ -61,7 +61,7 @@ function detach() {
   root = null;
 }
 
-export function useScrollProgress(ref: RefObject<HTMLElement>) {
+export function useScrollProgress(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const element = ref.current;
     if (!element) return;

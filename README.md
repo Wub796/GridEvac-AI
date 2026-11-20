@@ -49,7 +49,7 @@ GridEvac/
 │   ├── anomaly.py               IsolationForest risk score
 │   ├── models.py                Pydantic schemas
 │   └── data/houston_network.json
-├── frontend/                    Next.js 14 app (its own Vercel project)
+├── frontend/                    Next.js 15 app (its own Vercel project)
 │   ├── app/                     Page shell and global styles
 │   ├── components/              Map (CesiumJS), control panel, briefing and audit panels
 │   ├── hooks/useSimulation.ts   Zustand store: scenario state, solver orchestration, event log
