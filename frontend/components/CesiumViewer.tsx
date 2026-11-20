@@ -348,6 +348,8 @@ export default function CesiumViewer() {
         selectionIndicator: false,
         timeline: false,
         navigationHelpButton: false,
+        // Attribution belongs to the sheet below the map, not over the terrain.
+        creditContainer: document.getElementById('map-credit-mount') ?? undefined,
         // On-demand rendering: frames draw only when something changes.
         requestRenderMode: true,
         maximumRenderTimeChange: Infinity,

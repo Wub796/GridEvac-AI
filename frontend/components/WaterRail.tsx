@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import Icon, { type IconName } from '@/components/Icon';
 import { useSimulationStore, type Section } from '@/hooks/useSimulation';
 import { waterSurfaceM } from '@/lib/solver';
@@ -14,7 +14,8 @@ const SECTIONS: Array<{ id: Section; label: string; icon: IconName; key: string 
 /**
  * Section navigation above a staff gauge. The gauge is the scenario itself:
  * drag its water column (or use the arrow keys) and the flood level follows.
- * Its scale is the modeled water surface on NAVD88, always in view.
+ * The staff stands upright in the desktop rail and lies flat across the
+ * phone's bottom bar, so the control survives every layout.
  */
 export default function WaterRail({ onNavigate }: { onNavigate: (section: Section) => void }) {
   const active = useSimulationStore((state) => state.activeSection);
@@ -23,29 +24,41 @@ export default function WaterRail({ onNavigate }: { onNavigate: (section: Sectio
   const cityData = useSimulationStore((state) => state.cityData);
   const staffRef = useRef<HTMLDivElement | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
+  const [horizontal, setHorizontal] = useState(false);
+
+  // Phones lay the staff flat; the slider's orientation has to follow the CSS.
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 760px)');
+    const sync = () => setHorizontal(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
 
   const activeIndex = Math.max(0, SECTIONS.findIndex((section) => section.id === active));
   const surface = waterSurfaceM(cityData, floodLevel);
   const datum = cityData?.flood_model?.datum_m ?? 0;
   const rise = cityData?.flood_model?.rise_per_level_m ?? 1.7;
 
-  /** Turn a pointer height inside the staff into a 0–10 level, rounded to 0.1. */
-  const levelAt = useCallback((clientY: number) => {
+  /** Turn a pointer position inside the staff into a 0–10 level, rounded to 0.1. */
+  const levelAt = useCallback((clientX: number, clientY: number) => {
     const rect = staffRef.current?.getBoundingClientRect();
-    if (!rect || rect.height === 0) return 0;
-    const ratio = (rect.bottom - clientY) / rect.height;
+    if (!rect) return 0;
+    const ratio = rect.width > rect.height
+      ? (clientX - rect.left) / rect.width
+      : (rect.bottom - clientY) / rect.height;
     return Math.round(Math.min(1, Math.max(0, ratio)) * 100) / 10;
   }, []);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     setScrubbing(true);
-    setFloodLevel(levelAt(event.clientY));
+    setFloodLevel(levelAt(event.clientX, event.clientY));
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (!scrubbing) return;
-    setFloodLevel(levelAt(event.clientY));
+    setFloodLevel(levelAt(event.clientX, event.clientY));
   };
 
   const endScrub = (event: PointerEvent<HTMLDivElement>) => {
@@ -94,7 +107,7 @@ export default function WaterRail({ onNavigate }: { onNavigate: (section: Sectio
           role="slider"
           tabIndex={0}
           aria-label="Scenario water level"
-          aria-orientation="vertical"
+          aria-orientation={horizontal ? 'horizontal' : 'vertical'}
           aria-valuemin={0}
           aria-valuemax={10}
           aria-valuenow={Number(floodLevel.toFixed(1))}

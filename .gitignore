@@ -30,3 +30,7 @@ Thumbs.db
 tools/.cache/
 .freebuff/
 .claude/
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/

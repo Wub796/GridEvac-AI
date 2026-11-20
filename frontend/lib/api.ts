@@ -13,6 +13,19 @@ import type {
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 const DEFAULT_TIMEOUT = 20_000;
 
+const LOOPBACK = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/i;
+
+/**
+ * Whether this build can actually reach a routing API. A loopback URL baked
+ * into a deployed page points at the visitor's own machine, so the app treats
+ * it as absent and never fires requests that can only fail.
+ */
+export const apiConfigured: boolean = (() => {
+  if (!BASE_URL) return false;
+  if (typeof window === 'undefined') return true;
+  return !LOOPBACK.test(BASE_URL.trim()) || LOOPBACK.test(window.location.origin);
+})();
+
 /** Scenario query parameters shared by the GET analysis endpoints. */
 export interface ScenarioQuery {
   origin: number;

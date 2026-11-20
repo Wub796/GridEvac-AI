@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { CorridorTable, EventLog, MethodNotes } from '@/components/AuditPanels';
 import { ExposureCard, Readings, RecommendationCard, SheltersCard } from '@/components/BriefingPanels';
 import ControlPanel from '@/components/ControlPanel';
@@ -15,6 +15,7 @@ import RouteTimeline from '@/components/RouteTimeline';
 import TriggerGauge from '@/components/TriggerGauge';
 import TutorialModal from '@/components/TutorialModal';
 import WaterRail from '@/components/WaterRail';
+import { apiConfigured } from '@/lib/api';
 import { scenarioUrl, useSimulationStore, type Section } from '@/hooks/useSimulation';
 import { computeExposure } from '@/lib/exposure';
 import { buildEventCsv, buildGeoJson, buildSituationReport, centralTime, downloadFile, fileStamp } from '@/lib/exports';
@@ -60,9 +61,18 @@ function ConnectionStatus() {
   const cityData = useSimulationStore((state) => state.cityData);
   const reconnect = useSimulationStore((state) => state.reconnect);
   if (!cityData) return <span className="connection">Connecting</span>;
-  return backendOnline
-    ? <span className="connection connection--online"><i />Routing API</span>
-    : <button className="connection connection--offline" onClick={() => void reconnect()} title="Retry the routing API"><i />Local solver</button>;
+  if (backendOnline) return <span className="connection connection--online"><i />Routing API</span>;
+  return (
+    <button
+      className="connection connection--offline"
+      onClick={() => void reconnect()}
+      title={apiConfigured
+        ? 'The routing API is unreachable. Routes are solved in this browser; click to retry.'
+        : 'This build has no routing API, so every route is solved in your browser.'}
+    >
+      <i />{apiConfigured ? 'Local solver' : 'Local solver · no API'}
+    </button>
+  );
 }
 
 /** The standing answer, kept in the bar so the scenario never leaves the screen. */
@@ -139,6 +149,9 @@ export default function HomePage() {
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditTab, setAuditTab] = useState<AuditTab>('turns');
   const [briefingOpen, setBriefingOpen] = useState(false);
+  const [boardRestored, setBoardRestored] = useState(false);
+  const auditTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const auditToggleRef = useRef<HTMLButtonElement | null>(null);
 
   const fetchCityData = useSimulationStore((state) => state.fetchCityData);
   const triggerLiveTick = useSimulationStore((state) => state.triggerLiveTick);
@@ -171,10 +184,24 @@ export default function HomePage() {
     };
   }, [fetchCityData, triggerLiveTick, refreshObservations]);
 
-  // Phones and short windows start with the analysis folded away.
+  // The board remembers how this operator works: a drawer left open stays open.
   useEffect(() => {
-    if (window.matchMedia('(max-width: 900px)').matches) setAuditOpen(false);
+    try {
+      setAuditOpen(window.localStorage.getItem('gridevac-board-audit') === '1');
+      setBriefingOpen(window.localStorage.getItem('gridevac-board-briefing') === '1');
+    } catch { /* storage blocked */ }
+    setBoardRestored(true);
   }, []);
+
+  useEffect(() => {
+    if (!boardRestored) return;
+    try { window.localStorage.setItem('gridevac-board-audit', auditOpen ? '1' : '0'); } catch { /* ignore */ }
+  }, [auditOpen, boardRestored]);
+
+  useEffect(() => {
+    if (!boardRestored) return;
+    try { window.localStorage.setItem('gridevac-board-briefing', briefingOpen ? '1' : '0'); } catch { /* ignore */ }
+  }, [briefingOpen, boardRestored]);
 
   // First visit: open the guide once per browser, after hydration.
   useEffect(() => {
@@ -195,6 +222,33 @@ export default function HomePage() {
     const timer = window.setTimeout(() => setToast(''), 2800);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  const focusAuditTab = useCallback((id: AuditTab) => {
+    const index = AUDIT_TABS.findIndex((item) => item.id === id);
+    window.requestAnimationFrame(() => auditTabRefs.current[index]?.focus());
+  }, []);
+
+  /** Open or close the audit drawer, taking focus with it in both directions. */
+  const toggleAudit = useCallback(() => {
+    const next = !auditOpen;
+    setAuditOpen(next);
+    if (next) focusAuditTab(auditTab);
+    else window.requestAnimationFrame(() => auditToggleRef.current?.focus());
+  }, [auditOpen, auditTab, focusAuditTab]);
+
+  const onAuditTabKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const index = AUDIT_TABS.findIndex((item) => item.id === auditTab);
+    let next = index;
+    if (event.key === 'ArrowRight') next = (index + 1) % AUDIT_TABS.length;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + AUDIT_TABS.length) % AUDIT_TABS.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = AUDIT_TABS.length - 1;
+    else return;
+    event.preventDefault();
+    setAuditTab(AUDIT_TABS[next].id);
+    setAuditOpen(true);
+    auditTabRefs.current[next]?.focus();
+  };
 
   /** Rail and number keys move the workspace, not a document: each one reveals its region. */
   const navigate = useCallback((section: Section) => {
@@ -263,12 +317,13 @@ export default function HomePage() {
       } else if (event.key === 'Escape') {
         if (state.pinMode) state.setPinMode(false);
         else if (state.closureMode) state.setClosureMode(false);
+        else if (auditOpen) setAuditOpen(false);
         else setBriefingOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate]);
+  }, [navigate, auditOpen]);
 
   return (
     <main className="app-shell" data-audit={auditOpen}>
@@ -328,30 +383,36 @@ export default function HomePage() {
             <CesiumViewer />
           </div>
           <MapFacts />
+          <div id="map-credit-mount" className="map-credit-mount" aria-label="Map data attribution" />
         </section>
 
         <section className="pane pane-scenario" aria-label="Scenario and route controls">
-          <ControlPanel docked />
+          <ControlPanel />
         </section>
       </div>
 
       <section className="drawer" data-open={auditOpen} aria-label="Route audit">
         <header className="drawer-bar">
           <button
+            ref={auditToggleRef}
             className="drawer-toggle"
-            onClick={() => setAuditOpen(!auditOpen)}
+            onClick={toggleAudit}
             aria-expanded={auditOpen}
             aria-controls="audit-body"
           >
             <Icon name="chevronRight" size={15} className={auditOpen ? 'drawer-chevron is-open' : 'drawer-chevron'} />
             Route audit
           </button>
-          <div className="drawer-tabs" role="tablist" aria-label="Audit views">
-            {AUDIT_TABS.map((item) => (
+          <div className="drawer-tabs" role="tablist" aria-label="Audit views" onKeyDown={onAuditTabKey}>
+            {AUDIT_TABS.map((item, index) => (
               <button
                 key={item.id}
+                ref={(element) => { auditTabRefs.current[index] = element; }}
                 role="tab"
+                id={`audit-tab-${item.id}`}
                 aria-selected={auditTab === item.id}
+                aria-controls="audit-body"
+                tabIndex={auditTab === item.id ? 0 : -1}
                 className={auditTab === item.id ? 'drawer-tab is-active' : 'drawer-tab'}
                 onClick={() => { setAuditTab(item.id); setAuditOpen(true); }}
               >
@@ -362,7 +423,13 @@ export default function HomePage() {
           <span className="drawer-meta">{route?.success ? `${route.route_steps.length} turns · ${route.eta_minutes.toFixed(1)} min` : '—'}</span>
         </header>
 
-        <div className="drawer-body" id="audit-body" hidden={!auditOpen} role="tabpanel" aria-label={AUDIT_TABS.find((item) => item.id === auditTab)?.label}>
+        <div
+          className="drawer-body"
+          id="audit-body"
+          hidden={!auditOpen}
+          role="tabpanel"
+          aria-labelledby={`audit-tab-${auditTab}`}
+        >
           {auditTab === 'turns' && <RouteTimeline />}
           {auditTab === 'corridors' && <CorridorTable />}
           {auditTab === 'triggers' && <TriggerGauge />}

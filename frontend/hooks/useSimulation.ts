@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api, type ScenarioQuery } from '@/lib/api';
+import { api, apiConfigured, type ScenarioQuery } from '@/lib/api';
 import type { OperatorEvent } from '@/lib/exports';
 import { snapToNetwork, type DeviceFix, type SnapResult } from '@/lib/locate';
 import { logicalJunctions } from '@/lib/network';
@@ -568,10 +568,17 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
       const shared = readSharedScenario();
       let city: CityData | null = null;
       let online = false;
-      try {
-        city = normalizeCityData(await api.getCityData());
-        online = true;
-      } catch {
+      // A build with no reachable API goes straight to the baked network:
+      // no request is sent that can only fail.
+      if (apiConfigured) {
+        try {
+          city = normalizeCityData(await api.getCityData());
+          online = true;
+        } catch {
+          const network = await baked;
+          if (network) city = buildOfflineCityData(network);
+        }
+      } else {
         const network = await baked;
         if (network) city = buildOfflineCityData(network);
       }
@@ -621,6 +628,11 @@ export const useSimulationStore = create<SimulationStore>((set, get) => {
     },
 
     reconnect: async () => {
+      if (!apiConfigured) {
+        set({ backendOnline: false });
+        get().addLog('This build has no routing API, so every route is solved in the browser. Set NEXT_PUBLIC_API_URL to use the server solver.', 'warning');
+        return;
+      }
       const online = await api.health();
       set({ backendOnline: online });
       get().addLog(online ? 'Routing API reachable again; results now come from the API.' : 'Routing API still unreachable; staying on the local solver.', online ? 'system' : 'warning');

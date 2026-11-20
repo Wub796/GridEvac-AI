@@ -243,19 +243,10 @@ function Switch({ checked, onChange, label, detail }: { checked: boolean; onChan
   );
 }
 
-/**
- * Control sheet. Floating (default) it sits over the map; `docked` holds it in
- * its own column of the board, where it never covers the map and cannot fold away.
- */
-export default function ControlPanel({ docked = false }: { docked?: boolean } = {}) {
+/** Control sheet: the board's control column, always docked beside the map. */
+export default function ControlPanel() {
   const [tab, setTab] = useState<Tab>('scenario');
-  const [collapsed, setCollapsed] = useState(false);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-
-  useEffect(() => {
-    // Floating on a phone, the sheet starts folded so the map is visible.
-    if (!docked && window.matchMedia('(max-width: 760px)').matches) setCollapsed(true);
-  }, [docked]);
 
   const route = useSimulationStore((state) => state.route);
   const cityData = useSimulationStore((state) => state.cityData);
@@ -290,28 +281,17 @@ export default function ControlPanel({ docked = false }: { docked?: boolean } = 
       ? `${eta?.toFixed(1)} min to ${route.destination_name || cityData?.exit_names?.[String(route.dest_node)] || 'exit'}`
       : route ? 'No passable corridor' : 'Loading';
   const tabIndex = TABS.findIndex((item) => item.id === tab);
-  const hiddenProps = collapsed ? ({ inert: '' } as Record<string, string>) : {};
 
   return (
-    <>
-      {!docked && (
-        <button className={`${styles.reopen} ${collapsed ? styles.reopenVisible : ''}`} onClick={() => setCollapsed(false)} aria-hidden={!collapsed} tabIndex={collapsed ? 0 : -1}>
-          <Icon name="layers" size={16} />Controls
-          {route?.success && <span className={styles.reopenEta}>{eta?.toFixed(1)} min</span>}
-        </button>
-      )}
-      <aside className={`${styles.panel} ${docked ? styles.panelDocked : ''} ${collapsed ? styles.panelHidden : ''}`} aria-label="Scenario and route controls" {...hiddenProps}>
-        <header className={styles.header}>
-          <div>
-            <h2>Controls</h2>
-            <p className={route && !route.success ? styles.statusBad : undefined} aria-live="polite">{statusLine}</p>
-          </div>
-          {!docked && (
-            <button className={styles.iconButton} onClick={() => setCollapsed(true)} aria-label="Hide controls"><Icon name="chevronRight" size={16} /></button>
-          )}
-        </header>
+    <aside className={styles.panel} aria-label="Scenario and route controls">
+      <header className={styles.header}>
+        <div>
+          <h2>Controls</h2>
+          <p className={route && !route.success ? styles.statusBad : undefined} aria-live="polite">{statusLine}</p>
+        </div>
+      </header>
 
-        <div className={styles.tabs} role="tablist" aria-label="Control groups" onKeyDown={onTabKey} style={{ '--tab': tabIndex } as CSSProperties}>
+      <div className={styles.tabs} role="tablist" aria-label="Control groups" onKeyDown={onTabKey} style={{ '--tab': tabIndex } as CSSProperties}>
           <span className={styles.tabIndicator} aria-hidden="true" />
           {TABS.map((item, index) => (
             <button
@@ -331,14 +311,13 @@ export default function ControlPanel({ docked = false }: { docked?: boolean } = 
           ))}
         </div>
 
-        <div className={styles.body} role="tabpanel" id={`control-panel-${tab}`} aria-labelledby={`control-tab-${tab}`} key={tab}>
-          {tab === 'scenario' && <ScenarioTab />}
-          {tab === 'route' && <RouteTab />}
-          {tab === 'analysis' && <AnalysisTab />}
-          {tab === 'layers' && <LayersTab />}
-        </div>
-      </aside>
-    </>
+      <div className={styles.body} role="tabpanel" id={`control-panel-${tab}`} aria-labelledby={`control-tab-${tab}`} key={tab}>
+        {tab === 'scenario' && <ScenarioTab />}
+        {tab === 'route' && <RouteTab />}
+        {tab === 'analysis' && <AnalysisTab />}
+        {tab === 'layers' && <LayersTab />}
+      </div>
+    </aside>
   );
 }
 

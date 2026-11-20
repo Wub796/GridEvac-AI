@@ -345,6 +345,24 @@ body::before {
 .pane-map .map-hud { top: 10px; left: 10px; font-size: 10px; }
 .pane-map .map-tools { top: 44px; left: 10px; }
 .pane-map .map-tool { width: 32px; height: 32px; }
+.pane-map .map-statusbar {
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  gap: 10px;
+  padding: 3px 7px;
+  font-size: 9.5px;
+}
+.pane-map .map-statusbar .map-coord { font-size: 9.5px; }
+.pane-map .map-scale i { width: 52px; height: 4px; }
+
+/* Cesium's attribution is part of the sheet, under the map, not on top of it. */
+.map-credit-mount { display: flex; align-items: center; gap: 10px; min-height: 10px; color: var(--ink-3); }
+.map-credit-mount .cesium-widget-credits { position: static; display: flex; align-items: center; gap: 10px; padding: 0; background: none; font-size: 9px; opacity: 1; }
+.map-credit-mount .cesium-credit-logoContainer img { height: 13px; width: auto; }
+.map-credit-mount .cesium-widget-credits a,
+.map-credit-mount .cesium-credit-text,
+.map-credit-mount .cesium-credit-expand-link { color: var(--ink-3) !important; font-size: 9px; }
 
 .pane-scenario {
   grid-area: scenario;
@@ -1317,15 +1335,39 @@ body::before {
     position: sticky;
     bottom: 0;
     z-index: 30;
-    flex-direction: row;
-    padding: 6px max(10px, env(safe-area-inset-left)) max(6px, env(safe-area-inset-bottom));
+    flex-direction: column-reverse;
+    gap: 6px;
+    padding: 8px max(10px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom));
     border-top: 2px solid var(--ink);
     border-right: 0;
   }
-  .rail-nav { display: grid; flex: 1; grid-template-columns: repeat(3, 1fr); }
+  .rail-nav { display: grid; flex: 0 0 auto; grid-template-columns: repeat(3, 1fr); }
   .rail-pill { width: calc(100% / 3); height: 100%; border-left: 0; border-top: 3px solid var(--signal-fill); transform: translateX(calc(var(--active, 0) * 100%)); }
-  .rail-link { height: 52px; }
-  .rail-gauge { display: none; }
+  .rail-link { height: 46px; }
+  /* The staff lies flat here: the water control has to survive on a phone. */
+  .rail-gauge {
+    flex: 0 0 auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto;
+    align-items: center;
+    justify-items: stretch;
+    gap: 10px;
+    min-height: 0;
+  }
+  .rail-gauge-title, .rail-gauge-datum { display: none; }
+  .rail-gauge-value { font-size: 11px; }
+  .rail-staff {
+    width: 100%;
+    height: 26px;
+    min-height: 0;
+    cursor: ew-resize;
+    background:
+      repeating-linear-gradient(to right, transparent 0 calc(10% - 1px), var(--rule-2) calc(10% - 1px) 10%),
+      var(--paper);
+  }
+  .rail-water { inset: 0 auto 0 0; height: auto; width: calc(var(--level, 0) * 100%); }
+  .rail-water i { display: none; }
+  .rail-tick { display: none; }
   .pane-directive { inset-inline-start: 0; left: 0; width: min(340px, 92vw); }
   .pane-map { padding: 8px; gap: 8px; }
   .pane-map .map-facts { display: none; }
@@ -1355,11 +1397,16 @@ body::before {
 }
 @media print {
   body { background: #fff; color: #000; }
-  body::before, .topbar, .rail, .toast, .guide-overlay, .map-console, .xm-menu { display: none !important; }
+  body::before, .topbar, .rail, .toast, .guide-overlay, .map-console, .xm-menu, .pane-scenario, .drawer-bar, .pane-close { display: none !important; }
+  /* A sitrep prints the verdict and the numbers: no drawing, no controls. */
+  .brief-mark .nc, .reco-actions, .card-actions, .locate-card { display: none !important; }
+  button { display: none !important; }
+  .map-credit-mount { display: none !important; }
   .app-shell, .board-main { display: block; height: auto; overflow: visible; }
   .pane-directive { position: static; display: block; width: auto; border: 0; transform: none; }
   .pane-scroll { display: block; overflow: visible; padding: 0 0 10pt; }
-  .drawer { max-height: none; border-top: 1pt solid #000; }
+  .drawer, .drawer-body { display: block !important; height: auto; max-height: none; overflow: visible; border-top: 1pt solid #000; }
+  .drawer-body { padding: 0; }
   .card, .reco, .readings { border-color: #000; background: #fff; }
 }
 
