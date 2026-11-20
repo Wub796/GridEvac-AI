@@ -2,6 +2,10 @@
 
 Evacuation routing for downtown Houston on the real OpenStreetMap street network and USGS 3DEP terrain. Operators raise the water, take substations offline, and close streets; GridEvac returns the safest passable corridor, turn-by-turn directions, the water level at which each way out is cut off, and exports for the incident log and GIS.
 
+**[Try it live: grid-evac-ai.vercel.app](https://grid-evac-ai.vercel.app)** — no account, no key, nothing to install.
+
+![GridEvac route planner: the recommended corridor on downtown Houston, the flood surface on USGS terrain, and the scenario controls](docs/screenshot.png)
+
 ## What it does
 
 **Scenario modeling**
@@ -37,7 +41,7 @@ Evacuation routing for downtown Houston on the real OpenStreetMap street network
 
 ```
 GridEvac/
-├── backend/                     FastAPI service
+├── backend/                     FastAPI service (its own Vercel project, root directory `backend`)
 │   ├── main.py                  Endpoints, cached city payload, live observations relay
 │   ├── routing.py               Flood model, power flow, routing, corridors, isochrones, trigger points
 │   ├── conditions.py            Live weather and NWS warnings -> standing water and speed factors
@@ -45,8 +49,8 @@ GridEvac/
 │   ├── anomaly.py               IsolationForest risk score
 │   ├── models.py                Pydantic schemas
 │   └── data/houston_network.json
-├── frontend/                    Next.js 14 app (deployed to Vercel)
-│   ├── api/                     Vercel Python function: synced mirror of backend/ (index.py re-exports main.app)
+├── frontend/                    Next.js 14 app (its own Vercel project)
+│   ├── api/                     Byte-identical mirror of backend/ kept by tools/sync_api_mirror.py (CI drift check; not deployed)
 │   ├── app/                     Page shell and global styles
 │   ├── components/              Map (CesiumJS), control panel, briefing and audit panels
 │   ├── hooks/useSimulation.ts   Zustand store: scenario state, solver orchestration, event log
@@ -64,12 +68,18 @@ The frontend works without the API: it loads the same baked network from `/data/
 
 ## Run locally
 
+Requires **Python 3.9+** and **Node.js 18+** (`npm`). Nothing else: the street network and terrain are already baked into the repository.
+
 ```bash
 bash start.sh
 ```
 
+`start.sh` creates `backend/.venv`, installs both dependency sets, and starts the two servers:
+
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8000 (OpenAPI docs at `/docs`)
+
+To run a part on its own: `cd backend && .venv/bin/uvicorn main:app --port 8000`, or `cd frontend && npm run dev`. The frontend is usable with only the frontend running — it solves in the browser from `/data/houston_network.json`.
 
 Optional environment (`frontend/.env.local`, and in Vercel project settings):
 
@@ -79,6 +89,18 @@ Optional environment (`frontend/.env.local`, and in Vercel project settings):
 | `NEXT_PUBLIC_CESIUM_TOKEN` | Cesium ion token: aerial imagery, world terrain, OSM 3D buildings |
 | `NEXT_PUBLIC_API_URL` | API origin when it is not served from the same host |
 | `GRIDEVAC_CORS_ORIGINS` | Backend: comma-separated allowed origins (default localhost:3000) |
+
+## Deploy
+
+The site runs as **two Vercel projects from this repository**. Vercel does not build file-based Python functions inside `/api` next to a Next.js app — the framework preset owns every route — so the API is deployed on its own:
+
+| Project | Root directory | How Vercel builds it |
+|---|---|---|
+| Frontend | `frontend` | Next.js, auto-detected from `package.json` |
+| API | `backend` | FastAPI, auto-detected from `requirements.txt`; entrypoint `main.py` (`app`) |
+
+1. **API project** — Add New → Project → import this repo → set **Root Directory** to `backend`. No build command or output directory is needed. `backend/.python-version` pins Python 3.12 (pydantic 2.7.1 has no wheels for 3.13+) and `backend/vercel.json` allows 60 s per request, since `/api/conditions` relays live USGS, Open-Meteo and NWS data. Set `GRIDEVAC_CORS_ORIGINS=https://grid-evac-ai.vercel.app` (comma-separate any preview or custom origins). Then `GET https://<api-project>.vercel.app/health` should return 200 and `/docs` should render.
+2. **Frontend project** — set `NEXT_PUBLIC_API_URL=https://<api-project>.vercel.app` and redeploy, because `NEXT_PUBLIC_*` is inlined at build time. With it unset, the browser calls `/api/*` on the frontend origin, gets a 404 and falls back to the in-browser solver: the app still works, it just stops using the Python service.
 
 ## API
 
