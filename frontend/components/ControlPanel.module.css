@@ -20,6 +20,19 @@
 }
 .panelHidden { opacity: 0; pointer-events: none; transform: translateX(calc(100% + 20px)); }
 
+/* Docked: a column of the board rather than a card over the map. The
+   .panel prefix keeps these overrides ahead of the floating/phone rules. */
+.panel.panelDocked {
+  position: relative;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .reopen {
   position: absolute;
   z-index: 8;
@@ -156,7 +169,15 @@
   font-size: 12px;
 }
 .liveDot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; background: var(--safe); vertical-align: middle; }
-.textButton { display: inline-flex; align-items: center; min-height: 24px; color: var(--signal); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.textButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  color: #9c3d06;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
 .textButton:hover { color: var(--ink); text-decoration: underline; }
 
 .chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 8px; }
@@ -419,6 +440,7 @@
 
 @media (max-width: 760px) {
   .panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 62%; }
+  .panel.panelDocked { inset: 0; width: 100%; max-height: none; }
   .panelHidden { transform: translateY(calc(100% + 20px)); }
   .reopen { top: auto; bottom: 12px; right: 12px; }
 }

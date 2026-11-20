@@ -65,8 +65,8 @@
 
   --sans: var(--font-public-sans), 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: var(--font-plex-mono), 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
-  --topbar-h: 64px;
-  --rail-w: 112px;
+  --topbar-h: 60px;
+  --rail-w: 76px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -116,7 +116,19 @@ body::before {
   opacity: 0.28;
 }
 
-.app-shell { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100dvh; }
+.app-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+}
+/* The audit row is the drawer's height: the row owns it, so the sheet cannot
+   be squashed by grid stretch and the map resizes instead. */
+.app-shell[data-audit='true'] { grid-template-rows: auto minmax(0, 1fr) min(38vh, 440px); }
+.topbar, .board-main, .drawer, .map-console { min-width: 0; }
 @supports not (height: 100dvh) { .app-shell { height: 100vh; } }
 
 .skip-link {
@@ -140,9 +152,9 @@ body::before {
   position: relative;
   z-index: 30;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 24px;
+  gap: 20px;
   height: var(--topbar-h);
   padding: 0 24px 0 20px;
   padding-left: max(20px, env(safe-area-inset-left));
@@ -246,43 +258,216 @@ body::before {
 .xm-item svg { flex: 0 0 auto; margin-top: 2px; color: var(--ink-3); }
 .xm-item:hover svg { color: var(--signal); }
 
-/* ------------------------------------------------------------- workspace */
-.workspace { position: relative; display: flex; flex: 1; min-height: 0; }
-.content-scroll {
+/* ------------------------------------------------------------------ board
+   One screen, four regions, no document scroll. The briefing reads left to
+   right into the map and its controls; the audit is a drawer along the
+   bottom edge so a turn list never pushes the map out of view. */
+.board-main {
+  position: relative;
+  display: grid;
   flex: 1;
-  min-width: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scroll-behavior: smooth;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-color: var(--rule-2) transparent;
+  grid-template-columns: 76px minmax(300px, 336px) minmax(0, 1fr) 372px;
+  grid-template-areas: 'rail directive map scenario';
+  min-height: 0;
 }
-.section { position: relative; padding: 44px clamp(20px, 4vw, 56px) 56px; }
-.section > * { max-width: 1280px; margin-left: auto; margin-right: auto; }
-.section + .section { border-top: 2px solid var(--ink); }
-.section-head {
+.pane { position: relative; min-width: 0; min-height: 0; }
+
+.pane-directive {
+  grid-area: directive;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  border-right: 1px solid var(--rule-2);
+  background: var(--paper);
+}
+.pane-head {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
-  padding-bottom: 12px;
+  height: 34px;
+  flex: 0 0 34px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--rule-2);
 }
-.section-head h2 { font-size: clamp(26px, 2.4vw, 34px); line-height: 1.05; }
-.section-head p { max-width: 62ch; margin-top: 8px; color: var(--ink-2); font-size: 14px; }
-.section-head strong { color: var(--ink); }
+.pane-head h2 {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.pane-close { display: none; place-items: center; width: 26px; height: 26px; border: 1px solid var(--rule-2); color: var(--ink-2); }
+.pane-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--rule-2) transparent;
+}
+.pane-scroll > * { flex: 0 0 auto; margin: 0; }
+
+/* The statement is a masthead here, not a landing page: one column, read fast. */
+.brief-mark { display: grid; gap: 12px; padding-bottom: 2px; }
+.brief-mark h1 { font-size: 25px; line-height: 1.02; letter-spacing: -0.032em; }
+.brief-mark .nc { min-height: 198px; }
+.brief-mark .nc-canvas { min-height: 178px; }
+.brief-mark .nc-caption { display: none; }
+.brief-mark .nc-frame { border-width: 1px; }
+
+.pane-map {
+  grid-area: map;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+.pane-map:focus-visible { outline-offset: -4px; }
+.pane-map .map-console { flex: 1; height: auto; min-height: 240px; }
+.pane-map .map-facts { grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-top: 0; padding: 0 2px; }
+.pane-map .map-facts > div { padding-left: 8px; }
+.pane-map .map-facts dt { font-size: 10px; }
+.pane-map .map-facts dd { font-size: 12px; }
+.pane-map .map-facts dd.mono { display: none; }
+.pane-map .map-legend {
+  top: 10px;
+  right: 10px;
+  left: auto;
+  bottom: auto;
+  max-width: min(300px, calc(100% - 70px));
+  gap: 3px 10px;
+  padding: 5px 8px;
+  font-size: 10px;
+}
+.pane-map .map-hud { top: 10px; left: 10px; font-size: 10px; }
+.pane-map .map-tools { top: 44px; left: 10px; }
+.pane-map .map-tool { width: 32px; height: 32px; }
+
+.pane-scenario {
+  grid-area: scenario;
+  display: flex;
+  border-left: 1px solid var(--rule-2);
+  background: var(--paper-2);
+}
+.pane-scenario > * { flex: 1; min-width: 0; }
+
+/* Narrow columns get the card stack, not the four-up instrument row. */
+.pane-directive .readings { grid-template-columns: 1fr 1fr; }
+.pane-directive .reading:nth-child(3) { border-left: 0; }
+.pane-directive .reading:nth-child(n + 3) { border-top: 1px solid var(--rule-2); }
+.pane-directive .reading-value { font-size: 22px; }
+.pane-directive .card { padding: 14px; }
+.pane-directive .reco { padding: 14px; }
+.pane-directive .reco-main { flex-wrap: wrap; gap: 10px 16px; margin-top: 12px; }
+.pane-directive .reco-destination strong { font-size: 22px; }
+.pane-directive .reco-eta strong { font-size: 34px; }
+.pane-directive .locate-card { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+.pane-directive .locate-actions { grid-column: 1 / -1; justify-content: flex-start; }
+.pane-directive .nc-hint { font-size: 9px; }
+
+/* ------------------------------------------------------------ audit drawer */
+.drawer {
+  position: relative;
+  z-index: 25;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-top: 2px solid var(--ink);
+  background: var(--paper-2);
+}
+.drawer-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex: 0 0 40px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.drawer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.drawer-toggle:hover { color: var(--signal); }
+.drawer-chevron { transition: transform var(--dur-2) var(--ease-out); }
+.drawer-chevron.is-open { transform: rotate(90deg); }
+.drawer-tabs { display: flex; flex: 1; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.drawer-tabs::-webkit-scrollbar { display: none; }
+.drawer-tab {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.drawer-tab:hover { background: var(--paper-3); color: var(--ink); }
+.drawer-tab.is-active { border-color: var(--ink); background: var(--paper); color: var(--ink); font-weight: 600; }
+.drawer-meta { margin-left: auto; flex: 0 0 auto; color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.drawer-body { flex: 1; min-height: 0; padding: 14px; overflow-y: auto; scrollbar-color: var(--rule-2) transparent; }
+.drawer[data-open='false'] .drawer-body { display: none; }
+.drawer-split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; }
+.drawer-body .audit-grid { margin-bottom: 0; }
+.drawer-body .page-foot { max-width: 72ch; border-top: 0; padding-top: 0; }
+
+/* ------------------------------------------------------------ verdict bar */
+.ticker {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--rule-2);
+  color: var(--ink-2);
+  --tone: var(--rule-3);
+}
+.ticker--safe { --tone: var(--safe); }
+.ticker--watch { --tone: var(--watch); }
+.ticker--critical { --tone: var(--critical); }
+.ticker-dot { flex: 0 0 auto; align-self: center; width: 8px; height: 8px; background: var(--tone); }
+.ticker strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticker-eta { display: flex; align-items: baseline; gap: 3px; color: var(--signal); font-family: var(--mono); font-size: 17px; font-weight: 600; }
+.ticker-eta small { color: var(--ink-3); font-size: 10px; font-weight: 400; }
+.ticker-meta { color: var(--ink-3); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.ticker-label { color: var(--ink-3); font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+
+/* The rail's staff is a control: drag it and the scenario follows. */
+.rail-staff { cursor: ns-resize; touch-action: none; }
+.rail-staff:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.rail-staff.is-scrubbing .rail-water { transition: none; }
+.pane-toggle { display: none; }
 
 /* -------------------------------------------------------------- nav rail */
 .rail {
   position: relative;
   z-index: 20;
+  grid-area: rail;
   display: flex;
   flex: 0 0 var(--rail-w);
   flex-direction: column;
   gap: 16px;
-  padding: 16px 12px 20px;
-  padding-left: max(12px, env(safe-area-inset-left));
+  padding: 14px 10px 16px;
+  padding-left: max(10px, env(safe-area-inset-left));
   border-right: 1px solid var(--rule-2);
   background: var(--paper-2);
 }
@@ -431,30 +616,6 @@ body::before {
 .empty { padding: 16px; border: 1px dashed var(--rule-2); border-radius: var(--r-1); color: var(--ink-2); font-size: 13px; }
 
 /* ------------------------------------------------------------- briefing */
-.hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
-  gap: clamp(24px, 3vw, 48px);
-  align-items: stretch;
-}
-.hero-copy { display: flex; flex-direction: column; }
-.hero-copy h1 {
-  max-width: 16ch;
-  font-size: clamp(38px, 4.8vw, 66px);
-  font-weight: 700;
-  line-height: 1.0;
-  letter-spacing: -0.03em;
-  text-indent: -0.03em;
-  animation: rise var(--dur-4) var(--ease-out) both;
-}
-.hero-lede {
-  max-width: 54ch;
-  margin: 20px 0 24px;
-  color: var(--ink-2);
-  font-size: 15.5px;
-  line-height: 1.6;
-  animation: rise var(--dur-4) var(--ease-out) 90ms both;
-}
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
 
 /* The verdict, set as a dispatch slip: hazard band, mono figures, hard rules. */
@@ -889,7 +1050,7 @@ body::before {
 .map-hint--conditions { max-width: min(560px, calc(100% - 120px)); border-color: #2f7fa8; background: #11242c; color: var(--display-ink); white-space: normal; }
 .map-hint-close { display: grid; flex: 0 0 auto; place-items: center; width: 26px; height: 26px; border-radius: var(--r-1); color: var(--display-ink-2); }
 .map-hint-close:hover { background: var(--display-3); color: var(--display-ink); }
-.map-legend { left: 14px; bottom: 48px; display: flex; flex-wrap: wrap; gap: 6px 14px; max-width: min(480px, calc(100% - 420px)); padding: 8px 11px; color: var(--display-ink-2); font-family: var(--mono); font-size: 11px; }
+.map-legend { left: 14px; bottom: 48px; display: flex; flex-wrap: wrap; gap: 6px 14px; max-width: min(520px, calc(100% - 28px)); padding: 8px 11px; color: var(--display-ink-2); font-family: var(--mono); font-size: 11px; }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .lg { display: inline-block; flex: 0 0 auto; }
 .lg-route { width: 18px; height: 3px; background: var(--signal-fill); }
@@ -1098,33 +1259,64 @@ body::before {
 }
 
 /* ------------------------------------------------------------ responsive */
-@media (max-width: 1180px) {
-  .hero { grid-template-columns: 1fr; }
-  .nc { min-height: 380px; }
-  .briefing-grid { grid-template-columns: 1fr 1fr; }
-  .briefing-grid > :first-child { grid-column: 1 / -1; }
+/* Under 1360 the briefing folds into a sheet over the map; the board keeps
+   its map and controls side by side. */
+@media (max-width: 1360px) {
+  .board-main { grid-template-columns: 76px minmax(0, 1fr) 352px; grid-template-areas: 'rail map scenario'; }
+  .pane-directive {
+    position: absolute;
+    z-index: 60;
+    inset: 0 auto 0 76px;
+    width: min(362px, 86vw);
+    display: none;
+    border-right: 2px solid var(--ink);
+  }
+  .pane-directive[data-open='true'] { display: flex; }
+  .pane-close { display: grid; }
+  .pane-toggle { display: inline-flex; }
   .audit-grid, .audit-grid--even { grid-template-columns: 1fr; }
   .map-legend { display: none; }
 }
-@media (max-width: 900px) {
+@media (max-width: 1120px) {
+  .drawer-split { grid-template-columns: 1fr; }
+  .ticker-meta { display: none; }
   .topbar-status .clock { display: none; }
+  .pane-map .map-legend { display: none; }
+}
+@media (max-width: 1000px) {
+  .board-main {
+    grid-template-columns: 72px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 42vh;
+    grid-template-areas: 'rail map' 'rail scenario';
+    overflow-y: auto;
+  }
+  .pane-directive { left: 72px; }
+  .pane-scenario { border-top: 2px solid var(--ink); border-left: 0; }
+  .drawer { max-height: 38vh; }
   .readings { grid-template-columns: 1fr 1fr; }
   .reading:nth-child(3) { border-left: 0; }
   .reading:nth-child(n + 3) { border-top: 1px solid var(--rule-2); }
-  .map-facts { grid-template-columns: 1fr 1fr; }
   .map-statusbar { max-width: calc(100% - 28px); }
 }
 @media (max-width: 760px) {
   :root { --topbar-h: 56px; }
-  .topbar { grid-template-columns: auto 1fr; gap: 10px; padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  .topbar { grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
   .topbar-status { display: none; }
+  .ticker { display: none; }
   .brand-name span { display: none; }
   .topbar-actions { justify-content: flex-end; }
   .tool-button span { display: none; }
   .tool-button { width: 40px; padding: 0; }
-  .workspace { flex-direction: column-reverse; }
+  .board-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 46vh 62vh auto;
+    grid-template-areas: 'map' 'scenario' 'rail';
+    overflow-y: auto;
+  }
   .rail {
-    flex: 0 0 auto;
+    position: sticky;
+    bottom: 0;
+    z-index: 30;
     flex-direction: row;
     padding: 6px max(10px, env(safe-area-inset-left)) max(6px, env(safe-area-inset-bottom));
     border-top: 2px solid var(--ink);
@@ -1134,19 +1326,14 @@ body::before {
   .rail-pill { width: calc(100% / 3); height: 100%; border-left: 0; border-top: 3px solid var(--signal-fill); transform: translateX(calc(var(--active, 0) * 100%)); }
   .rail-link { height: 52px; }
   .rail-gauge { display: none; }
-  .section { padding: 28px 16px 40px; }
-  .hero-copy h1 { font-size: 38px; }
-  .nc { min-height: 320px; }
-  .nc-canvas { min-height: 300px; }
-  .locate-card { display: grid; grid-template-columns: auto minmax(0, 1fr); }
-  .locate-actions { grid-column: 1 / -1; justify-content: flex-start; }
-  .reco-main { flex-direction: column; align-items: flex-start; }
-  .briefing-grid { grid-template-columns: 1fr; }
-  .briefing-grid > :first-child { grid-column: auto; }
-  .reading { padding: 14px 16px 16px; }
-  .reading-value { font-size: 24px; }
+  .pane-directive { inset-inline-start: 0; left: 0; width: min(340px, 92vw); }
+  .pane-map { padding: 8px; gap: 8px; }
+  .pane-map .map-facts { display: none; }
+  .pane-scenario { height: 62vh; }
+  .drawer { max-height: 48vh; }
+  .drawer-meta { display: none; }
+  .brief-mark h1 { font-size: 23px; }
   .map-facts { grid-template-columns: 1fr; gap: 12px; }
-  .map-console { height: clamp(420px, calc(100dvh - var(--topbar-h) - 120px), 620px); }
   .tg-plot { grid-template-columns: 34px 26px minmax(0, 1fr); height: 320px; }
   .data-table th, .data-table td { padding: 9px 8px; }
   .table-wrap { margin: 0 -16px -16px; padding: 0 16px 16px; }
@@ -1169,9 +1356,10 @@ body::before {
 @media print {
   body { background: #fff; color: #000; }
   body::before, .topbar, .rail, .toast, .guide-overlay, .map-console, .xm-menu { display: none !important; }
-  .content-scroll { overflow: visible; height: auto; }
-  .section { padding: 0 0 18pt; break-inside: avoid; }
-  .section + .section { border-top: 1pt solid #000; }
+  .app-shell, .board-main { display: block; height: auto; overflow: visible; }
+  .pane-directive { position: static; display: block; width: auto; border: 0; transform: none; }
+  .pane-scroll { display: block; overflow: visible; padding: 0 0 10pt; }
+  .drawer { max-height: none; border-top: 1pt solid #000; }
   .card, .reco, .readings { border-color: #000; background: #fff; }
 }
 

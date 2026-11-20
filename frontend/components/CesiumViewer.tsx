@@ -594,7 +594,7 @@ export default function CesiumViewer() {
             viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(-95.3698, 29.7604, 5600), orientation: { heading: 0, pitch: Cesium.Math.toRadians(-89), roll: 0 }, duration: 2.6, easingFunction: Cesium.EasingFunction.QUADRATIC_IN_OUT });
           }
         }
-      }, { root: document.querySelector('.content-scroll'), threshold: 0.35 });
+      }, { root: null, threshold: 0.35 });
       visibility.observe(containerRef.current);
       setReady(true);
     })();

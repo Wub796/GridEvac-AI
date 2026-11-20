@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CorridorTable, EventLog, MethodNotes } from '@/components/AuditPanels';
 import { ExposureCard, Readings, RecommendationCard, SheltersCard } from '@/components/BriefingPanels';
 import ControlPanel from '@/components/ControlPanel';
@@ -16,7 +16,6 @@ import TriggerGauge from '@/components/TriggerGauge';
 import TutorialModal from '@/components/TutorialModal';
 import WaterRail from '@/components/WaterRail';
 import { scenarioUrl, useSimulationStore, type Section } from '@/hooks/useSimulation';
-import { useScrollProgress } from '@/hooks/useScrollProgress';
 import { computeExposure } from '@/lib/exposure';
 import { buildEventCsv, buildGeoJson, buildSituationReport, centralTime, downloadFile, fileStamp } from '@/lib/exports';
 import { waterSurfaceM } from '@/lib/solver';
@@ -34,6 +33,16 @@ const CesiumViewer = dynamic(() => import('@/components/CesiumViewer'), {
 });
 
 const SECTION_ORDER: Section[] = ['briefing', 'map', 'audit'];
+
+type AuditTab = 'turns' | 'corridors' | 'triggers' | 'log' | 'notes';
+
+const AUDIT_TABS: Array<{ id: AuditTab; label: string }> = [
+  { id: 'turns', label: 'Turn by turn' },
+  { id: 'corridors', label: 'Exit corridors' },
+  { id: 'triggers', label: 'Trigger points' },
+  { id: 'log', label: 'Event log' },
+  { id: 'notes', label: 'Method' },
+];
 
 /** Houston wall clock with the correct CST/CDT abbreviation; ticks without re-rendering the page. */
 function HoustonClock() {
@@ -54,6 +63,39 @@ function ConnectionStatus() {
   return backendOnline
     ? <span className="connection connection--online"><i />Routing API</span>
     : <button className="connection connection--offline" onClick={() => void reconnect()} title="Retry the routing API"><i />Local solver</button>;
+}
+
+/** The standing answer, kept in the bar so the scenario never leaves the screen. */
+function VerdictTicker() {
+  const route = useSimulationStore((state) => state.route);
+  const cityData = useSimulationStore((state) => state.cityData);
+  const floodLevel = useSimulationStore((state) => state.floodLevel);
+  const isLoading = useSimulationStore((state) => state.isLoading);
+  const destination = route?.success
+    ? route.destination_name || cityData?.exit_names?.[String(route.dest_node)] || 'Exit'
+    : null;
+  const eta = route?.success ? route.eta_minutes : null;
+  const tone = isLoading
+    ? 'watch'
+    : route?.success
+      ? (route.risk_level === 'LOW' ? 'safe' : route.risk_level === 'CRITICAL' ? 'critical' : 'watch')
+      : 'critical';
+  return (
+    <p className={`ticker ticker--${tone}`} aria-live="polite">
+      <i className="ticker-dot" aria-hidden="true" />
+      {isLoading ? (
+        <span className="ticker-label">Solving</span>
+      ) : destination && eta !== null ? (
+        <>
+          <strong>{destination}</strong>
+          <span className="ticker-eta">{eta.toFixed(1)}<small>min</small></span>
+          <span className="ticker-meta">{waterSurfaceM(cityData, floodLevel).toFixed(1)} m surface</span>
+        </>
+      ) : (
+        <span className="ticker-label">No passable corridor</span>
+      )}
+    </p>
+  );
 }
 
 function MapFacts() {
@@ -94,8 +136,9 @@ export default function HomePage() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [terrain, setTerrain] = useState<TerrainGrid | null>(null);
-  const mapStageRef = useRef<HTMLDivElement>(null);
-  useScrollProgress(mapStageRef);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditTab, setAuditTab] = useState<AuditTab>('turns');
+  const [briefingOpen, setBriefingOpen] = useState(false);
 
   const fetchCityData = useSimulationStore((state) => state.fetchCityData);
   const triggerLiveTick = useSimulationStore((state) => state.triggerLiveTick);
@@ -128,6 +171,11 @@ export default function HomePage() {
     };
   }, [fetchCityData, triggerLiveTick, refreshObservations]);
 
+  // Phones and short windows start with the analysis folded away.
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 900px)').matches) setAuditOpen(false);
+  }, []);
+
   // First visit: open the guide once per browser, after hydration.
   useEffect(() => {
     let seen = true;
@@ -148,24 +196,12 @@ export default function HomePage() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  useEffect(() => {
-    const scrollRoot = document.querySelector('.content-scroll');
-    if (!scrollRoot) return;
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      const section = visible?.target.getAttribute('data-section') as Section | null;
-      if (section) setActiveSection(section);
-    }, { root: scrollRoot, threshold: [0.25, 0.5, 0.75] });
-    scrollRoot.querySelectorAll('[data-section]').forEach((element) => observer.observe(element));
-    return () => observer.disconnect();
-  }, [setActiveSection]);
-
+  /** Rail and number keys move the workspace, not a document: each one reveals its region. */
   const navigate = useCallback((section: Section) => {
     setActiveSection(section);
-    document.querySelector(`[data-section="${section}"]`)?.scrollIntoView({
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-      block: 'start',
-    });
+    if (section === 'briefing') setBriefingOpen(true);
+    if (section === 'audit') setAuditOpen(true);
+    if (section === 'map') document.getElementById('route-planner')?.focus({ preventScroll: true });
   }, [setActiveSection]);
 
   const exportState = useCallback(() => {
@@ -227,6 +263,7 @@ export default function HomePage() {
       } else if (event.key === 'Escape') {
         if (state.pinMode) state.setPinMode(false);
         else if (state.closureMode) state.setClosureMode(false);
+        else setBriefingOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -234,8 +271,9 @@ export default function HomePage() {
   }, [navigate]);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-audit={auditOpen}>
       <a className="skip-link" href="#route-planner" onClick={() => navigate('map')}>Skip to the route planner</a>
+
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true"><Icon name="route" size={18} /></span>
@@ -244,84 +282,107 @@ export default function HomePage() {
             <span>Houston evacuation routing</span>
           </span>
         </div>
+
+        <VerdictTicker />
+
         <div className="topbar-status">
           <HoustonClock />
           <ConnectionStatus />
         </div>
+
         <div className="topbar-actions">
+          <button className="tool-button pane-toggle" onClick={() => setBriefingOpen(!briefingOpen)} aria-expanded={briefingOpen} aria-controls="briefing-pane">
+            <Icon name="file" size={16} /><span>Briefing</span>
+          </button>
           <button className="tool-button" onClick={() => void share()}><Icon name="share" size={17} /><span>Share</span></button>
           <ExportMenu onExport={handleExport} />
           <button className="icon-button" onClick={() => setGuideOpen(true)} aria-label="Open the operator guide" aria-keyshortcuts="?"><Icon name="help" size={18} /></button>
         </div>
       </header>
 
-      <div className="workspace">
+      <div className="board-main">
         <WaterRail onNavigate={navigate} />
 
-        <div className="content-scroll">
-          <section className="section briefing" data-section="briefing" aria-labelledby="briefing-title">
-            <div className="hero">
-              <div className="hero-copy">
-                <h1 id="briefing-title">Find the safe way out of downtown Houston.</h1>
-                <p className="hero-lede">
-                  Raise the water on real USGS terrain, take substations offline, and close the streets you know are blocked.
-                  GridEvac routes people along the streets that stay passable and tells you how much rise is left before each way out is cut off.
-                </p>
-                <LocationPrompt />
-                <RecommendationCard onOpenPlanner={() => navigate('map')} onReport={() => handleExport('report')} />
-              </div>
+        <aside className="pane pane-directive" id="briefing-pane" data-open={briefingOpen} aria-label="Situation briefing">
+          <div className="pane-head">
+            <h2>Briefing</h2>
+            <button className="pane-close" onClick={() => setBriefingOpen(false)} aria-label="Close the briefing"><Icon name="close" size={15} /></button>
+          </div>
+          <div className="pane-scroll">
+            <div className="brief-mark">
+              <h1>Find the safe way out of downtown Houston.</h1>
               <NetworkCanvas />
             </div>
+            <RecommendationCard onOpenPlanner={() => navigate('map')} onReport={() => handleExport('report')} />
+            <LocationPrompt />
             <Readings />
-            <div className="briefing-grid">
-              <LiveConditions />
-              <ConditionsPanel />
-              <SheltersCard exposure={exposure} />
-            </div>
-            <div className="briefing-grid briefing-grid--wide">
-              <ExposureCard exposure={exposure} />
-            </div>
-          </section>
+            <LiveConditions />
+            <ConditionsPanel />
+            <SheltersCard exposure={exposure} />
+            <ExposureCard exposure={exposure} />
+          </div>
+        </aside>
 
-          <section className="section planner" data-section="map" id="route-planner" aria-labelledby="planner-title" tabIndex={-1}>
-            <header className="section-head">
-              <div>
-                <h2 id="planner-title">Route planner</h2>
-                <p>Click a dry junction to start from it. Press <strong>D</strong> (or use the Route tab) to drop your own destination, and turn on <strong>conditions</strong> to route around today&rsquo;s standing water instead of a dry street. With <strong>Close streets</strong> on, click a street to block it. Hover the turn list in the audit to light up each stretch of road.</p>
-              </div>
-            </header>
-            <div className="map-stage" ref={mapStageRef}>
-              <div className="map-console">
-                <CesiumViewer />
-                <ControlPanel />
-              </div>
-            </div>
-            <MapFacts />
-          </section>
+        <section className="pane pane-map" id="route-planner" aria-label="Route planner map" tabIndex={-1}>
+          <div className="map-console">
+            <CesiumViewer />
+          </div>
+          <MapFacts />
+        </section>
 
-          <section className="section audit" data-section="audit" aria-labelledby="audit-title">
-            <header className="section-head">
-              <div>
-                <h2 id="audit-title">Route audit</h2>
-                <p>Every turn, every alternative exit, and the water levels that would change the answer.</p>
-              </div>
-            </header>
-            <div className="audit-grid">
-              <RouteTimeline />
-              <TriggerGauge />
-            </div>
-            <CorridorTable />
-            <div className="audit-grid audit-grid--even">
+        <section className="pane pane-scenario" aria-label="Scenario and route controls">
+          <ControlPanel docked />
+        </section>
+      </div>
+
+      <section className="drawer" data-open={auditOpen} aria-label="Route audit">
+        <header className="drawer-bar">
+          <button
+            className="drawer-toggle"
+            onClick={() => setAuditOpen(!auditOpen)}
+            aria-expanded={auditOpen}
+            aria-controls="audit-body"
+          >
+            <Icon name="chevronRight" size={15} className={auditOpen ? 'drawer-chevron is-open' : 'drawer-chevron'} />
+            Route audit
+          </button>
+          <div className="drawer-tabs" role="tablist" aria-label="Audit views">
+            {AUDIT_TABS.map((item) => (
+              <button
+                key={item.id}
+                role="tab"
+                aria-selected={auditTab === item.id}
+                className={auditTab === item.id ? 'drawer-tab is-active' : 'drawer-tab'}
+                onClick={() => { setAuditTab(item.id); setAuditOpen(true); }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <span className="drawer-meta">{route?.success ? `${route.route_steps.length} turns · ${route.eta_minutes.toFixed(1)} min` : '—'}</span>
+        </header>
+
+        <div className="drawer-body" id="audit-body" hidden={!auditOpen} role="tabpanel" aria-label={AUDIT_TABS.find((item) => item.id === auditTab)?.label}>
+          {auditTab === 'turns' && <RouteTimeline />}
+          {auditTab === 'corridors' && <CorridorTable />}
+          {auditTab === 'triggers' && <TriggerGauge />}
+          {auditTab === 'log' && (
+            <div className="drawer-split">
               <EventLog onExport={() => handleExport('csv')} />
               <MethodNotes />
             </div>
-            <footer className="page-foot">
-              <p>Street, building, and waterway data © OpenStreetMap contributors. Elevation: USGS 3DEP. Basemap © CARTO. Live river data: USGS Water Services. Rainfall, wind and forecast: Open-Meteo. Warnings and advisories: National Weather Service (api.weather.gov).</p>
-              <p>GridEvac is a planning aid. Confirm conditions on the ground before directing people.</p>
-            </footer>
-          </section>
+          )}
+          {auditTab === 'notes' && (
+            <>
+              <MethodNotes />
+              <footer className="page-foot">
+                <p>Street, building, and waterway data © OpenStreetMap contributors. Elevation: USGS 3DEP. Basemap © CARTO. Live river data: USGS Water Services. Rainfall, wind and forecast: Open-Meteo. Warnings and advisories: National Weather Service (api.weather.gov).</p>
+                <p>GridEvac is a planning aid. Confirm conditions on the ground before directing people.</p>
+              </footer>
+            </>
+          )}
         </div>
-      </div>
+      </section>
 
       <div className={`toast ${toast ? 'is-visible' : ''}`} role="status" aria-live="polite">{toast}</div>
       <TutorialModal isOpen={guideOpen} onClose={closeGuide} />

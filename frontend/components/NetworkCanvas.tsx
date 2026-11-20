@@ -375,7 +375,7 @@ export default function NetworkCanvas() {
     const visibility = new IntersectionObserver(([entry]) => {
       state.visible = entry.isIntersecting;
       if (state.visible) state.kick();
-    }, { root: document.querySelector('.content-scroll'), threshold: 0 });
+    }, { root: document.querySelector('.pane-scroll'), threshold: 0 });
     visibility.observe(figure);
     void loadTerrain().then((terrain) => {
       state.terrain = terrain;

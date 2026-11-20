@@ -243,15 +243,19 @@ function Switch({ checked, onChange, label, detail }: { checked: boolean; onChan
   );
 }
 
-export default function ControlPanel() {
+/**
+ * Control sheet. Floating (default) it sits over the map; `docked` holds it in
+ * its own column of the board, where it never covers the map and cannot fold away.
+ */
+export default function ControlPanel({ docked = false }: { docked?: boolean } = {}) {
   const [tab, setTab] = useState<Tab>('scenario');
   const [collapsed, setCollapsed] = useState(false);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
-    // Phones start with the map visible; the sheet is one tap away.
-    if (window.matchMedia('(max-width: 760px)').matches) setCollapsed(true);
-  }, []);
+    // Floating on a phone, the sheet starts folded so the map is visible.
+    if (!docked && window.matchMedia('(max-width: 760px)').matches) setCollapsed(true);
+  }, [docked]);
 
   const route = useSimulationStore((state) => state.route);
   const cityData = useSimulationStore((state) => state.cityData);
@@ -290,17 +294,21 @@ export default function ControlPanel() {
 
   return (
     <>
-      <button className={`${styles.reopen} ${collapsed ? styles.reopenVisible : ''}`} onClick={() => setCollapsed(false)} aria-hidden={!collapsed} tabIndex={collapsed ? 0 : -1}>
-        <Icon name="layers" size={16} />Controls
-        {route?.success && <span className={styles.reopenEta}>{eta?.toFixed(1)} min</span>}
-      </button>
-      <aside className={`${styles.panel} ${collapsed ? styles.panelHidden : ''}`} aria-label="Scenario and route controls" {...hiddenProps}>
+      {!docked && (
+        <button className={`${styles.reopen} ${collapsed ? styles.reopenVisible : ''}`} onClick={() => setCollapsed(false)} aria-hidden={!collapsed} tabIndex={collapsed ? 0 : -1}>
+          <Icon name="layers" size={16} />Controls
+          {route?.success && <span className={styles.reopenEta}>{eta?.toFixed(1)} min</span>}
+        </button>
+      )}
+      <aside className={`${styles.panel} ${docked ? styles.panelDocked : ''} ${collapsed ? styles.panelHidden : ''}`} aria-label="Scenario and route controls" {...hiddenProps}>
         <header className={styles.header}>
           <div>
             <h2>Controls</h2>
             <p className={route && !route.success ? styles.statusBad : undefined} aria-live="polite">{statusLine}</p>
           </div>
-          <button className={styles.iconButton} onClick={() => setCollapsed(true)} aria-label="Hide controls"><Icon name="chevronRight" size={16} /></button>
+          {!docked && (
+            <button className={styles.iconButton} onClick={() => setCollapsed(true)} aria-label="Hide controls"><Icon name="chevronRight" size={16} /></button>
+          )}
         </header>
 
         <div className={styles.tabs} role="tablist" aria-label="Control groups" onKeyDown={onTabKey} style={{ '--tab': tabIndex } as CSSProperties}>
