@@ -17,8 +17,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r backend/requirements.txt httpx
-      - name: Vercel API mirror matches backend
-        run: python tools/sync_api_mirror.py --check
+      - name: Offline network copy matches backend
+        run: diff -q backend/data/houston_network.json frontend/public/data/houston_network.json
       - name: Endpoint smoke test
         run: python scripts/api_smoke_test.py --inprocess
 

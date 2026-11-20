@@ -31,9 +31,6 @@ if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$REQ_HASH" ]; then
   echo "$REQ_HASH" > "$STAMP"
 fi
 
-if ! "$VENV/bin/python" "$ROOT/tools/sync_api_mirror.py" --check >/dev/null; then
-  echo "⚠️  frontend/api is out of date with backend/. Run: python3 tools/sync_api_mirror.py"
-fi
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
 if [ ! -d "$ROOT/frontend/node_modules" ]; then

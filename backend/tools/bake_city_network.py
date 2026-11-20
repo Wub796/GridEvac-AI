@@ -7,8 +7,7 @@ Inputs (fetched from Overpass API, see README):
 
 Output:
   backend/data/houston_network.json - compact, self-contained network consumed
-  by backend/city_graph.py, frontend/api (serverless mirror), and the offline
-  frontend solver.
+  by backend/city_graph.py and the offline frontend solver.
 
 Run from the backend directory:
   python3 tools/bake_city_network.py /tmp/houston_streets.json /tmp/houston_features.json

@@ -50,7 +50,6 @@ GridEvac/
 │   ├── models.py                Pydantic schemas
 │   └── data/houston_network.json
 ├── frontend/                    Next.js 14 app (its own Vercel project)
-│   ├── api/                     Byte-identical mirror of backend/ kept by tools/sync_api_mirror.py (CI drift check; not deployed)
 │   ├── app/                     Page shell and global styles
 │   ├── components/              Map (CesiumJS), control panel, briefing and audit panels
 │   ├── hooks/useSimulation.ts   Zustand store: scenario state, solver orchestration, event log
@@ -158,13 +157,13 @@ Run from the repository root with `numpy` and `tifffile` installed. Downloads ar
 2. `tools/bake_street_attributes.py`: one-way rules, tagged lanes and speed limits, ramp names.
 3. `tools/bake_terrain.py`: USGS 3DEP elevations, connected flood stages, bridge decks, bayou centerlines, and the rendering grid.
 4. `tools/bake_shelters.py`: shelters snapped to junctions vehicles can reach and leave.
-5. `tools/sync_api_mirror.py`: copies the backend and data into `frontend/api` and `frontend/public/data`.
+5. `cp backend/data/houston_network.json frontend/public/data/houston_network.json`: the copy the offline solver loads.
 
 ## Verification
 
 ```bash
 python3 scripts/api_smoke_test.py --inprocess
-python3 tools/sync_api_mirror.py --check
+diff -q backend/data/houston_network.json frontend/public/data/houston_network.json
 cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
 ```
 
