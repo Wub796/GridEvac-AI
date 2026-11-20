@@ -86,20 +86,60 @@ Optional environment (`frontend/.env.local`, and in Vercel project settings):
 |---|---|
 | `NEXT_PUBLIC_CARTO_API_KEY` | CARTO basemap key (appended to tile URLs; keep attribution visible) |
 | `NEXT_PUBLIC_CESIUM_TOKEN` | Cesium ion token: aerial imagery, world terrain, OSM 3D buildings |
-| `NEXT_PUBLIC_API_URL` | API origin when it is not served from the same host |
+| `NEXT_PUBLIC_API_URL` | API origin, e.g. `https://gridevac-api.vercel.app`. Set per environment on Vercel; unset means the browser solver |
 | `GRIDEVAC_CORS_ORIGINS` | Backend: comma-separated allowed origins (default localhost:3000) |
+| `GRIDEVAC_CORS_ORIGIN_REGEX` | Backend: regex for origins that change per deploy, such as frontend preview aliases |
 
 ## Deploy
 
-The site runs as **two Vercel projects from this repository**. Vercel does not build file-based Python functions inside `/api` next to a Next.js app — the framework preset owns every route — so the API is deployed on its own:
+The site runs as **two Vercel projects from this repository**, both on the Hobby (free) plan. Vercel does not build file-based Python functions inside `/api` next to a Next.js app — the framework preset owns every route — so the API is deployed on its own:
 
 | Project | Root directory | How Vercel builds it |
 |---|---|---|
 | Frontend | `frontend` | Next.js, auto-detected from `package.json` |
 | API | `backend` | FastAPI, auto-detected from `requirements.txt`; entrypoint `main.py` (`app`) |
 
-1. **API project** — Add New → Project → import this repo → set **Root Directory** to `backend`. No build command or output directory is needed. `backend/.python-version` pins Python 3.12 (pydantic 2.7.1 has no wheels for 3.13+) and `backend/vercel.json` allows 60 s per request, since `/api/conditions` relays live USGS, Open-Meteo and NWS data. Set `GRIDEVAC_CORS_ORIGINS=https://grid-evac-ai.vercel.app` (comma-separate any preview or custom origins). Then `GET https://<api-project>.vercel.app/health` should return 200 and `/docs` should render.
-2. **Frontend project** — set `NEXT_PUBLIC_API_URL=https://<api-project>.vercel.app` and redeploy, because `NEXT_PUBLIC_*` is inlined at build time. With it unset, the browser calls `/api/*` on the frontend origin, gets a 404 and falls back to the in-browser solver: the app still works, it just stops using the Python service.
+1. **API project** — Add New → Project → import this repo → set **Root Directory** to `backend`. No build command or output directory is needed. `backend/.python-version` pins Python 3.12 (pydantic 2.7.1 has no wheels for 3.13+) and `backend/vercel.json` allows 60 s per request, since `/api/conditions` relays live USGS, Open-Meteo and NWS data. Set both CORS variables on **every** environment:
+
+   | Variable | Value |
+   |---|---|
+   | `GRIDEVAC_CORS_ORIGINS` | `https://grid-evac-ai.vercel.app` |
+   | `GRIDEVAC_CORS_ORIGIN_REGEX` | `https://grid-evac-ai-[a-z0-9-]+\.vercel\.app` |
+
+   The regex covers the frontend's per-commit preview aliases, so a preview deployment never needs its own CORS entry. Then `GET https://<api-project>.vercel.app/health` should return 200 and `/docs` should render.
+2. **Frontend project** — set `NEXT_PUBLIC_API_URL` **per environment** under Settings → Environment Variables. It is inlined into the bundle at build time, so a change only applies to the next build, and Vercel builds each environment separately:
+
+   | Vercel environment | `NEXT_PUBLIC_API_URL` | Result |
+   |---|---|---|
+   | Production | `https://<api-project>.vercel.app` | The site routes through the Python service |
+   | Preview | `https://<api-project>.vercel.app` | Branch and PR builds use it too; CORS already admits their aliases |
+   | Development | unset on Vercel; `frontend/.env.local` from `frontend/.env.example` points at `http://127.0.0.1:8000` | Local work talks to `start.sh` |
+
+   Redeploy after setting it. With it unset, the browser calls `/api/*` on the frontend origin, gets a 404, and falls back to the in-browser solver: the app still works, it just stops using the Python service. A production build on Vercel now warns when the variable is missing or points at loopback, so that regression cannot ship quietly.
+
+### Hosting cost
+
+The API adds **$0/month**: it is a second project on the same Hobby team, and Hobby includes, per rolling 30 days:
+
+| Resource | Included | Here that is roughly |
+|---|---|---|
+| Function invocations | 1M | ~10 calls per session → 100k sessions |
+| Active CPU | 4 CPU-hours | 60 ms to serve the city payload, 21 ms per route solve → 200k page loads |
+| Fast data transfer | 100 GB | the city payload is 320 KB gzipped → 300k loads |
+| Provisioned memory | 360 GB-hours | a 2 GB function, so ~180 instance-hours |
+| Max duration | 300 s | `/api/conditions` relays three public feeds; 60 s is ample |
+
+Measured on this machine in a warm process: 1.3 s cold start (graph load, scikit-learn import, and the 2.1 MB city payload serialized once), `/api/city` 320 KB gzipped in 62 ms, `/api/calculate-route` 79 KB in 21 ms. A first request after idle pays the cold start; the frontend's 20 s request timeout covers it.
+
+The cap matters more than the price. Crossing a Hobby limit pauses the team's deployment (`503 DEPLOYMENT_PAUSED`) until usage falls back under the rolling 30-day window, and the API shares that allowance with the frontend, so this is only safe while traffic stays demo-sized. At the numbers above that is a thousandfold spike. If it ever gets close, Pro is $20/month and the same code deploys unchanged.
+
+Nothing is cheaper than free, and the free alternatives are worse fits:
+
+| Option | Cost | Why not |
+|---|---|---|
+| Render free web service | $0 | spins down after 15 idle minutes and wakes in ~1 min; the first visitor of the hour is slow, and the app quietly falls back to the browser solver meanwhile |
+| Google Cloud Run free tier | $0 | 180k vCPU-seconds and 2M requests, but needs a billing account plus a container and build step for the same scale-to-zero behaviour |
+| Fly.io, Railway | ~$2–7/month | no usable free tier for an always-on Python process |
 
 ## API
 

@@ -46,9 +46,13 @@ _ALLOWED_ORIGINS = [
     for origin in os.environ.get("GRIDEVAC_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
     if origin.strip()
 ]
+# Preview deployments get a fresh hostname per commit, so allow a pattern for
+# them instead of listing every alias.
+_ALLOWED_ORIGIN_REGEX = os.environ.get("GRIDEVAC_CORS_ORIGIN_REGEX", "").strip() or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=_ALLOWED_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],

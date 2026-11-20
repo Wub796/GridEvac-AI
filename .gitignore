@@ -27,6 +27,7 @@ Thumbs.db
 
 # Build caches and local tool state
 *.tsbuildinfo
+.vercel/
 tools/.cache/
 .freebuff/
 .claude/
