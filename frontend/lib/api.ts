@@ -10,7 +10,9 @@ import type {
   TriggerPointsResponse,
 } from './types';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+// A trailing slash in the configured origin would produce `//api/city`, which
+// some hosts reject, so normalize it away here.
+const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').trim().replace(/\/+$/, '');
 const DEFAULT_TIMEOUT = 20_000;
 
 const LOOPBACK = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/i;
