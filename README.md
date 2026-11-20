@@ -179,3 +179,7 @@ CI runs the same checks on every push and pull request (`.github/workflows/ci.ym
 - GridEvac is a planning aid. Confirm conditions on the ground before directing people.
 
 Street, building, and waterway data © OpenStreetMap contributors. Elevation: USGS 3DEP. Basemap © CARTO.
+
+## License
+
+MIT © Benjamin Wu. See [LICENSE](LICENSE).
