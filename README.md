@@ -104,9 +104,11 @@ The site runs as **two Vercel projects from this repository**, both on the Hobby
    | Variable | Value |
    |---|---|
    | `GRIDEVAC_CORS_ORIGINS` | `https://grid-evac-ai.vercel.app` |
-   | `GRIDEVAC_CORS_ORIGIN_REGEX` | `https://grid-evac(-ai)?-[a-z0-9-]+\.vercel\.app` |
+   | `GRIDEVAC_CORS_ORIGIN_REGEX` | `https://grid-evac(-ai)?-[a-z0-9-]+-wub796s-projects\.vercel\.app` |
 
-   The regex covers both preview hostname shapes—the per-commit Git alias (`grid-evac-ai-git-<branch>-…`) and the raw deployment hostname (`grid-evac-<hash>-…`)—so a preview deployment never needs its own CORS entry. This repository's API project is `grid-evac-ai-api`, so `GET https://grid-evac-ai-api.vercel.app/health` should return 200 and `/docs` should render.
+   The regex covers both preview hostname shapes—the per-commit Git alias (`grid-evac-ai-git-<branch>-…`) and the raw deployment hostname (`grid-evac-<hash>-…`)—so a preview deployment never needs its own CORS entry. Requiring the `-wub796s-projects` team suffix at the end means only this team's deployments can match, not a same-named project elsewhere on `vercel.app`. This repository's API project is `grid-evac-ai-api`, so `GET https://grid-evac-ai-api.vercel.app/health` should return 200 and `/docs` should render.
+
+   The API project also carries the ignore command `git diff HEAD^ HEAD --quiet -- .`, so a push that changes nothing under `backend/` skips its build. Environment-variable-only changes are invisible to that diff, so a plain redeploy gets skipped too: clear the ignore command first (dashboard → Ignore Build Step unchecked, or `vercel project update grid-evac-ai-api --auto-detect ignore-command`), redeploy, then restore `--ignore-command 'git diff HEAD^ HEAD --quiet -- .'`.
 2. **Frontend project** — set `NEXT_PUBLIC_API_URL` **per environment** under Settings → Environment Variables. It is inlined into the bundle at build time, so a change only applies to the next build, and Vercel builds each environment separately:
 
    | Vercel environment | `NEXT_PUBLIC_API_URL` | Result |
