@@ -7,11 +7,21 @@ name: Deployed smoke test
 on:
   schedule:
     - cron: '17 13 * * *' # 13:17 UTC, before the Houston workday
+  # Vercel reports every deploy as a GitHub deployment, so a green smoke test
+  # lands minutes after production ships instead of at the next daily run.
+  deployment_status:
   workflow_dispatch:
 
 jobs:
   deployed:
     name: Deployed board reaches the API
+    # Only a successful production deploy; preview deploys are protected and
+    # the board deploy already covers the API it talks to.
+    if: >-
+      github.event_name != 'deployment_status' ||
+      (github.event.deployment_status.state == 'success' &&
+      startsWith(github.event.deployment.environment, 'Production') &&
+      !contains(github.event.deployment.environment, 'api'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -21,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
