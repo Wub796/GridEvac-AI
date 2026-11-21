@@ -9,10 +9,6 @@ on:
     - cron: '17 13 * * *' # 13:17 UTC, before the Houston workday
   workflow_dispatch:
 
-concurrency:
-  group: deployed-smoke
-  cancel-in-progress: true
-
 jobs:
   deployed:
     name: Deployed board reaches the API
