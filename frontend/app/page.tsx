@@ -255,7 +255,12 @@ export default function HomePage() {
     setActiveSection(section);
     if (section === 'briefing') setBriefingOpen(true);
     if (section === 'audit') setAuditOpen(true);
-    if (section === 'map') document.getElementById('route-planner')?.focus({ preventScroll: true });
+    if (section === 'map') {
+      // Below 1361px the briefing is a sheet lying over the map, so opening the
+      // planner has to dismiss it or the map stays hidden behind the sheet.
+      if (window.matchMedia('(max-width: 1360px)').matches) setBriefingOpen(false);
+      document.getElementById('route-planner')?.focus({ preventScroll: true });
+    }
   }, [setActiveSection]);
 
   const exportState = useCallback(() => {
