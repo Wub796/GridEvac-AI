@@ -104,9 +104,9 @@ The site runs as **two Vercel projects from this repository**, both on the Hobby
    | Variable | Value |
    |---|---|
    | `GRIDEVAC_CORS_ORIGINS` | `https://grid-evac-ai.vercel.app` |
-   | `GRIDEVAC_CORS_ORIGIN_REGEX` | `https://grid-evac-ai-[a-z0-9-]+\.vercel\.app` |
+   | `GRIDEVAC_CORS_ORIGIN_REGEX` | `https://grid-evac(-ai)?-[a-z0-9-]+\.vercel\.app` |
 
-   The regex covers the frontend's per-commit preview aliases, so a preview deployment never needs its own CORS entry. This repository's API project is `grid-evac-ai-api`, so `GET https://grid-evac-ai-api.vercel.app/health` should return 200 and `/docs` should render.
+   The regex covers both preview hostname shapes—the per-commit Git alias (`grid-evac-ai-git-<branch>-…`) and the raw deployment hostname (`grid-evac-<hash>-…`)—so a preview deployment never needs its own CORS entry. This repository's API project is `grid-evac-ai-api`, so `GET https://grid-evac-ai-api.vercel.app/health` should return 200 and `/docs` should render.
 2. **Frontend project** — set `NEXT_PUBLIC_API_URL` **per environment** under Settings → Environment Variables. It is inlined into the bundle at build time, so a change only applies to the next build, and Vercel builds each environment separately:
 
    | Vercel environment | `NEXT_PUBLIC_API_URL` | Result |
