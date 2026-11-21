@@ -131,25 +131,37 @@ function loadScript(src: string) {
   });
 }
 
-async function loadCesium() {
-  if ((window as any).Cesium) return;
-  for (const base of CESIUM_CDNS) {
-    try {
-      let link = document.getElementById('gridevac-cesium-css') as HTMLLinkElement | null;
-      if (!link) {
-        link = document.createElement('link');
-        link.id = 'gridevac-cesium-css';
-        link.rel = 'stylesheet';
-        document.head.appendChild(link);
+// Development StrictMode mounts the viewer effect twice before the first CDN
+// load resolves; a second Cesium.js replaces window.Cesium with a fresh copy
+// whose Ion token is the bundled demo default, so OSM Buildings 401. One shared
+// promise keeps it to a single load, and a failure clears it for a later retry.
+let cesiumLoad: Promise<void> | null = null;
+
+function loadCesium(): Promise<void> {
+  if ((window as any).Cesium) return Promise.resolve();
+  cesiumLoad ??= (async () => {
+    for (const base of CESIUM_CDNS) {
+      try {
+        let link = document.getElementById('gridevac-cesium-css') as HTMLLinkElement | null;
+        if (!link) {
+          link = document.createElement('link');
+          link.id = 'gridevac-cesium-css';
+          link.rel = 'stylesheet';
+          document.head.appendChild(link);
+        }
+        link.href = `${base}Widgets/widgets.css`;
+        await loadScript(`${base}Cesium.js`);
+        if ((window as any).Cesium) return;
+      } catch {
+        /* try the next CDN */
       }
-      link.href = `${base}Widgets/widgets.css`;
-      await loadScript(`${base}Cesium.js`);
-      if ((window as any).Cesium) return;
-    } catch {
-      /* try the next CDN */
     }
-  }
-  throw new Error('CesiumJS unavailable');
+    throw new Error('CesiumJS unavailable');
+  })().catch((error) => {
+    cesiumLoad = null;
+    throw error;
+  });
+  return cesiumLoad;
 }
 
 const prefersReducedMotion = () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
