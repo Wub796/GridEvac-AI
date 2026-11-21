@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import ssl
@@ -6,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response
@@ -141,11 +142,30 @@ def _build_city_json() -> bytes:
 
 # The street network is static for the life of the process: serialize once.
 _CITY_JSON = _build_city_json()
+# ... and hash it once, so a conditional request costs a header compare instead
+# of a 2 MB body. The ETag moves whenever the deployed graph does.
+_CITY_ETAG = f'"{hashlib.sha256(_CITY_JSON).hexdigest()[:32]}"'
+# max-age only helps the visitor's browser; a serverless function response is
+# cached at Vercel's edge only when s-maxage is present, which is what keeps
+# repeat loads from reaching the function at all. After freshness lapses both
+# layers serve the old copy while revalidating, and that revalidation is a 304.
+_CITY_CACHE_CONTROL = "public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800"
+
+
+def _etag_matches(if_none_match: Optional[str], etag: str) -> bool:
+    """If-None-Match is a comma-separated list, and W/ validators still match."""
+    if not if_none_match:
+        return False
+    wanted = etag.strip('"')
+    return any(part.strip().removeprefix("W/").strip('"') == wanted for part in if_none_match.split(","))
 
 
 @app.get("/api/city", response_model=CityResponse)
-async def get_city():
-    return Response(content=_CITY_JSON, media_type="application/json", headers={"Cache-Control": "public, max-age=3600"})
+async def get_city(request: Request):
+    headers = {"ETag": _CITY_ETAG, "Cache-Control": _CITY_CACHE_CONTROL}
+    if _etag_matches(request.headers.get("if-none-match"), _CITY_ETAG):
+        return Response(status_code=304, headers=headers)
+    return Response(content=_CITY_JSON, media_type="application/json", headers=headers)
 
 
 @app.get("/api/flood-zones", response_model=FloodZoneResponse)

@@ -91,6 +91,19 @@ def main() -> int:
     check("  flood model published", (city.get("flood_model") or {}).get("rise_per_level_m", 0) > 0)
     check("  waterways published", len(city.get("waterways", [])) > 0)
 
+    # The graph is static, so repeat loads must not reach the function: a long
+    # max-age/s-maxage pair plus an ETag that turns revalidation into a 304.
+    cache_control = r.headers.get("cache-control", "")
+    check("  city is cacheable", "max-age=" in cache_control and "s-maxage=" in cache_control
+          and "stale-while-revalidate" in cache_control, cache_control or "no header")
+    etag = r.headers.get("etag")
+    check("  city has an ETag", bool(etag), etag or "no header")
+    if etag:
+        r_cond = client.get("/api/city", headers={"If-None-Match": etag})
+        check("  matching If-None-Match is a 304", r_cond.status_code == 304, f"{r_cond.status_code}")
+        r_stale = client.get("/api/city", headers={"If-None-Match": '"stale"'})
+        check("  other ETag still returns the body", r_stale.status_code == 200, f"{r_stale.status_code}")
+
     # A dry interior junction with a named street (exits are endpoints, not origins).
     # `is not None`, not truthiness: node id 0 is a valid interior origin.
     origin = next((n["id"] for n in nodes if n["id"] not in exits and not n.get("elevated")), exits[0] if exits else 0)
