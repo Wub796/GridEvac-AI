@@ -10,7 +10,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "api:smoke": "python3 ../scripts/api_smoke_test.py --inprocess",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:deployed": "playwright test --config=playwright.deployed.config.ts"
   },
   "dependencies": {
     "next": "15.5.29",

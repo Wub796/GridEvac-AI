@@ -10,6 +10,9 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests',
+  // The deployed-site smoke test needs no local server; run it with
+  // playwright.deployed.config.ts so this suite never depends on production.
+  testIgnore: 'deployed.smoke.spec.ts',
   timeout: 60_000,
   expect: { timeout: 20_000 },
   fullyParallel: false,

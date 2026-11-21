@@ -52,6 +52,28 @@ def main() -> int:
     if r.status_code == 200:
         check("  health payload", r.json().get("status") == "ok")
 
+    # ---- CORS ----
+    # `next dev` takes whatever port is free, so every loopback origin must be
+    # accepted without GRIDEVAC_CORS_ORIGINS; otherwise the board silently falls
+    # back to the browser solver. Anything else stays opt-in.
+    for origin in ("http://localhost:5173", "http://127.0.0.1:4321"):
+        r = client.options("/api/city", headers={"Origin": origin, "Access-Control-Request-Method": "GET"})
+        check(f"CORS preflight from {origin}",
+              r.status_code == 200 and r.headers.get("access-control-allow-origin") == origin,
+              f"{r.status_code} {r.headers.get('access-control-allow-origin', 'no header')}")
+    r = client.options("/api/calculate-route", headers={
+        "Origin": "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type",
+    })
+    check("  POST preflight allows the JSON body",
+          r.status_code == 200 and r.headers.get("access-control-allow-origin") == "http://localhost:5173",
+          f"{r.status_code}")
+    r = client.options("/api/city", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"})
+    check("  foreign origin refused",
+          r.status_code == 400 and "access-control-allow-origin" not in r.headers,
+          f"{r.status_code}")
+
     r = client.get("/api/city", headers={"Accept-Encoding": "gzip"})
     check("GET /api/city", r.status_code == 200, f"{r.status_code}")
     city = r.json() if r.status_code == 200 else {}
