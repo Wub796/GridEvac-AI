@@ -87,8 +87,8 @@ Optional environment (`frontend/.env.local`, and in Vercel project settings):
 | `NEXT_PUBLIC_CARTO_API_KEY` | CARTO basemap key (appended to tile URLs; keep attribution visible) |
 | `NEXT_PUBLIC_CESIUM_TOKEN` | Cesium ion token: aerial imagery, world terrain, OSM 3D buildings |
 | `NEXT_PUBLIC_API_URL` | API origin, e.g. `https://gridevac-api.vercel.app`. Set per environment on Vercel; unset means the browser solver |
-| `GRIDEVAC_CORS_ORIGINS` | Backend: comma-separated allowed origins (default localhost:3000) |
-| `GRIDEVAC_CORS_ORIGIN_REGEX` | Backend: regex for origins that change per deploy, such as frontend preview aliases |
+| `GRIDEVAC_CORS_ORIGINS` | Backend: comma-separated extra allowed origins (loopback origins on any port are allowed by default) |
+| `GRIDEVAC_CORS_ORIGIN_REGEX` | Backend: extra regex for origins that change per deploy, such as frontend preview aliases, added to the loopback default |
 
 ## Deploy
 

@@ -41,14 +41,19 @@ app = FastAPI(
 # The city payload is ~2 MB of JSON; gzip brings it to a few hundred KB for
 # field laptops on constrained links.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+# `next dev` takes whatever port is free, so every loopback origin is allowed by
+# default instead of pinning the dev server to :3000. Any other origin is
+# opt-in: GRIDEVAC_CORS_ORIGINS lists fixed hosts, and GRIDEVAC_CORS_ORIGIN_REGEX
+# covers aliases that change per deploy.
+_LOOPBACK_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?"
+_ALLOWED_ORIGIN_REGEX = "|".join(
+    filter(None, [_LOOPBACK_ORIGIN_REGEX, os.environ.get("GRIDEVAC_CORS_ORIGIN_REGEX", "").strip()])
+)
 _ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.environ.get("GRIDEVAC_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    for origin in os.environ.get("GRIDEVAC_CORS_ORIGINS", "").split(",")
     if origin.strip()
 ]
-# Preview deployments get a fresh hostname per commit, so allow a pattern for
-# them instead of listing every alias.
-_ALLOWED_ORIGIN_REGEX = os.environ.get("GRIDEVAC_CORS_ORIGIN_REGEX", "").strip() or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
