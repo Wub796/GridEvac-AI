@@ -236,13 +236,21 @@ export default function HomePage() {
     setBriefing(false);
   }, [setBriefing]);
 
+  /** Closing the drawer hands focus back to its toggle; every close path goes through here. */
+  const closeAudit = useCallback(() => {
+    setAuditOpen(false);
+    window.requestAnimationFrame(() => auditToggleRef.current?.focus());
+  }, []);
+
   /** Open or close the audit drawer, taking focus with it in both directions. */
   const toggleAudit = useCallback(() => {
-    const next = !auditOpen;
-    setAuditOpen(next);
-    if (next) focusAuditTab(auditTab);
-    else window.requestAnimationFrame(() => auditToggleRef.current?.focus());
-  }, [auditOpen, auditTab, focusAuditTab]);
+    if (auditOpen) {
+      closeAudit();
+      return;
+    }
+    setAuditOpen(true);
+    focusAuditTab(auditTab);
+  }, [auditOpen, auditTab, focusAuditTab, closeAudit]);
 
   const onAuditTabKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const index = AUDIT_TABS.findIndex((item) => item.id === auditTab);
@@ -329,13 +337,13 @@ export default function HomePage() {
       } else if (event.key === 'Escape') {
         if (state.pinMode) state.setPinMode(false);
         else if (state.closureMode) state.setClosureMode(false);
-        else if (auditOpen) setAuditOpen(false);
+        else if (auditOpen) closeAudit();
         else closeBriefing();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate, auditOpen, closeBriefing]);
+  }, [navigate, auditOpen, closeBriefing, closeAudit]);
 
   return (
     <main className="app-shell" data-audit={auditOpen}>
