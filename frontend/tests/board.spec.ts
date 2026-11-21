@@ -134,6 +134,38 @@ test.describe('accessibility wiring', () => {
     await expect(tabs.last()).toHaveAttribute('aria-selected', 'true');
   });
 
+  test('Escape on the audit drawer hands focus back to its toggle', async ({ page }) => {
+    await openBoard(page, 1440, 900);
+    const drawer = page.locator('.drawer');
+    const toggle = page.getByRole('button', { name: /route audit/i });
+
+    await toggle.click();
+    await expect(drawer).toHaveAttribute('data-open', 'true');
+    await expect(page.locator('.drawer-tabs [role="tab"]').first()).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveAttribute('data-open', 'false');
+    await expect(toggle).toBeFocused();
+  });
+
+  test('closing the briefing hands focus back to its toggle', async ({ page }) => {
+    await openBoard(page, 1024, 800);
+    const toggle = page.locator('.pane-toggle');
+    const sheet = page.locator('.pane-directive');
+
+    await toggle.click();
+    await expect(sheet).toBeVisible();
+    await page.getByRole('button', { name: /close the briefing/i }).click();
+    await expect(sheet).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    await toggle.click();
+    await expect(sheet).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(sheet).toBeHidden();
+    await expect(toggle).toBeFocused();
+  });
+
   test('a remembered drawer stays open across reloads', async ({ page }) => {
     await openBoard(page, 1440, 900);
     await page.getByRole('button', { name: /route audit/i }).click();
