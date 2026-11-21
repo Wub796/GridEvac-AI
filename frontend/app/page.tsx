@@ -152,6 +152,7 @@ export default function HomePage() {
   const [boardRestored, setBoardRestored] = useState(false);
   const auditTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const auditToggleRef = useRef<HTMLButtonElement | null>(null);
+  const briefingToggleRef = useRef<HTMLButtonElement | null>(null);
 
   const fetchCityData = useSimulationStore((state) => state.fetchCityData);
   const triggerLiveTick = useSimulationStore((state) => state.triggerLiveTick);
@@ -228,6 +229,12 @@ export default function HomePage() {
     setBriefingOpen(open);
     try { window.localStorage.setItem('gridevac-board-briefing', open ? '1' : '0'); } catch { /* ignore */ }
   }, []);
+
+  /** Closing the sheet hands focus back to the toggle that reopens it, before the sheet hides it. */
+  const closeBriefing = useCallback(() => {
+    briefingToggleRef.current?.focus();
+    setBriefing(false);
+  }, [setBriefing]);
 
   /** Open or close the audit drawer, taking focus with it in both directions. */
   const toggleAudit = useCallback(() => {
@@ -323,12 +330,12 @@ export default function HomePage() {
         if (state.pinMode) state.setPinMode(false);
         else if (state.closureMode) state.setClosureMode(false);
         else if (auditOpen) setAuditOpen(false);
-        else setBriefing(false);
+        else closeBriefing();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate, auditOpen, setBriefing]);
+  }, [navigate, auditOpen, closeBriefing]);
 
   return (
     <main className="app-shell" data-audit={auditOpen}>
@@ -351,7 +358,7 @@ export default function HomePage() {
         </div>
 
         <div className="topbar-actions">
-          <button className="tool-button pane-toggle" onClick={() => setBriefing(!briefingOpen)} aria-expanded={briefingOpen} aria-controls="briefing-pane">
+          <button ref={briefingToggleRef} className="tool-button pane-toggle" onClick={() => setBriefing(!briefingOpen)} aria-expanded={briefingOpen} aria-controls="briefing-pane">
             <Icon name="file" size={16} /><span>Briefing</span>
           </button>
           <button className="tool-button" onClick={() => void share()}><Icon name="share" size={17} /><span>Share</span></button>
@@ -366,7 +373,7 @@ export default function HomePage() {
         <aside className="pane pane-directive" id="briefing-pane" data-open={briefingOpen} aria-label="Situation briefing">
           <div className="pane-head">
             <h2>Briefing</h2>
-            <button className="pane-close" onClick={() => setBriefing(false)} aria-label="Close the briefing"><Icon name="close" size={15} /></button>
+            <button className="pane-close" onClick={closeBriefing} aria-label="Close the briefing"><Icon name="close" size={15} /></button>
           </div>
           <div className="pane-scroll">
             <div className="brief-mark">
