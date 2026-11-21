@@ -198,11 +198,6 @@ export default function HomePage() {
     try { window.localStorage.setItem('gridevac-board-audit', auditOpen ? '1' : '0'); } catch { /* ignore */ }
   }, [auditOpen, boardRestored]);
 
-  useEffect(() => {
-    if (!boardRestored) return;
-    try { window.localStorage.setItem('gridevac-board-briefing', briefingOpen ? '1' : '0'); } catch { /* ignore */ }
-  }, [briefingOpen, boardRestored]);
-
   // First visit: open the guide once per browser, after hydration.
   useEffect(() => {
     let seen = true;
@@ -226,6 +221,12 @@ export default function HomePage() {
   const focusAuditTab = useCallback((id: AuditTab) => {
     const index = AUDIT_TABS.findIndex((item) => item.id === id);
     window.requestAnimationFrame(() => auditTabRefs.current[index]?.focus());
+  }, []);
+
+  /** Remember the sheet only for the operator's own gestures: navigation must not overwrite it. */
+  const setBriefing = useCallback((open: boolean) => {
+    setBriefingOpen(open);
+    try { window.localStorage.setItem('gridevac-board-briefing', open ? '1' : '0'); } catch { /* ignore */ }
   }, []);
 
   /** Open or close the audit drawer, taking focus with it in both directions. */
@@ -256,8 +257,7 @@ export default function HomePage() {
     if (section === 'briefing') setBriefingOpen(true);
     if (section === 'audit') setAuditOpen(true);
     if (section === 'map') {
-      // Below 1361px the briefing is a sheet lying over the map, so opening the
-      // planner has to dismiss it or the map stays hidden behind the sheet.
+      // Below 1361px the briefing is a sheet over the map: dismiss it, or the map stays covered.
       if (window.matchMedia('(max-width: 1360px)').matches) setBriefingOpen(false);
       document.getElementById('route-planner')?.focus({ preventScroll: true });
     }
@@ -323,12 +323,12 @@ export default function HomePage() {
         if (state.pinMode) state.setPinMode(false);
         else if (state.closureMode) state.setClosureMode(false);
         else if (auditOpen) setAuditOpen(false);
-        else setBriefingOpen(false);
+        else setBriefing(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate, auditOpen]);
+  }, [navigate, auditOpen, setBriefing]);
 
   return (
     <main className="app-shell" data-audit={auditOpen}>
@@ -351,7 +351,7 @@ export default function HomePage() {
         </div>
 
         <div className="topbar-actions">
-          <button className="tool-button pane-toggle" onClick={() => setBriefingOpen(!briefingOpen)} aria-expanded={briefingOpen} aria-controls="briefing-pane">
+          <button className="tool-button pane-toggle" onClick={() => setBriefing(!briefingOpen)} aria-expanded={briefingOpen} aria-controls="briefing-pane">
             <Icon name="file" size={16} /><span>Briefing</span>
           </button>
           <button className="tool-button" onClick={() => void share()}><Icon name="share" size={17} /><span>Share</span></button>
@@ -366,7 +366,7 @@ export default function HomePage() {
         <aside className="pane pane-directive" id="briefing-pane" data-open={briefingOpen} aria-label="Situation briefing">
           <div className="pane-head">
             <h2>Briefing</h2>
-            <button className="pane-close" onClick={() => setBriefingOpen(false)} aria-label="Close the briefing"><Icon name="close" size={15} /></button>
+            <button className="pane-close" onClick={() => setBriefing(false)} aria-label="Close the briefing"><Icon name="close" size={15} /></button>
           </div>
           <div className="pane-scroll">
             <div className="brief-mark">
