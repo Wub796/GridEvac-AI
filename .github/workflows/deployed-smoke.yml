@@ -13,15 +13,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  # A skip is grey, not red: if Vercel ever renames the environment, the smoke
+  # job below would stop matching and quietly never run after a deploy. This
+  # guard turns that silence into a failed run that names the new environment.
+  environment:
+    name: Vercel environment is recognised
+    if: github.event_name == 'deployment_status'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if a renamed environment would skip the smoke run
+        env:
+          ENVIRONMENT: ${{ github.event.deployment.environment }}
+        run: |
+          case "$ENVIRONMENT" in
+            Production* | Preview*)
+              echo "Recognised deployment environment: $ENVIRONMENT"
+              ;;
+            *)
+              echo "::error::Vercel reported an unknown deployment environment '$ENVIRONMENT'; the smoke run only fires for 'Production…', so it would silently stop checking deploys. Update this workflow's environment filter."
+              exit 1
+              ;;
+          esac
+
   deployed:
     name: Deployed board reaches the API
+    needs: environment
     # Only a successful production deploy; preview deploys are protected and
-    # the board deploy already covers the API it talks to.
+    # the board deploy already covers the API it talks to. always() keeps this
+    # job independent of the guard, which is skipped for schedule and dispatch.
     if: >-
-      github.event_name != 'deployment_status' ||
+      always() && (github.event_name != 'deployment_status' ||
       (github.event.deployment_status.state == 'success' &&
       startsWith(github.event.deployment.environment, 'Production') &&
-      !contains(github.event.deployment.environment, 'api'))
+      !contains(github.event.deployment.environment, 'api')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
