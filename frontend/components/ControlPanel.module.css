@@ -170,7 +170,7 @@
 .rowValue { display: grid; justify-items: end; font-family: var(--mono); font-size: 14px; font-weight: 600; white-space: nowrap; }
 .rowValue small { color: var(--ink-3); font-family: var(--sans); font-size: 10px; font-weight: 500; }
 .rowActive { background: var(--paper-2); }
-.linkish { color: var(--ink); text-align: left; }
+.linkish { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); text-align: left; }
 .linkish:hover { color: var(--signal); text-decoration: underline; }
 
 .subRow, .snapRow, .closureRow, .triggerRow {

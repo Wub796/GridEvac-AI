@@ -175,3 +175,99 @@ test.describe('accessibility wiring', () => {
     await expect(page.locator('.drawer')).toHaveAttribute('data-open', 'true');
   });
 });
+
+test.describe('touch targets', () => {
+  const MIN_TARGET_PX = 44;
+  const CONTROL_SELECTOR = [
+    'button',
+    'input:not([type="hidden"])',
+    'select',
+    'textarea',
+    'a[href]',
+    '[role="button"]',
+    '[role="tab"]',
+    '[role="slider"]',
+    '[role="switch"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    'label:has(input)',
+  ].join(', ');
+
+  /**
+   * Controls whose pointer area is narrower or shorter than the minimum. The
+   * border box is not the target: the water staff draws 26px wide and widens
+   * itself with ::before, so probe the 44px box around each center instead.
+   * Cesium's injected credit links are excluded; the rest of the page is ours.
+   */
+  async function undersizedControls(page: Page): Promise<string[]> {
+    return page.evaluate(
+      ({ selector, min }) => {
+        const failures: string[] = [];
+        const seen = new Set<Element>();
+        for (const element of Array.from(document.querySelectorAll(selector))) {
+          if (seen.has(element)) continue;
+          seen.add(element);
+          if (element.closest('.sr-only, .cesium-widget-credits')) continue;
+          if ((element as HTMLButtonElement).disabled) continue;
+          const style = getComputedStyle(element);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 1 || rect.height < 1) continue;
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) continue;
+
+          // Clamp to the viewport: a control flush with an edge still owns the
+          // part of its target that is on screen.
+          const reaches = (x: number, y: number) => {
+            const hit = document.elementFromPoint(
+              Math.min(Math.max(x, 0), window.innerWidth - 1),
+              Math.min(Math.max(y, 0), window.innerHeight - 1),
+            );
+            return !!hit && (hit === element || element.contains(hit) || hit.closest('label')?.contains(element) === true);
+          };
+          // Sample just inside the 44px boundary: an exactly-44px target ends
+          // on the same pixel as the probe.
+          const half = min / 2 - 0.5;
+          const wide = rect.width >= min || (reaches(cx - half, cy) && reaches(cx + half, cy));
+          const tall = rect.height >= min || (reaches(cx, cy - half) && reaches(cx, cy + half));
+          if (wide && tall) continue;
+
+          const name = (element.getAttribute('aria-label') ?? element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+          const classes = (element.getAttribute('class') ?? '').trim().replace(/\s+/g, '.');
+          failures.push(`${element.tagName.toLowerCase()}${classes ? `.${classes}` : ''} "${name}" ${Math.round(rect.width)}x${Math.round(rect.height)}`);
+        }
+        return failures;
+      },
+      { selector: CONTROL_SELECTOR, min: MIN_TARGET_PX },
+    );
+  }
+
+  /** Switch tabs and give the panel a frame to lay out. */
+  async function openTab(page: Page, name: RegExp) {
+    await page.getByRole('tab', { name }).first().click();
+    await expect(page.getByRole('tab', { name }).first()).toHaveAttribute('aria-selected', 'true');
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  }
+
+  test('desktop: every visible control in each panel offers a 44px target', async ({ page }) => {
+    await openBoard(page, 1440, 900);
+    expect(await undersizedControls(page)).toEqual([]);
+
+    for (const tab of [/^route$/i, /^analysis$/i, /^layers$/i]) {
+      await openTab(page, tab);
+      expect(await undersizedControls(page), `control panel ${tab}`).toEqual([]);
+    }
+
+    await page.getByRole('button', { name: /route audit/i }).click();
+    for (const tab of [/turn by turn/i, /exit corridors/i, /trigger points/i, /event log/i, /method/i]) {
+      await openTab(page, tab);
+      expect(await undersizedControls(page), `audit ${tab}`).toEqual([]);
+    }
+  });
+
+  test('phone: every visible control offers a 44px target', async ({ page }) => {
+    await openBoard(page, 390, 844);
+    expect(await undersizedControls(page)).toEqual([]);
+  });
+});
