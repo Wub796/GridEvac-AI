@@ -4,7 +4,7 @@ Evacuation routing for downtown Houston on the real OpenStreetMap street network
 
 **[Try it live: grid-evac-ai.vercel.app](https://grid-evac-ai.vercel.app)** — no account, no key, nothing to install.
 
-![GridEvac route planner: the recommended corridor on downtown Houston, the flood surface on USGS terrain, and the scenario controls](docs/screenshot.png)
+![The GridEvac board: the dark map of downtown Houston with the recommended route over the flood surface, the briefing panel ranking the South exit corridor, and the scenario, demand, and substation controls](docs/screenshot.png)
 
 ## What it does
 
