@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "api:smoke": "python3 ../scripts/api_smoke_test.py --inprocess",
     "test:e2e": "playwright test",
-    "test:deployed": "playwright test --config=playwright.deployed.config.ts"
+    "test:deployed": "playwright test --config=playwright.deployed.config.ts",
+    "capture:shot": "npm run build && node scripts/capture-board.mjs"
   },
   "dependencies": {
     "next": "15.5.29",
@@ -27,6 +28,7 @@
     "cesium": "^1.119.0",
     "eslint": "^8",
     "eslint-config-next": "15.5.29",
+    "sharp": "^0.35.5",
     "typescript": "^5"
   }
 }
