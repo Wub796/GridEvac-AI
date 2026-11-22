@@ -260,9 +260,17 @@ test.describe('touch targets', () => {
     }
 
     await page.getByRole('button', { name: /route audit/i }).click();
-    for (const tab of [/turn by turn/i, /exit corridors/i, /trigger points/i, /event log/i, /method/i]) {
-      await openTab(page, tab);
-      expect(await undersizedControls(page), `audit ${tab}`).toEqual([]);
+    const auditTabs = page.locator('.drawer-tabs [role="tab"]');
+    const auditTabCount = await auditTabs.count();
+    // Tabs that need server data are absent when a build runs the local solver
+    // (CI has no API origin), so walk whichever tabs this build renders.
+    expect(auditTabCount).toBeGreaterThan(0);
+    for (let index = 0; index < auditTabCount; index += 1) {
+      const tab = auditTabs.nth(index);
+      await tab.click();
+      await expect(tab).toHaveAttribute('aria-selected', 'true');
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      expect(await undersizedControls(page), `audit tab ${index}`).toEqual([]);
     }
   });
 
