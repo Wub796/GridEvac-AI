@@ -243,11 +243,10 @@ test.describe('touch targets', () => {
     );
   }
 
-  /** Switch tabs and give the panel a frame to lay out. */
+  /** Switch tabs; aria-selected waits for React to render the new panel. */
   async function openTab(page: Page, name: RegExp) {
     await page.getByRole('tab', { name }).first().click();
     await expect(page.getByRole('tab', { name }).first()).toHaveAttribute('aria-selected', 'true');
-    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   }
 
   test('desktop: every visible control in each panel offers a 44px target', async ({ page }) => {
@@ -269,7 +268,6 @@ test.describe('touch targets', () => {
       const tab = auditTabs.nth(index);
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true');
-      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       expect(await undersizedControls(page), `audit tab ${index}`).toEqual([]);
     }
   });
