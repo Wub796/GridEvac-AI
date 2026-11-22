@@ -266,6 +266,35 @@ test.describe('touch targets', () => {
     }
   });
 
+  test('tablet: the briefing sheet and its shelter buttons offer 44px targets', async ({ page }) => {
+    await openBoard(page, 1024, 800);
+    const sheet = page.locator('.pane-directive');
+    await expect(sheet).toBeHidden();
+
+    await page.locator('.pane-toggle').click();
+    await expect(sheet).toBeVisible();
+    expect(await undersizedControls(page), 'briefing sheet top').toEqual([]);
+
+    // The shelter cards sit below the fold in the sheet's own scroll area.
+    const shelters = page.locator('.sh-list');
+    await expect(shelters).toBeVisible();
+    await shelters.scrollIntoViewIfNeeded();
+    const shelterButtons = page.locator('.sh-list button');
+    await expect(shelterButtons.first()).toBeVisible();
+    // The sweep only measures controls whose center is on screen, so prove at
+    // least one shelter button is in view before trusting the empty failure list.
+    const onScreen = await shelterButtons.evaluateAll((buttons) => buttons.filter((button) => {
+      const rect = button.getBoundingClientRect();
+      const cy = rect.top + rect.height / 2;
+      return cy >= 0 && cy <= window.innerHeight;
+    }).length);
+    expect(onScreen).toBeGreaterThan(0);
+    expect(await undersizedControls(page), 'briefing shelters').toEqual([]);
+
+    await page.getByRole('button', { name: /close the briefing/i }).click();
+    await expect(sheet).toBeHidden();
+  });
+
   test('phone: every visible control offers a 44px target', async ({ page }) => {
     await openBoard(page, 390, 844);
     expect(await undersizedControls(page)).toEqual([]);
