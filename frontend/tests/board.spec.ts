@@ -295,6 +295,15 @@ test.describe('touch targets', () => {
     await expect(sheet).toBeHidden();
   });
 
+  test('offline: the local-solver status control offers a 44px target', async ({ page }) => {
+    // CI builds have no API origin; blocking the API here reaches the same
+    // "Local solver" retry button the CI run renders.
+    await page.route('**/api/**', (route) => route.abort());
+    await openBoard(page, 1440, 900);
+    await expect(page.locator('button.connection--offline')).toBeVisible({ timeout: 25_000 });
+    expect(await undersizedControls(page)).toEqual([]);
+  });
+
   test('phone: every visible control offers a 44px target', async ({ page }) => {
     await openBoard(page, 390, 844);
     expect(await undersizedControls(page)).toEqual([]);
