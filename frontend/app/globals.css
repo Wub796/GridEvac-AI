@@ -38,6 +38,7 @@
   --display-rule-2: rgba(232, 228, 215, 0.32);
 
   --signal: #b34408;
+  --signal-ink: #9c3d06;
   --signal-fill: #e4681d;
   --signal-soft: rgba(179, 68, 8, 0.1);
   --water: #0f5f8c;
@@ -211,7 +212,7 @@ body::before {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  height: 36px;
+  height: 44px;
   padding: 0 12px;
   border: 1px solid var(--rule-2);
   border-radius: var(--r-1);
@@ -221,7 +222,7 @@ body::before {
   font-weight: 600;
   transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
 }
-.icon-button { width: 36px; padding: 0; }
+.icon-button { width: 44px; padding: 0; }
 .tool-button:hover, .icon-button:hover { border-color: var(--ink); background: var(--paper-2); }
 .tool-button:active, .icon-button:active { transform: translateY(1px); }
 
@@ -246,6 +247,7 @@ body::before {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  min-height: 44px;
   padding: 9px 10px;
   border-radius: var(--r-1);
   color: var(--ink-2);
@@ -296,7 +298,7 @@ body::before {
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
-.pane-close { display: none; place-items: center; width: 26px; height: 26px; border: 1px solid var(--rule-2); color: var(--ink-2); }
+.pane-close { display: none; place-items: center; width: 44px; height: 44px; border: 1px solid var(--rule-2); color: var(--ink-2); }
 .pane-scroll {
   display: flex;
   flex: 1;
@@ -344,7 +346,7 @@ body::before {
 }
 .pane-map .map-hud { top: 10px; left: 10px; font-size: 10px; }
 .pane-map .map-tools { top: 44px; left: 10px; }
-.pane-map .map-tool { width: 32px; height: 32px; }
+.pane-map .map-tool { width: 44px; height: 44px; }
 .pane-map .map-statusbar {
   left: 8px;
   bottom: 8px;
@@ -357,12 +359,12 @@ body::before {
 .pane-map .map-scale i { width: 52px; height: 4px; }
 
 /* Cesium's attribution is part of the sheet, under the map, not on top of it. */
-.map-credit-mount { display: flex; align-items: center; gap: 10px; min-height: 10px; color: var(--ink-3); }
+.map-credit-mount { display: flex; align-items: center; gap: 10px; min-height: 10px; background: var(--paper); color: var(--ink-3); }
 .map-credit-mount .cesium-widget-credits { position: static; display: flex; align-items: center; gap: 10px; padding: 0; background: none; font-size: 9px; opacity: 1; }
 .map-credit-mount .cesium-credit-logoContainer img { height: 13px; width: auto; }
 .map-credit-mount .cesium-widget-credits a,
 .map-credit-mount .cesium-credit-text,
-.map-credit-mount .cesium-credit-expand-link { color: var(--ink-3) !important; font-size: 9px; }
+.map-credit-mount .cesium-credit-expand-link { color: var(--ink) !important; font-size: 9px; }
 
 .pane-scenario {
   grid-area: scenario;
@@ -402,7 +404,7 @@ body::before {
   display: flex;
   align-items: center;
   gap: 18px;
-  flex: 0 0 40px;
+  flex: 0 0 48px;
   padding: 0 14px;
   border-bottom: 1px solid var(--rule-2);
 }
@@ -410,7 +412,7 @@ body::before {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 28px;
+  height: 44px;
   color: var(--ink);
   font-family: var(--mono);
   font-size: 11px;
@@ -425,7 +427,7 @@ body::before {
 .drawer-tabs::-webkit-scrollbar { display: none; }
 .drawer-tab {
   flex: 0 0 auto;
-  height: 28px;
+  height: 44px;
   padding: 0 10px;
   border: 1px solid transparent;
   color: var(--ink-3);
@@ -469,8 +471,11 @@ body::before {
 .ticker-meta { color: var(--ink-3); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 .ticker-label { color: var(--ink-3); font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
 
-/* The rail's staff is a control: drag it and the scenario follows. */
+/* The rail's staff is a control: drag it and the scenario follows. The visual
+   staff is 26px wide, so ::before widens the pointer target to the 44px
+   minimum without changing the drawing. */
 .rail-staff { cursor: ns-resize; touch-action: none; }
+.rail-staff::before { content: ''; position: absolute; inset: -10px; }
 .rail-staff:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .rail-staff.is-scrubbing .rail-water { transition: none; }
 .pane-toggle { display: none; }
@@ -560,7 +565,7 @@ body::before {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 16px;
   border: 1px solid var(--ink);
   border-radius: var(--r-1);
@@ -602,7 +607,7 @@ body::before {
 }
 .chip--safe { border-color: var(--safe); color: var(--safe); }
 .chip--critical { border-color: var(--critical); background: var(--critical-soft); color: var(--critical); }
-.chip--signal { margin-left: 8px; border-color: var(--signal); background: var(--signal-soft); color: var(--signal); }
+.chip--signal { margin-left: 8px; border-color: var(--signal); background: var(--signal-soft); color: var(--signal-ink); }
 .chip--muted { color: var(--ink-3); }
 
 .link-button {
@@ -1024,8 +1029,8 @@ body::before {
   position: relative;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--r-1);
   color: var(--display-ink-2);
   transition: background var(--dur-1), color var(--dur-1);
@@ -1324,7 +1329,7 @@ body::before {
   .brand-name span { display: none; }
   .topbar-actions { justify-content: flex-end; }
   .tool-button span { display: none; }
-  .tool-button { width: 40px; padding: 0; }
+  .tool-button { width: 44px; padding: 0; }
   .board-main {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 46vh 62vh auto;

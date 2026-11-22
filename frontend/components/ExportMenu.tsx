@@ -47,7 +47,7 @@ export default function ExportMenu({ onExport }: { onExport: (kind: ExportKind) 
 
   return (
     <div className="xm" ref={rootRef}>
-      <button ref={buttonRef} className="tool-button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <button ref={buttonRef} className="tool-button" aria-label="Export" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <Icon name="download" size={17} />
         <span>Export</span>
       </button>

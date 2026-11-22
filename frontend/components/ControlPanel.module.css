@@ -19,8 +19,8 @@
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border: 1px solid transparent;
   border-radius: var(--r-1);
   color: var(--ink-2);
@@ -75,7 +75,7 @@
 .slider {
   --fill: 0%;
   width: 100%;
-  height: 24px;
+  height: 44px;
   appearance: none;
   background: transparent;
   cursor: pointer;
@@ -125,8 +125,8 @@
 .textButton {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  color: #9c3d06;
+  min-height: 44px;
+  color: var(--signal-ink);
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
@@ -135,7 +135,7 @@
 
 .chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 8px; }
 .chips button {
-  min-height: 30px;
+  min-height: 44px;
   border: 1px solid var(--rule-2);
   background: var(--paper);
   color: var(--ink-2);
@@ -194,7 +194,8 @@
 
 .smallButton {
   flex: 0 0 auto;
-  min-height: 30px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0 10px;
   border: 1px solid var(--ink);
   border-radius: var(--r-1);
@@ -210,7 +211,7 @@
 .inline { display: flex; gap: 6px; margin-bottom: 8px; }
 .input, .select {
   width: 100%;
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 10px;
   border: 1px solid var(--rule-3);
   border-radius: var(--r-1);
@@ -229,7 +230,7 @@
   justify-content: center;
   gap: 8px;
   width: 100%;
-  min-height: 38px;
+  min-height: 44px;
   margin-bottom: 8px;
   border: 1px solid var(--ink);
   border-radius: var(--r-1);
@@ -247,7 +248,7 @@
   justify-content: center;
   gap: 8px;
   width: 100%;
-  min-height: 38px;
+  min-height: 44px;
   margin: 8px 0;
   border: 1px solid var(--ink);
   border-radius: var(--r-1);
@@ -292,7 +293,7 @@
   animation: panel-in var(--dur-2) var(--ease-out);
 }
 @keyframes panel-in { from { opacity: 0; transform: translateY(-4px); } }
-.results button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; text-align: left; }
+.results button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 44px; padding: 7px 8px; text-align: left; }
 .results button:hover, .resultActive { background: var(--paper-2); }
 .resultKind {
   flex: 0 0 46px;
@@ -308,7 +309,7 @@
 
 .segment { position: relative; display: grid; grid-template-columns: repeat(var(--count, 3), 1fr); padding: 2px; border: 1px solid var(--rule-3); background: var(--paper-2); }
 .segmentThumb { position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / var(--count, 3)); background: var(--paper); box-shadow: inset 0 0 0 1px var(--ink); transform: translateX(calc(var(--seg, 0) * 100%)); transition: transform var(--dur-3) var(--ease-out); }
-.segment button { position: relative; min-height: 30px; color: var(--ink-3); font-size: 12px; font-weight: 600; transition: color var(--dur-2); }
+.segment button { position: relative; min-height: 44px; color: var(--ink-3); font-size: 12px; font-weight: 600; transition: color var(--dur-2); }
 .segment button:hover:not(:disabled) { color: var(--ink); }
 .segment button:disabled { opacity: 0.4; }
 .segment .segmentActive { color: var(--ink); }
@@ -331,7 +332,7 @@
 .kindShelter { color: var(--shelter); }
 .kindMedical { color: var(--medical); }
 
-.switch { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.switch { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switchTrack { position: relative; flex: 0 0 auto; width: 32px; height: 18px; margin-top: 2px; background: var(--rule); transition: background var(--dur-2); }
 .switchTrack i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: var(--paper); transition: transform var(--dur-3) var(--ease-out); }
@@ -358,6 +359,7 @@
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-height: 44px;
   padding: 8px 10px;
   border: 1px solid var(--rule-2);
   text-align: left;
@@ -392,9 +394,9 @@
 }
 
 @media (hover: none) {
-  .smallButton { min-height: 40px; }
-  .chips button, .segment button { min-height: 40px; }
+  .smallButton { min-height: 44px; }
+  .chips button, .segment button { min-height: 44px; }
   .option, .rank button, .preset { min-height: 48px; }
-  .iconButton { width: 40px; height: 40px; }
-  .input, .select { min-height: 42px; font-size: 16px; }
+  .iconButton { width: 44px; height: 44px; }
+  .input, .select { min-height: 44px; font-size: 16px; }
 }

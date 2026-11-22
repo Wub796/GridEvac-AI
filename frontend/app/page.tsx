@@ -366,10 +366,10 @@ export default function HomePage() {
         </div>
 
         <div className="topbar-actions">
-          <button ref={briefingToggleRef} className="tool-button pane-toggle" onClick={() => setBriefing(!briefingOpen)} aria-expanded={briefingOpen} aria-controls="briefing-pane">
+          <button ref={briefingToggleRef} className="tool-button pane-toggle" onClick={() => setBriefing(!briefingOpen)} aria-label="Briefing" aria-expanded={briefingOpen} aria-controls="briefing-pane">
             <Icon name="file" size={16} /><span>Briefing</span>
           </button>
-          <button className="tool-button" onClick={() => void share()}><Icon name="share" size={17} /><span>Share</span></button>
+          <button className="tool-button" onClick={() => void share()} aria-label="Share this scenario"><Icon name="share" size={17} /><span>Share</span></button>
           <ExportMenu onExport={handleExport} />
           <button className="icon-button" onClick={() => setGuideOpen(true)} aria-label="Open the operator guide" aria-keyshortcuts="?"><Icon name="help" size={18} /></button>
         </div>
@@ -448,6 +448,7 @@ export default function HomePage() {
           id="audit-body"
           hidden={!auditOpen}
           role="tabpanel"
+          tabIndex={0}
           aria-labelledby={`audit-tab-${auditTab}`}
         >
           {auditTab === 'turns' && <RouteTimeline />}
