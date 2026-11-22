@@ -250,6 +250,9 @@ test.describe('touch targets', () => {
   }
 
   test('desktop: every visible control in each panel offers a 44px target', async ({ page }) => {
+    // CI loads the Cesium board in 15-25s per page, so the default minute runs
+    // out while walking the panels; this test opens one board and checks many.
+    test.setTimeout(180_000);
     await openBoard(page, 1440, 900);
     expect(await undersizedControls(page)).toEqual([]);
 
