@@ -1408,7 +1408,7 @@ export default function CesiumViewer() {
         </div>
       ) : null}
 
-      <div className="map-overlay map-legend" aria-label="Legend">
+      <div className="map-overlay map-legend" role="group" aria-label="Legend">
         <span><i className="lg lg-route" />Route</span>
         <span><i className="lg lg-water" />Water</span>
         {conditions && conditions.ponded_nodes.length > 0 && <span><i className="lg lg-ponding" />Standing water</span>}

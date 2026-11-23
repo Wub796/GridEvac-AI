@@ -403,7 +403,7 @@ export default function HomePage() {
             <CesiumViewer />
           </div>
           <MapFacts />
-          <div id="map-credit-mount" className="map-credit-mount" aria-label="Map data attribution" />
+          <div id="map-credit-mount" className="map-credit-mount" role="group" aria-label="Map data attribution" />
         </section>
 
         <section className="pane pane-scenario" aria-label="Scenario and route controls">
